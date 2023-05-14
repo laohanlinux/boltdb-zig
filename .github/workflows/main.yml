@@ -26,4 +26,4 @@ jobs:
     - name: Build and test
       run: |
         $HOME/zig/zig build
-        $HOME/zig/zig/zig test
+        $HOME/zig/zig test
