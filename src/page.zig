@@ -3,6 +3,9 @@ const db = @import("./db.zig");
 
 const min_keys_page: usize = 2;
 
+pub const branchPageElementSize = BranchPageElement.header_size;
+pub const leafPageElementSize = LeafPageElement.header_size;
+
 pub const PageFlage = enum(u8) {
     branch = 0x01,
     leaf = 0x02,
