@@ -1,0 +1,25 @@
+name: Zig CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Zig
+      uses: ziglang/setup-zig@0.10.1
+
+    - name: Build and test
+      run: |
+        zig build
+        zig test
