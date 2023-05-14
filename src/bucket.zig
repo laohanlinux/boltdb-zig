@@ -1,4 +1,15 @@
 const page = @import("./page.zig");
+const tx = @import("./tx.zig");
+
+// DefaultFilterPersent is the percentage that split pages are filled.
+// This value can be changed by setting Bucket.FillPercent.
+const DefaultFillPercent = 0.5;
+
+// Represents a collection of key/value pairs inside the database.
+pub const Bucket = struct {
+    _b: ?*_Bucket,
+    tx: ?*tx.Tx,
+};
 
 // Represents the on-file represesntation of a bucket.
 // This is stored as the "value" of a bucket key. If the bucket is small enough,
