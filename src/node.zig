@@ -69,15 +69,74 @@ pub const Node = struct {
         }
     }
 
-    //fn child_at(self: *Self, _index: usize) ?*Node {
-    //
-    //  if (self.is_leaf) {
-    //     unreachable;
-    //}
+    fn child_at(self: *Self, _index: usize) ?*Node {
+        std.debug.print("{} {}", .{ self, _index });
+        unreachable;
+    }
 
-    //TODO
+    // Returns the index of a given child node.
+    fn child_index(self: *Self, child: *Node) usize {
+        const inode = std.sort.binarySearch(INode, child.key, self.inodes, {}, INode.order);
+        return try inode;
+    }
 
-    //}
+    // Returns the number of children.
+    fn num_children(self: *Self) usize {
+        return self.inodes.?.len();
+    }
+
+    // Returns the next node with the same parent.
+    fn next_slibling(self: *Self) ?*Self {
+        if (self.parent == null) {
+            return null;
+        }
+        // Get child index.
+        //      parent
+        //        |
+        //       [c1, c3, self, c4, c5]
+        const index = self.parent.?.child_index(self);
+        const right = self.parent.?.num_children() - 1;
+        // Self is the righest node
+        if (index >= right) {
+            return null;
+        }
+        return self.parent.?.child_at(index + 1);
+    }
+
+    // Returns the previous node with the same parent.
+    fn pre_slibling_slibling(self: *Self) ?*Self {
+        if (self.parent == null) {
+            return null;
+        }
+        const index = self.parent.?.child_index(self);
+        if (index == 0) {
+            return null;
+        }
+
+        return self.parent.?.child_at(index - 1);
+    }
+
+    // Inserts a key/value.
+    fn put(self: *Self, oldKey: []u8, newKey: []u8, value: []u8, pgid: page.pgid_type, flags: u32) void {
+        _ = flags;
+        _ = value;
+        if (pgid > self.bucket.tx.meta.pgid) {
+            unreachable;
+        } else if (oldKey.len() <= 0) {
+            unreachable;
+        } else if (newKey.len() <= 0) {
+            unreachable;
+        }
+    }
+
+    // Add the node's undering page to the freelist.
+    fn free(self: *Self) void {
+        if (self.pgid != 0) {
+            // free bucket
+            // TODO
+            // self.bucekt.?.tx.db.freelist.free()
+        }
+    }
 };
 
 const INode = struct {
@@ -85,6 +144,24 @@ const INode = struct {
     pgid: page.pgid_type,
     key: ?[]u8,
     value: ?[]u8,
+
+    const Self = @This();
+
+    fn order(context: void, key: []u8, mid_item: @This()) std.math.Order {
+        _ = context;
+
+        if (key < mid_item.key) {
+            return .lt;
+        }
+
+        if (key > mid_item.key) {
+            return .gt;
+        }
+
+        return .eq;
+    }
 };
 
 const INodes = ?[]INode;
+
+test "node" {}

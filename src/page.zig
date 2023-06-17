@@ -17,6 +17,8 @@ pub const bucket_leaf_flag = 0x01;
 
 pub const pgid_type = u64;
 
+pub const PgIds = []pgid_type;
+
 pub const page_size = 4096;
 
 pub const Page = packed struct {

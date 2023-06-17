@@ -72,6 +72,8 @@ pub const DB = struct {
     // needs to create new pages. This is done to amortize the cost
     // of truncate() and fsync() when growing the data file.
     alloc_size: isize,
+
+    const Self = @This();
 };
 
 // Represents the options that can be set when opening a database.
