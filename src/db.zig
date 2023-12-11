@@ -178,7 +178,7 @@ pub const Meta = packed struct {
 
     pub fn sum64(self: *Self) u64 {
         const ptr = @fieldParentPtr(Meta, "check_sum", self);
-        const slice = @intToPtr([ptr - self]u8, ptr);
+        const slice = @as([ptr - self]u8, @ptrFromInt(ptr));
         const crc32 = std.hash.Crc32.hash(slice);
         return @as(crc32, u64);
     }

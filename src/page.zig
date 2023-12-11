@@ -42,8 +42,8 @@ pub const Page = packed struct {
 
     // Returns a pointer to the metadata section of the page.
     pub fn meta(self: *Self) *db.Meta {
-        const ptr = @ptrToInt(self);
-        const _meta = @intToPtr(db.Meta, ptr);
+        const ptr = @intFromPtr(self);
+        const _meta = @as(db.Meta, @ptrFromInt(ptr));
         return _meta;
     }
 
@@ -61,8 +61,8 @@ pub const Page = packed struct {
         if (self.count == 0) {
             return null;
         }
-        const ptr = @ptrToInt(self);
-        const elements = @intToPtr([self.count]BranchPageElement, ptr + self.count * BranchPageElement.header_size);
+        const ptr = @intFromPtr(self);
+        const elements = @as([self.count]BranchPageElement, @ptrFromInt(ptr + self.count * BranchPageElement.header_size));
         return elements;
     }
 
@@ -81,8 +81,8 @@ pub const Page = packed struct {
             return null;
         }
 
-        const ptr = @ptrToInt(self);
-        const elements = @intToPtr([self.count]LeafPageElement, ptr + self.count * LeafPageElement.header_size);
+        const ptr = @intFromPtr(self);
+        const elements = @as([self.count]LeafPageElement, @ptrFromInt(ptr + self.count * LeafPageElement.header_size));
         return elements;
     }
 };
@@ -107,15 +107,15 @@ pub const LeafPageElement = packed struct {
 
     // Return a byte slice of the node key.
     pub fn key(self: *Self) []u8 {
-        const ptr = @ptrToInt(self);
-        const key_ptr = @intToPtr([self.k_size]u8, ptr + self.pos);
+        const ptr = @intFromPtr(self);
+        const key_ptr = @as([self.k_size]u8, @ptrFromInt(ptr + self.pos));
         return key_ptr;
     }
 
     // Returns a byte slice of the node value.
     pub fn value(self: *Self) []u8 {
-        const ptr = @ptrToInt(self);
-        const value_ptr = @intToPtr([self.v_size]u8, ptr + self.pos + self.k_size);
+        const ptr = @intFromPtr(self);
+        const value_ptr = @as([self.v_size]u8, @ptrFromInt(ptr + self.pos + self.k_size));
         return value_ptr;
     }
 };
