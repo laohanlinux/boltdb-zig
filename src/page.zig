@@ -144,7 +144,7 @@ test "pointer" {
 
     std.debug.print("type of: {} \n", .{@TypeOf(slice)});
 
-    var page1 = std.mem.bytesAsValue(Page, slice[0..Page.header_size]);
+    const page1 = std.mem.bytesAsValue(Page, slice[0..Page.header_size]);
 
     std.debug.print(">> {}\n", .{page1});
     std.debug.print(">> size of: {}\n", .{@sizeOf(Page)});
