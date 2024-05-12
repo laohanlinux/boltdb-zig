@@ -131,7 +131,7 @@ pub const Stats = packed struct {
         if (other == null) {
             return self.*;
         }
-        var diff = Stats{
+        const diff = Stats{
             .free_page_n = self.free_page_n,
             .pending_page_n = self.pending_page_n,
             .free_alloc = self.free_alloc,
@@ -158,8 +158,8 @@ pub const Meta = packed struct {
     page_size: u32,
     flags: u32,
     root: bucket._Bucket,
-    free_list: page.pgid_type,
-    pgid: page.pgid_type,
+    free_list: page.PgidType,
+    pgid: page.PgidType,
     txid: tx.TxId,
     check_sum: u64,
 
@@ -179,8 +179,8 @@ pub const Meta = packed struct {
     }
 
     pub fn sum64(self: *Self) u64 {
-        const ptr = @fieldParentPtr(Meta, "check_sum", self);
-        const slice = @intToPtr([ptr - self]u8, ptr);
+        const ptr: *Meta = @fieldParentPtr("check_sum", self);
+        const slice: [ptr - self]u8 = @ptrFromInt(ptr);
         const crc32 = std.hash.Crc32.hash(slice);
         return @as(crc32, u64);
     }
@@ -193,12 +193,12 @@ pub const Meta = packed struct {
             unreachable;
         }
         // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
-        p.id = @as(page.pgid_type, self.txid % 2);
+        p.id = @as(page.PgidType, self.txid % 2);
         p.flags |= page.PageFlage.meta;
 
         // Calculate the checksum.
         self.check_sum = self.sum64();
-        var meta = p.meta();
+        const meta = p.meta();
         meta.* = self.*;
         return;
     }

@@ -2,10 +2,12 @@ const std = @import("std");
 const page = @import("./page.zig");
 const bucket = @import("./bucket.zig");
 const tx = @import("./tx.zig");
+const util = @import("./util.zig");
 
+/// Represents an in-memory, deserialized page.
 pub const Node = struct {
     bucekt: ?*bucket.Bucket,
-    is_leaf: bool,
+    isLeaf: bool,
     unbalance: bool,
     spilled: bool,
     key: ?[]u8,
@@ -13,33 +15,42 @@ pub const Node = struct {
     parent: ?*Node,
     children: ?[]?*Node,
     inodes: INodes,
+    allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    // Returns the top-level node this node is attached to.
-    fn root(self: *Self) void {
-        if (self.parent == null) {
-            return;
-        }
+    pub fn init() *Self {
+        return undefined;
+    }
 
-        return self.parent.?.root();
+    pub fn deinit(_: *Self) void {
+        // freeInodes(std.testing.allocator, self.inodes);
+    }
+
+    // Returns the top-level node this node is attached to.
+    fn root(self: *Self) ?*Node {
+        if (self.parent) |parent| {
+            return parent.*.root();
+        } else {
+            return self;
+        }
     }
 
     // Returns the minimum number of inodes this node should have.
-    fn min_keys(self: *Self) usize {
-        if (self.is_leaf) {
+    fn minKeys(self: *const Self) usize {
+        if (self.isLeaf) {
             return 1;
         }
-
         return 2;
     }
 
     // Returns the size of the node after serialization.
-    fn size(self: *Self) usize {
+    fn size(self: *const Self) usize {
         var sz = page.Page.header_size;
-        const elsz = self.page_element_size();
-        for (self.inodes) |item| {
-            sz += elsz + item.key.len() + item.value.len();
+        const elsz = self.pageElementSize();
+        for (self.inodes.?) |item| {
+            const vLen: usize = if (item.value) |value| value.len else 0;
+            sz += elsz + item.key.?.len + vLen;
         }
 
         return sz;
@@ -48,11 +59,15 @@ pub const Node = struct {
     // Returns true if the node is less than a given size.
     // This is an optimization to avoid calculating a large node when we only need
     // to know if it fits inside a certain page size.
-    fn size_less_than(self: *Self, v: usize) bool {
-        var sz = page.Page.header_size;
-        const elsz = self.page_element_size();
-        for (self.inodes) |item| {
-            sz += elsz + item.key.len() + item.value.len();
+    fn sizeLessThan(self: *const Self, v: usize) bool {
+        // page header size
+        var sz = page.Page.HeaderSize;
+        // page element size
+        const elsz = self.pageElementSize();
+        for (self.inodes.?) |item| {
+            // page element size + key size + value size, if the page is branch node, the value is pgid
+            const vLen: usize = if (item.value) |value| value.len else 0;
+            sz += elsz + item.key.?.len + vLen;
             if (sz >= v) {
                 return false;
             }
@@ -61,7 +76,7 @@ pub const Node = struct {
     }
 
     // Returns the size of each page element based on the type of node.
-    fn page_element_size(self: *Self) usize {
+    fn pageElementSize(self: *const Self) usize {
         if (self.is_leaf) {
             return page.leafPageElementSize;
         } else {
@@ -69,20 +84,25 @@ pub const Node = struct {
         }
     }
 
-    fn child_at(self: *Self, _index: usize) ?*Node {
-        std.debug.print("{} {}", .{ self, _index });
-        unreachable;
+    /// Returns the child node at a given index.
+    fn childAt(self: *const Self, index: usize) ?*Node {
+        if (self.isLeaf) {
+            @panic("invalid childAt call on a leaf node");
+        } else {
+            // TODO
+            return null;
+        }
     }
 
     // Returns the index of a given child node.
-    fn child_index(self: *Self, child: *Node) usize {
-        const inode = std.sort.binarySearch(INode, child.key, self.inodes, {}, INode.order);
-        return try inode;
+    fn childIndex(self: *Self, child: *Node) usize {
+        const index = std.sort.binarySearch(*Node, child, self.inodes.?, {}, findFn) catch unreachable;
+        return index;
     }
 
     // Returns the number of children.
-    fn num_children(self: *Self) usize {
-        return self.inodes.?.len();
+    fn numChildren(self: *Self) usize {
+        return self.inodes.?.len;
     }
 
     // Returns the next node with the same parent.
@@ -94,13 +114,13 @@ pub const Node = struct {
         //      parent
         //        |
         //       [c1, c3, self, c4, c5]
-        const index = self.parent.?.child_index(self);
-        const right = self.parent.?.num_children() - 1;
+        const index = self.parent.?.childIndex(self);
+        const right = self.parent.?.numChildren() - 1;
         // Self is the righest node
         if (index >= right) {
             return null;
         }
-        return self.parent.?.child_at(index + 1);
+        return self.parent.?.childAt(index + 1);
     }
 
     // Returns the previous node with the same parent.
@@ -108,12 +128,12 @@ pub const Node = struct {
         if (self.parent == null) {
             return null;
         }
-        const index = self.parent.?.child_index(self);
+        const index = self.parent.?.childIndex(self);
         if (index == 0) {
             return null;
         }
 
-        return self.parent.?.child_at(index - 1);
+        return self.parent.?.childAt(index - 1);
     }
 
     // Inserts a key/value.
@@ -126,6 +146,58 @@ pub const Node = struct {
             unreachable;
         } else if (newKey.len() <= 0) {
             unreachable;
+        }
+    }
+    /// Read initializes the node from a page.
+    fn read(self: *Self, p: *page.Page) void {
+        self.pgid = p.id;
+        self.isLeaf = p.isLeaf();
+        self.inodes = self.allocator.alloc(*INode, @intCast(p.count)) catch unreachable;
+
+        for (0..@as(usize, p.count)) |i| {
+            var inode = self.inodes.?[i];
+            inode = INode.init(self.allocator, 0, 0, null, null);
+            if (self.isLeaf) {
+                const elem = p.leafPageElement(i);
+                inode.flags = elem.flags;
+                inode.key = elem.key();
+                inode.value = elem.value();
+            } else {
+                const elem = p.branchPageElement(i);
+                inode.pgid = elem.?.pgid;
+                inode.key = elem.?.key();
+            }
+            std.debug.assert(inode.key.?.len > 0);
+        }
+
+        // Save first key so we can find the node in the parent when we spill.
+        if (self.inodes.?.len > 0) {
+            self.key = self.inodes.?[0].key;
+            std.debug.assert(self.key.?.len > 0);
+        } else {
+            self.key = null;
+        }
+    }
+    /// Writes the items into one or more pages.
+    fn write(self: *Self, p: *page.Page) void {
+        p.id = self.pgid;
+        p.flags = 0;
+        p.count = @intCast(self.inodes.?.len);
+        if (self.isLeaf) {
+            p.flags |= page.leafPageFlag;
+        }
+
+        for (self.inodes.?) |inode| {
+            if (self.isLeaf) {
+                const elem = p.leafPageElement(p.count);
+                elem.flags = inode.flags;
+                elem.key = inode.key.?;
+                elem.value = inode.value.?;
+            } else {
+                const elem = p.branchPageElement(p.count);
+                elem.pgid = inode.pgid;
+                elem.key = inode.key.?;
+            }
         }
     }
 
@@ -141,27 +213,71 @@ pub const Node = struct {
 
 const INode = struct {
     flags: u32,
-    pgid: page.pgid_type,
+    // If the pgid is 0 then it's a leaf node, if it's greater than 0 then it's a branch node, and the value is the pgid of the child.
+    pgid: page.PgidType,
+    // The key is the first key in the inodes.
     key: ?[]u8,
-    value: ?[]u8,
+    value: ?[]u8, // If the value is nil then it's a branch node
 
     const Self = @This();
 
-    fn order(context: void, key: []u8, mid_item: @This()) std.math.Order {
-        _ = context;
+    /// Initializes a node.
+    fn init(allocator: std.mem.Allocator, flags: u32, pgid: page.PgidType, key: ?[]u8, value: ?[]u8) *Self {
+        const inode = allocator.create(INode) catch unreachable;
+        inode.*.flags = flags;
+        inode.*.pgid = pgid;
+        inode.*.key = key;
+        inode.*.value = value;
+        return inode;
+    }
 
-        if (key < mid_item.key) {
-            return .lt;
-        }
-
-        if (key > mid_item.key) {
-            return .gt;
-        }
-
-        return .eq;
+    /// Frees an inode.
+    fn destroy(self: *Self, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
     }
 };
 
-const INodes = ?[]INode;
+const INodes = ?[]*INode;
 
-test "node" {}
+fn freeInodes(allocator: std.mem.Allocator, inodes: INodes) void {
+    for (inodes.?) |inode| {
+        allocator.free(inode.key.?);
+        if (inode.value != null) {
+            allocator.free(inode.value.?);
+        }
+        inode.destroy(allocator);
+    }
+}
+
+fn sortINodes(inodes: INodes) void {
+    std.mem.sort(*INode, inodes.?, {}, sortFn);
+}
+
+fn sortFn(_: void, a: *INode, b: *INode) bool {
+    const order = util.cmpBytes(a.key.?, b.key.?);
+    return order == std.math.Order.lt or order == std.math.Order.eq;
+}
+
+fn findFn(_: void, a: *INode, b: *INode) std.math.Order {
+    return util.cmpBytes(a.key.?, b.key.?);
+}
+
+test "node" {
+    const n: usize = 14;
+    var inodes = std.testing.allocator.alloc(*INode, n) catch unreachable;
+    defer std.testing.allocator.free(inodes);
+    defer freeInodes(std.testing.allocator, inodes);
+    // random a number
+    var rng = std.rand.DefaultPrng.init(10);
+    for (0..n) |i| {
+        const key = std.testing.allocator.alloc(u8, 10) catch unreachable;
+        rng.fill(key);
+        const inode = INode.init(std.testing.allocator, 0x10, 0x20, key, null);
+        inodes[i] = inode;
+    }
+    sortINodes(inodes);
+
+    for (inodes) |inode| {
+        std.debug.print("\n{any}\n", .{inode.key.?});
+    }
+}
