@@ -3,6 +3,7 @@ const page = @import("./page.zig");
 const bucket = @import("./bucket.zig");
 const tx = @import("./tx.zig");
 const util = @import("./util.zig");
+const assert = @import("./assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
@@ -13,7 +14,7 @@ pub const Node = struct {
     key: ?[]u8,
     pgid: page.pgid_type,
     parent: ?*Node,
-    children: ?[]?*Node,
+    children: ?[]*Node,
     // The inodes for this node. If the node is a leaf, the inodes are key/value pairs.
     // If the node is a branch, the inodes are child page ids. The inodes are kept in sorted order.
     // The inodes are reference to the inodes in the page, so the inodes should not be free.
@@ -207,7 +208,8 @@ pub const Node = struct {
         if (self.count == 0) {
             return;
         }
-
+        const data = p.getDataSlice();
+        const index: usize = 0;
         // Loop pver each inode and write it to the page.
         for (self.inodes.?, 0..) |inode, i| {
             std.debug.assert(inode.key.?.len > 0);
@@ -223,16 +225,72 @@ pub const Node = struct {
                 elem.pgid = @as(u32, p.getDataPtrInt() - @intFromPtr(elem));
                 elem.kSize = inode.key.?.len;
                 std.debug.assert(inode.pgid != elem.pgid);
+                assert(inode.pgid != elem.?.pgid, "write: circulay dependency occuerd", {});
+            }
+
+            const kLen = inode.key.?.len;
+            // Write data for the element to the end of the page.
+            std.mem.copyForwards(u8, data[index..], inode.key.?);
+            index += kLen;
+            if (inode.value) |value| {
+                std.mem.copyForwards(u8, data[index], value);
+                index += value.len;
             }
         }
+
+        // DEBUG ONLY: n.deump()
     }
 
-    // Add the node's undering page to the freelist.
+    // fn removeChild(self: *Self, target: *Node) void {
+    //     for (self.children.?, 0..) |child, i| {
+    //         if (child == target) {
+    //             self.children.?[i] = null;
+    //             return;
+    //         }
+    //     }
+    // }
+
+    // Causes the node to copy all its inode key/value references to heap memory.
+    // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
+    fn dereference(self: *Self) void {
+        if (self.key != null) {
+            const _key = self.allocator.alloc(u8, self.key.?.len) catch unreachable;
+            std.mem.copyForwards(u8, _key, self.key.?);
+            self.key = _key;
+            assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", {});
+        }
+
+        for (self.inodes.?) |inode| {
+            const _key = self.allocator.alloc(u8, inode.key.?.len) catch unreachable;
+            std.mem.copyForwards(u8, _key, inode.key.?);
+            inode.key = _key;
+            assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", {});
+
+            if (inode.value != null) {
+                const _value = self.allocator.alloc(u8, inode.value.?.len) catch unreachable;
+                std.mem.copyForwards(u8, _value, inode.value.?);
+                inode.value = _value;
+                assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", {});
+            }
+        }
+
+        // Recursively dereference children.
+        if (self.children) |_children| {
+            for (_children) |child| {
+                child.dereference();
+            }
+        }
+
+        // Update statistics.
+        self.bucekt.?.tx.?.stats.nodeDeref += 1;
+    }
+
+    /// adds the node's underlying page to the freelist.
     fn free(self: *Self) void {
         if (self.pgid != 0) {
-            // free bucket
-            // TODO
-            // self.bucekt.?.tx.db.freelist.free()
+            self.bucekt.?.tx.?.db.freelist.free(self.bucekt.?.tx.?.meta.txid, self.bucekt.?.tx.?.page(self.pgid));
+            // TODO why reset the node
+            self.pgid = 0;
         }
     }
 };

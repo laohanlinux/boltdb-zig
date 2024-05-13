@@ -3,6 +3,7 @@ const page = @import("./page.zig");
 const tx = @import("./tx.zig");
 const errors = @import("./error.zig");
 const bucket = @import("./bucket.zig");
+const freelist = @import("./freelist.zig");
 
 // Represents a marker value to indicate that a file is a Bolt DB.
 const Magic = 0xED0CDAED;
@@ -72,6 +73,12 @@ pub const DB = struct {
     // needs to create new pages. This is done to amortize the cost
     // of truncate() and fsync() when growing the data file.
     alloc_size: isize,
+
+    freelist: *freelist.FreeList,
+
+    // Read only mode.
+    // When true, Update() and Begin(true) return Error.DatabaseReadOnly.
+    readOnly: bool,
 
     const Self = @This();
 };

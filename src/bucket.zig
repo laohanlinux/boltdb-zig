@@ -8,7 +8,7 @@ const DefaultFillPercent = 0.5;
 // Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
     _b: ?*_Bucket,
-    tx: ?*tx.Tx,
+    tx: ?*tx.TX,
 };
 
 // Represents the on-file represesntation of a bucket.
