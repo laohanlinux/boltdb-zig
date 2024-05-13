@@ -21,7 +21,8 @@ pub const PgIds = []PgidType;
 
 pub const page_size = 1024;
 
-fn intFromFlags(pageFlage: PageFlage) u16 {
+/// Returns the size of a page given the page size and branching factor.
+pub fn intFromFlags(pageFlage: PageFlage) u16 {
     return @as(u16, @intFromEnum(pageFlage));
 }
 
@@ -80,10 +81,6 @@ pub const Page = struct {
         }
         const ptrInt: usize = self.getDataPtrInt();
         const tPtr: *[]BranchPageElement = @ptrFromInt(ptrInt);
-        //  const _ptr: *[]*BranchPageElement = @ptrCast(@alignCast(tPtr.*));
-        //_ = _ptr;
-        //_ = std.mem.span(@ptrCast([*:0]BranchPageElement), @ptrFromInt(ptr));
-        //const elements: []BranchPageElement = @ptrFromInt(ptrInt + self.count * BranchPageElement.header_size);
         return tPtr.*[0..self.count];
     }
 
@@ -103,7 +100,7 @@ pub const Page = struct {
         }
 
         const ptr = @intFromPtr(self);
-        const elements: [self.count]LeafPageElement = @ptrFromInt(ptr + self.count * LeafPageElement.header_size);
+        const elements: [self.count]LeafPageElement = @ptrFromInt(ptr + self.count * LeafPageElement.headerSize);
         return elements;
     }
 
@@ -131,25 +128,29 @@ pub const BranchPageElement = packed struct {
 
 pub const LeafPageElement = packed struct {
     flags: u32,
+    // pos is the offset from first position of the element.
+    //
+    // |pageHeader| --> |element0|, |element1|, |element2|, |element3|, |element4| --> |key1, value1| --> |key2, value2| --> |key3, value3| --> |key4, value4|
+    //
     pos: u32,
-    k_size: u32,
-    v_size: u32,
+    kSize: u32,
+    vSize: u32,
 
     const Self = @This();
-    pub const header_size = @sizeOf(LeafPageElement);
+    pub const headerSize = @sizeOf(LeafPageElement);
 
     // Return a byte slice of the node key.
     pub fn key(self: *Self) []u8 {
         const ptr = @intFromPtr(self);
-        const key_ptr: [self.k_size]u8 = @ptrFromInt(ptr + self.pos);
-        return key_ptr;
+        const keyPtr: [self.kSize]u8 = @ptrFromInt(ptr + self.pos);
+        return keyPtr;
     }
 
     // Returns a byte slice of the node value.
     pub fn value(self: *Self) []u8 {
         const ptr = @intFromPtr(self);
-        const value_ptr: [self.v_size]u8 = @ptrFromInt(ptr + self.pos + self.k_size);
-        return value_ptr;
+        const valuePtr: [self.vSize]u8 = @ptrFromInt(ptr + self.pos + self.kSize);
+        return valuePtr;
     }
 };
 

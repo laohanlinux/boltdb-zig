@@ -14,6 +14,9 @@ pub const Node = struct {
     pgid: page.pgid_type,
     parent: ?*Node,
     children: ?[]?*Node,
+    // The inodes for this node. If the node is a leaf, the inodes are key/value pairs.
+    // If the node is a branch, the inodes are child page ids. The inodes are kept in sorted order.
+    // The inodes are reference to the inodes in the page, so the inodes should not be free.
     inodes: INodes,
     allocator: std.mem.Allocator,
 
@@ -23,8 +26,10 @@ pub const Node = struct {
         return undefined;
     }
 
-    pub fn deinit(_: *Self) void {
-        // freeInodes(std.testing.allocator, self.inodes);
+    // free the node memory
+    pub fn deinit(self: *Self) void {
+        // Just free the inodes, the inode are reference of page, so the inode should not be free.
+        self.allocator.free(self.inodes);
     }
 
     // Returns the top-level node this node is attached to.
@@ -85,7 +90,7 @@ pub const Node = struct {
     }
 
     /// Returns the child node at a given index.
-    fn childAt(self: *const Self, index: usize) ?*Node {
+    fn childAt(self: *const Self, _: usize) ?*Node {
         if (self.isLeaf) {
             @panic("invalid childAt call on a leaf node");
         } else {
@@ -105,8 +110,8 @@ pub const Node = struct {
         return self.inodes.?.len;
     }
 
-    // Returns the next node with the same parent.
-    fn next_slibling(self: *Self) ?*Self {
+    /// Returns the next node with the same parent.
+    fn nextSlibling(self: *Self) ?*Self {
         if (self.parent == null) {
             return null;
         }
@@ -114,25 +119,30 @@ pub const Node = struct {
         //      parent
         //        |
         //       [c1, c3, self, c4, c5]
+        // c4 is the next slibling of self
+        // index = 2
         const index = self.parent.?.childIndex(self);
+        // Get the rightest node
+        // right = 4
         const right = self.parent.?.numChildren() - 1;
-        // Self is the righest node
         if (index >= right) {
             return null;
         }
+        // Self is the righest node, so the next slibling is index + 1 = 3 = c4
         return self.parent.?.childAt(index + 1);
     }
 
-    // Returns the previous node with the same parent.
-    fn pre_slibling_slibling(self: *Self) ?*Self {
+    /// Returns the previous node with the same parent.
+    fn preSlibling(self: *Self) ?*Self {
         if (self.parent == null) {
             return null;
         }
         const index = self.parent.?.childIndex(self);
+        // Self is the leftest node, so the previous slibling is null
         if (index == 0) {
             return null;
         }
-
+        // Self is the middle node, so the previous slibling is index - 1
         return self.parent.?.childAt(index - 1);
     }
 
@@ -148,6 +158,7 @@ pub const Node = struct {
             unreachable;
         }
     }
+
     /// Read initializes the node from a page.
     fn read(self: *Self, p: *page.Page) void {
         self.pgid = p.id;
@@ -178,25 +189,40 @@ pub const Node = struct {
             self.key = null;
         }
     }
+
     /// Writes the items into one or more pages.
     fn write(self: *Self, p: *page.Page) void {
-        p.id = self.pgid;
-        p.flags = 0;
-        p.count = @intCast(self.inodes.?.len);
-        if (self.isLeaf) {
-            p.flags |= page.leafPageFlag;
+        // Initialize page.
+        if (self.pgid == 0) {
+            p.flags |= page.intFromFlags(page.PageFlage.leaf);
+        } else {
+            p.flags |= page.intFromFlags(page.PageFlage.branch);
         }
 
-        for (self.inodes.?) |inode| {
+        if (self.inodes.?.len >= 0xFFFF) {
+            @panic("inode overflow");
+        }
+
+        // Stop here if there are no items to write.
+        if (self.count == 0) {
+            return;
+        }
+
+        // Loop pver each inode and write it to the page.
+        for (self.inodes.?, 0..) |inode, i| {
+            std.debug.assert(inode.key.?.len > 0);
+            // Write the page element.
             if (self.isLeaf) {
-                const elem = p.leafPageElement(p.count);
+                const elem = p.leafPageElement(i);
+                elem.pgid = @as(u32, p.getDataPtrInt() - @intFromPtr(elem));
                 elem.flags = inode.flags;
-                elem.key = inode.key.?;
-                elem.value = inode.value.?;
+                elem.kSize = inode.key.?.len;
+                elem.vSize = inode.value.?.len;
             } else {
-                const elem = p.branchPageElement(p.count);
-                elem.pgid = inode.pgid;
-                elem.key = inode.key.?;
+                const elem = p.branchPageElement(i);
+                elem.pgid = @as(u32, p.getDataPtrInt() - @intFromPtr(elem));
+                elem.kSize = inode.key.?.len;
+                std.debug.assert(inode.pgid != elem.pgid);
             }
         }
     }
@@ -211,14 +237,17 @@ pub const Node = struct {
     }
 };
 
+/// Represents a node on a page.
 const INode = struct {
     flags: u32,
     // If the pgid is 0 then it's a leaf node, if it's greater than 0 then it's a branch node, and the value is the pgid of the child.
     pgid: page.PgidType,
-    // The key is the first key in the inodes.
+    // The key is the first key in the inodes. the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
+    // so the key should not be free. it will be free when the page is free.
     key: ?[]u8,
-    value: ?[]u8, // If the value is nil then it's a branch node
-
+    // If the value is nil then it's a branch node.
+    // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
+    value: ?[]u8,
     const Self = @This();
 
     /// Initializes a node.
