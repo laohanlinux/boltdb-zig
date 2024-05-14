@@ -1,5 +1,7 @@
 const page = @import("./page.zig");
 const tx = @import("./tx.zig");
+const std = @import("std");
+const Node = @import("./node.zig").Node;
 
 // DefaultFilterPersent is the percentage that split pages are filled.
 // This value can be changed by setting Bucket.FillPercent.
@@ -8,7 +10,8 @@ const DefaultFillPercent = 0.5;
 // Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
     _b: ?*_Bucket,
-    tx: ?*tx.Tx,
+    tx: ?*tx.TX,
+    nodes: std.HashMapUnmanaged(page.PgidType, *Node, {}, 80),
 };
 
 // Represents the on-file represesntation of a bucket.

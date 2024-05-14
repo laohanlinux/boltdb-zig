@@ -9,8 +9,10 @@ pub const TxId = u64;
 pub const TX = struct {
     writable: bool,
     managed: bool,
-    db: ?*db.DB,
-    meta: ?*db.Meta,
+    db: *db.DB,
+    meta: *db.Meta,
+
+    stats: TxStats,
 
     root: bucket.Bucket,
 };
@@ -25,8 +27,8 @@ pub const TxStats = packed struct {
     cursor_count: usize, // number of cursors created
 
     // Node statistics.
-    node_count: usize, // number of node allocations
-    node_deref: usize, // number of node dereferences
+    nodeCount: usize, // number of node allocations
+    nodeDeref: usize, // number of node dereferences
 
     // Rebalance statstics
     rebalance: usize, // number of node rebalances
@@ -46,8 +48,8 @@ pub const TxStats = packed struct {
         self.page_count += other.page_count;
         self.page_alloc += other.page_alloc;
         self.cursor_count += other.cursor_count;
-        self.node_count += other.node_count;
-        self.node_deref += other.node_deref;
+        self.nodeCount += other.nodeCount;
+        self.nodeDeref += other.nodeDeref;
         self.rebalance += other.rebalance;
         self.rebalance_time += other.rebalance_time;
         self.split += other.split;
@@ -65,8 +67,8 @@ pub const TxStats = packed struct {
             .page_count = self.page_count - other.page_count,
             .page_alloc = self.page_alloc - other.page_alloc,
             .cursor_count = self.cursor_count - other.cursor_count,
-            .node_count = self.node_count - other.node_count,
-            .node_deref = self.node_deref - other.node_deref,
+            .nodeCount = self.nodeCount - other.nodeCount,
+            .nodeDeref = self.nodeDeref - other.nodeDeref,
             .rebalance = self.rebalance - other.rebalance,
             .rebalance_time = self.rebalance_time - other.rebalance_time,
             .split = self.split - other.split,

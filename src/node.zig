@@ -3,17 +3,18 @@ const page = @import("./page.zig");
 const bucket = @import("./bucket.zig");
 const tx = @import("./tx.zig");
 const util = @import("./util.zig");
+const assert = @import("./assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
-    bucekt: ?*bucket.Bucket,
+    bucket: ?*bucket.Bucket,
     isLeaf: bool,
     unbalance: bool,
     spilled: bool,
-    key: ?[]u8,
+    key: ?[]u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
     pgid: page.pgid_type,
-    parent: ?*Node,
-    children: ?[]?*Node,
+    parent: ?*Node, // At memory
+    children: Nodes, // the is a soft reference to the children of the node, so the children should not be free.
     // The inodes for this node. If the node is a leaf, the inodes are key/value pairs.
     // If the node is a branch, the inodes are child page ids. The inodes are kept in sorted order.
     // The inodes are reference to the inodes in the page, so the inodes should not be free.
@@ -207,7 +208,8 @@ pub const Node = struct {
         if (self.count == 0) {
             return;
         }
-
+        const data = p.getDataSlice();
+        const index: usize = 0;
         // Loop pver each inode and write it to the page.
         for (self.inodes.?, 0..) |inode, i| {
             std.debug.assert(inode.key.?.len > 0);
@@ -223,16 +225,153 @@ pub const Node = struct {
                 elem.pgid = @as(u32, p.getDataPtrInt() - @intFromPtr(elem));
                 elem.kSize = inode.key.?.len;
                 std.debug.assert(inode.pgid != elem.pgid);
+                assert(inode.pgid != elem.?.pgid, "write: circulay dependency occuerd", {});
+            }
+
+            const kLen = inode.key.?.len;
+            // Write data for the element to the end of the page.
+            std.mem.copyForwards(u8, data[index..], inode.key.?);
+            index += kLen;
+            if (inode.value) |value| {
+                std.mem.copyForwards(u8, data[index], value);
+                index += value.len;
             }
         }
+
+        // DEBUG ONLY: n.deump()
     }
 
-    // Add the node's undering page to the freelist.
+    /// Attempts to combine the node with sibling nodes if the node fill
+    /// size is below a threshold or if there are not enough keys.
+    fn rebalance(self: *Self) void {
+        if (!self.unbalance) {
+            return;
+        }
+        self.unbalance = false;
+
+        // Update statistics.
+        self.bucket.?.tx.?.stats.rebalance += 1;
+
+        // Ignore if node is above threshold (25%) and has enough keys.
+        const threshold = self.bucket.?.tx.?.db.pageSize / 4;
+        if (self.size() > threshold and self.count >= self.minKeys()) {
+            return;
+        }
+
+        // Root node has special handling.
+        if (self.parent == null) {
+            // If root node is a branch and only has one node then collapse it.
+            if (!self.isLeaf and self.inodes.?.len == 1) {
+                // Move root's child up.
+                const child: *Self = self.bucket.?.node(self.inodes.?[0].pgid, self);
+                self.isLeaf = child.isLeaf;
+                self.inodes = child.inodes;
+                self.children = child.children;
+
+                // Reparent all child nodes being moved.
+                // TODO why not skip the first key
+                for (self.inodes.?) |inode| {
+                    if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                        _child.parent = self;
+                    }
+                }
+
+                // Remove old child. because the node also be stored in the node's children,
+                // so we should remove the child directly and recycle it.
+                child.parent = null;
+                _ = self.bucket.?.nodes.remove(child.pgid);
+                child.free();
+                return;
+            }
+            std.debug.print("nothing need to rebalance at root: {d}\n", .{self.pgid});
+            return;
+        }
+
+        // If node has no keys then just remove it.
+        if (self.numChildren() == 0) {
+            self.parent.?.del(self.key);
+            self.parent.?.removeChild(self);
+            const exists = self.bucket.?.nodes.remove(self.pgid);
+            assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
+            self.free();
+            self.parent.rebalance();
+            return;
+        }
+
+        assert(self.parent.?.numChildren() > 1, "parent must have at least 2 children", .{});
+
+        // Destination node is right sibling if idx == 0, otherwise left sibling.
+        var target: *Node = undefined;
+        const useNextSlibling = (self.parent.?.children(self) == 0);
+        if (useNextSlibling) {
+            target = self.nextSlibling();
+        } else {
+            target = self.preSlibling();
+        }
+
+        // If both this node and the target node are too small then merge them.
+        if (useNextSlibling) {
+            // Reparent all child nodes being moved.
+            for (self.inodes.?) |inode| {
+                // 难道有些数据没在bucket.nodes里面？
+                if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                    _child.parent.removeChild(_child);
+                    _child.parent = self;
+                    //_child.parent.?.children = append(_child.parent.?.children, _child);
+                }
+            }
+        } else {}
+    }
+
+    // fn removeChild(self: *Self, target: *Node) void {
+    //     for (self.children.?, 0..) |child, i| {
+    //         if (child == target) {
+    //             self.children.?[i] = null;
+    //             return;
+    //         }
+    //     }
+    // }
+
+    // Causes the node to copy all its inode key/value references to heap memory.
+    // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
+    fn dereference(self: *Self) void {
+        // TODO: meybe we should not free the key, because it was referennce same to first inode.
+        if (self.key != null) {
+            const _key = self.allocator.alloc(u8, self.key.?.len) catch unreachable;
+            std.mem.copyForwards(u8, _key, self.key.?);
+            self.key = _key;
+            assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
+        }
+
+        for (self.inodes.?) |inode| {
+            const _key = self.allocator.alloc(u8, inode.key.?.len) catch unreachable;
+            std.mem.copyForwards(u8, _key, inode.key.?);
+            inode.key = _key;
+            assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", {});
+            // If the value is not null
+            if (inode.value) |value| {
+                const _value = self.allocator.alloc(u8, value.len) catch unreachable;
+                std.mem.copyForwards(u8, _value, value);
+                inode.value = _value;
+                assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", {});
+            }
+        }
+
+        // Recursively dereference children.
+        for (self.children.items) |child| {
+            child.dereference();
+        }
+
+        // Update statistics.
+        self.bucket.?.tx.?.stats.nodeDeref += 1;
+    }
+
+    /// adds the node's underlying page to the freelist.
     fn free(self: *Self) void {
         if (self.pgid != 0) {
-            // free bucket
-            // TODO
-            // self.bucekt.?.tx.db.freelist.free()
+            self.bucket.?.tx.?.db.freelist.free(self.bucket.?.tx.?.meta.txid, self.bucket.?.tx.?.page(self.pgid));
+            // TODO why reset the node
+            self.pgid = 0;
         }
     }
 };
@@ -267,6 +406,8 @@ const INode = struct {
 };
 
 const INodes = ?[]*INode;
+
+const Nodes = std.ArrayList(*Node);
 
 fn freeInodes(allocator: std.mem.Allocator, inodes: INodes) void {
     for (inodes.?) |inode| {

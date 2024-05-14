@@ -108,6 +108,12 @@ pub const Page = struct {
         const ptr = @intFromPtr(self);
         return ptr + Self.HeaderSize;
     }
+
+    pub fn getDataSlice(self: *Self) []u8 {
+        const ptr = self.getDataPtrInt();
+        const slice: [self.count]u8 = @ptrFromInt(ptr);
+        return slice;
+    }
 };
 
 pub const BranchPageElement = packed struct {

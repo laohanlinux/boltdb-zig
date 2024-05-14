@@ -66,13 +66,13 @@ pub const FreeList = struct {
     }
 
     // Returns the starting page id of a contiguous list of pages of a given size.
-    pub fn allocate(self: *Self, n: usize) page.pgid_type {
+    pub fn allocate(self: *Self, n: usize) page.PgidType {
         if (self.ids.len == 0) {
             return 0;
         }
 
         var initial: usize = 0;
-        var previd: usize = 0;
+        const previd: usize = 0;
         for (self.ids, 0..) |i, id| {
             if (id <= 1) {
                 unreachable;
@@ -143,7 +143,7 @@ pub const FreeList = struct {
 
         const array_ids = try m.toOwnedSlice();
         std.sort.sort(page.pgid_type, array_ids, .{}, std.sort.asc(page.pgid_type));
-        var array = [_]page.pgid_type{0} ** (array_ids.len + self.ids.len);
+        const array = [_]page.pgid_type{0} ** (array_ids.len + self.ids.len);
         Self.merge_sorted_array(array, array_ids, self.ids);
         self.ids = array;
     }
@@ -260,15 +260,15 @@ test "meta" {
     const read = std.os.system.PROT.READ;
     _ = read;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; // instantiate allocator
-    var galloc = gpa.allocator(); // retrieves the created allocator.
+    const galloc = gpa.allocator(); // retrieves the created allocator.
     var ff = FreeList.new(galloc);
     defer ff.drop();
     try ff.cache.put(1000, true);
     std.debug.print("What the fuck {?}\n", .{ff.cache.getKey(1000)});
 
-    const a = [_]page.pgid_type{ 1, 3, 4, 5 };
-    const b = [_]page.pgid_type{ 0, 2, 6, 7, 120 };
-    var array = [_]page.pgid_type{0} ** (a.len + b.len);
+    const a = [_]page.PgidType{ 1, 3, 4, 5 };
+    const b = [_]page.PgidType{ 0, 2, 6, 7, 120 };
+    var array = [_]page.PgidType{0} ** (a.len + b.len);
     FreeList.merge_sorted_array(array[0..], a[0..], b[0..]);
     std.debug.print("after merge!\n", .{});
     for (array) |n| {

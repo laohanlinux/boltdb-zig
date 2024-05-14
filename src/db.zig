@@ -3,6 +3,7 @@ const page = @import("./page.zig");
 const tx = @import("./tx.zig");
 const errors = @import("./error.zig");
 const bucket = @import("./bucket.zig");
+const freelist = @import("./freelist.zig");
 
 // Represents a marker value to indicate that a file is a Bolt DB.
 const Magic = 0xED0CDAED;
@@ -24,6 +25,8 @@ const DefaultAllocSize = 16 * 1024 * 1024;
 const default_page_size = std.os.getPageSize();
 
 pub const DB = struct {
+    pageSize: usize,
+
     // When enabled, the database will perform a check() after every commit.
     // A painic if issued if the database is in an inconsistent stats. This
     // flag has a large performance impact so it should only be used for debugging purposes.
@@ -72,6 +75,12 @@ pub const DB = struct {
     // needs to create new pages. This is done to amortize the cost
     // of truncate() and fsync() when growing the data file.
     alloc_size: isize,
+
+    freelist: *freelist.FreeList,
+
+    // Read only mode.
+    // When true, Update() and Begin(true) return Error.DatabaseReadOnly.
+    readOnly: bool,
 
     const Self = @This();
 };
