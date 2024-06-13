@@ -168,13 +168,13 @@ pub const FreeList = struct {
     // Removes the pages from a given pending tx.
     pub fn rollback(self: *Self, txid: tx.TxId) void {
         // Remove page ids from cache.
-        const pending_key = try self.pending.getKey(txid);
-        for (pending_key) |id| {
-            self.cache.remove(id);
+        if (self.pending.get(txid)) |pendingIds| {
+            for (pendingIds) |id| {
+                _ = self.cache.remove(id);
+            }
         }
-
         // Remove pages from pending list.
-        self.pending.remove(txid);
+        _ = self.pending.remove(txid);
     }
 
     // Returns whether a given page is in the free list.
@@ -183,7 +183,7 @@ pub const FreeList = struct {
     }
 
     // Reads the freelist from a page and filters out pending itmes.
-    fn reload(self: *Self, p: *page.PgidType) void {
+    fn reload(self: *Self, p: page.PgidType) void {
         _ = p;
         _ = self;
     }
@@ -191,13 +191,15 @@ pub const FreeList = struct {
     // Rebuilds the free cache based on available and pending free list.
     fn reindex(self: *Self) void {
         self.cache.clearAndFree();
-        for (self.ids) |id| {
-            try self.cache.put(id, true);
+        for (self.ids.items) |id| {
+            self.cache.put(id, true) catch unreachable;
         }
 
-        for (self.pending, 0..) |_, pending_ids| {
-            for (pending_ids) |id| {
-                try self.cache.put(id, true);
+        var itr = self.pending.iterator();
+        while (itr.next()) |entry| {
+            const pitr = entry.value_ptr.*;
+            for (pitr) |id| {
+                self.cache.put(id, true) catch unreachable;
             }
         }
     }
@@ -279,6 +281,10 @@ test "meta" {
     ff.copyAll(&.{});
     const i = ff.allocate(100);
     try ff.release(1);
+    ff.rollback(1);
+    _ = ff.freed(200);
+    ff.reload(20);
+    ff.reindex();
     try ff.cache.put(1000, true);
     std.debug.print("What the fuck {d} {d}, {?}\n", .{ fCount, i, ff.cache.getKey(1000) });
 
