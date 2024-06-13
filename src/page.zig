@@ -80,16 +80,22 @@ pub const Page = struct {
     }
 
     // Retrives a list of leaf nodes.
-    pub fn branchPageElements(self: *Self, allocator: std.mem.Allocator) ?[]*BranchPageElement {
+    pub fn branchPageElements(self: *Self) ?[]BranchPageElement {
         if (self.count == 0) {
             return null;
         }
-        var elements = std.ArrayList(*BranchPageElement).initCapacity(allocator, @as(usize, self.count)) catch unreachable;
-        for (0..@as(usize, self.count)) |i| {
-            const element = self.branchPageElement(i);
-            elements.append(element.?) catch unreachable;
+        const firstPtr = self.branchPageElementPtr(0);
+        var elements: [*]BranchPageElement = @ptrCast(firstPtr);
+        return elements[0..self.count];
+    }
+
+    pub fn branchPageElementPtr(self: *Self, index: usize) *BranchPageElement {
+        if (self.count <= index) {
+            return undefined;
         }
-        return elements.items;
+        const ptr = self.getDataPtrInt() + index * BranchPageElement.headerSize;
+        const dPtr: *BranchPageElement = @ptrFromInt(ptr);
+        return dPtr;
     }
 
     // Retrives the leaf node by index.
@@ -112,16 +118,13 @@ pub const Page = struct {
     }
 
     // Retrives a list of leaf nodes.
-    pub fn leafPageElements(self: *Self, allocator: std.mem.Allocator) ?[]*LeafPageElement {
+    pub fn leafPageElements(self: *Self) ?[]LeafPageElement {
         if (self.count == 0) {
             return null;
         }
-        var elements = std.ArrayList(*LeafPageElement).initCapacity(allocator, @as(usize, self.count)) catch unreachable;
-        for (0..@as(usize, self.count)) |i| {
-            const element = self.leafPageElement(i);
-            elements.append(element.?) catch unreachable;
-        }
-        return elements.items;
+        const firstPtr = self.leafPageElementPtr(0);
+        var elements: [*]LeafPageElement = @ptrCast(firstPtr);
+        return elements[0..self.count];
     }
 
     pub fn getDataPtrInt(self: *Self) usize {
@@ -131,12 +134,15 @@ pub const Page = struct {
 
     pub fn getDataSlice(self: *Self) []u8 {
         const ptr = self.getDataPtrInt();
-        const slice: [self.count]u8 = @ptrFromInt(ptr);
-        return slice;
+        const slice: [*]u8 = @ptrFromInt(ptr);
+        return slice[0..];
     }
 };
 
 pub const BranchPageElement = packed struct {
+    //
+    // |pageHeader| --> |element0|, |element1|, |element2|, |element3|, |element4| --> |key1| --> |key2| --> |key3| --> |key4|
+    //
     pos: u32,
     kSize: u32,
     pgid: PgidType,
@@ -146,12 +152,8 @@ pub const BranchPageElement = packed struct {
 
     /// Returns a byte slice of the node key.
     pub fn key(self: *Self) []u8 {
-        const ptr = @intFromPtr(self);
-        const keyPtr: *u8 = @ptrFromInt(ptr + @as(usize, self.pos));
-        //defer std.debug.print("{}\n", .{self.kSize});
-        const slice = std.mem.asBytes(keyPtr);
-        return slice[0..];
-        // return keyPtr.*[0..@as(usize, self.kSize)];
+        const buf: [*]u8 = @ptrCast(self);
+        return buf[0..][self.pos..(self.pos + self.kSize)];
     }
 };
 
@@ -170,20 +172,14 @@ pub const LeafPageElement = packed struct {
 
     // Return a byte slice of the node key.
     pub fn key(self: *Self) []u8 {
-        //  const ptr = @intFromPtr(self) + @as(usize, self.pos);
-        //  const keyPtr: [*]u8 = @ptrFromInt(ptr);
-        //  return keyPtr[0..self.kSize];
-
         const buf: [*]u8 = @ptrCast(self);
-        //[0..];
         return buf[0..][self.pos..(self.pos + self.kSize)];
     }
 
     // Returns a byte slice of the node value.
     pub fn value(self: *Self) []u8 {
-        const ptr = @intFromPtr(self);
-        const valuePtr: [self.vSize]u8 = @ptrFromInt(ptr + self.pos + self.kSize);
-        return valuePtr;
+        const buf: [*]u8 = @ptrCast(self);
+        return buf[0..][(self.pos + self.kSize)..(self.pos + self.kSize + self.vSize)];
     }
 };
 
@@ -313,8 +309,7 @@ test "page struct" {
             branch.?.kSize = @as(u32, @intCast(i + 1));
             branch.?.pgid = @as(u64, i + 2);
         }
-        const branchElements = pageRef.branchPageElements(std.testing.allocator).?;
-        defer std.testing.allocator.free(branchElements);
+        const branchElements = pageRef.branchPageElements().?;
         std.debug.print("{}\n", .{branchElements.len});
         for (0..10) |i| {
             const branch = pageRef.branchPageElement(i);
@@ -337,48 +332,25 @@ test "page struct" {
             leaf.kSize = @as(u32, @intCast(i + 1));
             leaf.vSize = @as(u32, @intCast(i + 2));
             const kvSize = leaf.kSize + leaf.vSize;
+
             leaf.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
             std.debug.assert(leaf.pos == pageRef.leafPageElement(i).?.pos);
             leftPos += LeafPageElement.headerSize;
             rightPos -= @as(usize, kvSize);
-            slice[page_size - 3] = 10;
-            slice[page_size - 2] = 20;
-            slice[page_size - 1] = 30;
-
             const key = leaf.key();
             for (0..key.len) |index| {
-                key[index] = @as(u8, @intCast(index + 1));
+                key[index] = @as(u8, @intCast(index + 'B'));
             }
-            std.debug.print("{}, {}, {any}\n", .{ i, leaf, key });
+            const value = leaf.value();
+            for (0..value.len) |index| {
+                value[index] = @as(u8, @intCast(index + 'E'));
+            }
         }
-        //const ptr = pageRef.leafPageElementPtr(0);
-        // std.debug.print(">> {*} {} {} {} {}\n", .{ ptr, @intFromPtr(ptr), @intFromPtr(slice.ptr), @intFromPtr(pageRef), LeafPageElement.headerSize });
-        for (0..n) |i| {
-            const element = pageRef.leafPageElement(i);
-            std.debug.print("{} {any}\n", .{ i, element.?.key() });
+        const leafElements = pageRef.leafPageElements();
+        for (leafElements.?) |leaf| {
+            std.debug.print("{?}\n", .{leaf});
         }
     }
-}
-
-test "array" {
-    const array = [_]u8{ 0, 1, 2, 3, 4, 0 };
-
-    // Force runtime only bounds.
-    var start: usize = 2;
-    _ = &start;
-    var len: usize = 3;
-    _ = &len;
-
-    // Create a slice.
-    const slice = array[start..][0..len];
-    std.debug.print("Type of slice: {}\n", .{@TypeOf(slice)});
-
-    //display(slice);
-
-    // Create a sentinel terminated slice.
-    const s_slice: [:0]const u8 = array[0 .. array.len - 1 :0];
-    std.debug.print("Type of s_slice: {}\n", .{@TypeOf(s_slice)});
-    std.debug.print("s_slice[s_slice.len]: {}\n", .{s_slice[s_slice.len]});
 }
 
 pub fn main() !void {
