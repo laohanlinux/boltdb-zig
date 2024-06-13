@@ -6,19 +6,25 @@ const tx = @import("./tx.zig");
 // It also tracks pages that  have been freed but are still in use by open transactions.
 pub const FreeList = struct {
     // all free and available free page ids.
-    ids: []page.pgid_type,
+    ids: std.ArrayList(page.PgidType),
     // mapping of soon-to-be free page ids by tx.
-    pending: std.AutoHashMap(tx.TxId, []page.pgid_type),
+    pending: std.AutoHashMap(tx.TxId, []page.PgidType),
     // fast lookup of all free and pending pgae ids.
     cache: std.AutoHashMap(tx.TxId, bool),
 
     const Self = @This();
     pub fn new(allocator: std.mem.Allocator) Self {
         return FreeList{
-            .ids = &.{},
+            .ids = std.ArrayList(page.PgidType).init(allocator),
             .pending = std.AutoHashMap(tx.TxId, []page.pgid_type).init(allocator),
             .cache = std.AutoHashMap(tx.TxId, bool).init(allocator),
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.pending.deinit();
+        self.cache.deinit();
+        self.ids.deinit();
     }
 
     // Return the size of the page after serlialization.
@@ -108,7 +114,7 @@ pub const FreeList = struct {
 
     // Releases a page and its overflow for a given transaction id.
     // If the page is already free then a panic will occur.
-    pub fn free(self: *Self, txid: tx.TxId, p: *page.Page) void {
+    pub fn free(self: *Self, txid: tx.TxId, p: *page.Page) !void {
         std.testing.expect(p.id <= 1, "can not free 0 or 1 page");
 
         // Free page and all its overflow pages.
@@ -130,7 +136,7 @@ pub const FreeList = struct {
     }
 
     // Moves all page ids for a transaction id (or older) to the freelist.
-    pub fn release(self: *Self, txid: tx.TxId) void {
+    pub fn release(self: *Self, txid: tx.TxId) !void {
         var m = std.ArrayList(page.pgid_type).init(std.heap.page_allocator);
         for (self.pending, 0..) |tid, ids| {
             if (tid <= txid) {
@@ -257,8 +263,6 @@ pub const FreeList = struct {
 };
 
 test "meta" {
-    const read = std.os.system.PROT.READ;
-    _ = read;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; // instantiate allocator
     const galloc = gpa.allocator(); // retrieves the created allocator.
     var ff = FreeList.new(galloc);
