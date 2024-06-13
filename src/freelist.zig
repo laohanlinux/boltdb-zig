@@ -16,7 +16,7 @@ pub const FreeList = struct {
     pub fn new(allocator: std.mem.Allocator) Self {
         return FreeList{
             .ids = std.ArrayList(page.PgidType).init(allocator),
-            .pending = std.AutoHashMap(tx.TxId, []page.pgid_type).init(allocator),
+            .pending = std.AutoHashMap(tx.TxId, []page.PgidType).init(allocator),
             .cache = std.AutoHashMap(tx.TxId, bool).init(allocator),
         };
     }
