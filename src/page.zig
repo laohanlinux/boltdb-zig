@@ -102,6 +102,15 @@ pub const Page = struct {
         return dPtr;
     }
 
+    pub fn leafPageElementPtr(self: *Self, index: usize) *LeafPageElement {
+        if (self.count <= index) {
+            return undefined;
+        }
+        const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize;
+        const dPtr: *LeafPageElement = @ptrFromInt(ptr);
+        return dPtr;
+    }
+
     // Retrives a list of leaf nodes.
     pub fn leafPageElements(self: *Self, allocator: std.mem.Allocator) ?[]*LeafPageElement {
         if (self.count == 0) {
@@ -313,37 +322,63 @@ test "page struct" {
         }
     }
     @memset(slice, 0);
-    std.debug.print("------------------------------------------\n", .{});
+    std.debug.print("-------------------------------page size {}-----------\n", .{page_size});
     // Leaf
     {
         const pageRef = Page.init(slice);
         pageRef.count = 10;
         const n: usize = @as(usize, pageRef.count);
         var leftPos = pageRef.getDataPtrInt();
-        var rightPos: usize = pageRef.getDataPtrInt() + page_size;
+        var rightPos: usize = @intFromPtr(slice.ptr) + page_size - 1;
         // store it
         for (0..n) |i| {
-            const leaf = pageRef.leafPageElement(i);
-            leaf.?.flags = 0;
-            leaf.?.kSize = @as(u32, @intCast(i + 1));
-            leaf.?.vSize = @as(u32, @intCast(i + 2));
-            const kvSize = leaf.?.kSize + leaf.?.vSize;
-            leaf.?.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
-            std.debug.print("{}\n", .{leaf.?});
-            std.debug.assert(leaf.?.pos == pageRef.leafPageElement(i).?.pos);
+            const leaf = pageRef.leafPageElement(i).?;
+            leaf.flags = 0;
+            leaf.kSize = @as(u32, @intCast(i + 1));
+            leaf.vSize = @as(u32, @intCast(i + 2));
+            const kvSize = leaf.kSize + leaf.vSize;
+            leaf.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
+            std.debug.assert(leaf.pos == pageRef.leafPageElement(i).?.pos);
             leftPos += LeafPageElement.headerSize;
             rightPos -= @as(usize, kvSize);
-            const key = leaf.?.key();
-            //key[0] = 20;
-            //@memset(key, 0);
-            std.debug.print("{any}\n", .{key.len});
-        }
+            slice[page_size - 3] = 10;
+            slice[page_size - 2] = 20;
+            slice[page_size - 1] = 30;
 
+            const key = leaf.key();
+            for (0..key.len) |index| {
+                key[index] = @as(u8, @intCast(index + 1));
+            }
+            std.debug.print("{}, {}, {any}\n", .{ i, leaf, key });
+        }
+        //const ptr = pageRef.leafPageElementPtr(0);
+        // std.debug.print(">> {*} {} {} {} {}\n", .{ ptr, @intFromPtr(ptr), @intFromPtr(slice.ptr), @intFromPtr(pageRef), LeafPageElement.headerSize });
         for (0..n) |i| {
             const element = pageRef.leafPageElement(i);
-            std.debug.print("{}\n", .{element.?});
+            std.debug.print("{} {any}\n", .{ i, element.?.key() });
         }
     }
+}
+
+test "array" {
+    const array = [_]u8{ 0, 1, 2, 3, 4, 0 };
+
+    // Force runtime only bounds.
+    var start: usize = 2;
+    _ = &start;
+    var len: usize = 3;
+    _ = &len;
+
+    // Create a slice.
+    const slice = array[start..][0..len];
+    std.debug.print("Type of slice: {}\n", .{@TypeOf(slice)});
+
+    //display(slice);
+
+    // Create a sentinel terminated slice.
+    const s_slice: [:0]const u8 = array[0 .. array.len - 1 :0];
+    std.debug.print("Type of s_slice: {}\n", .{@TypeOf(s_slice)});
+    std.debug.print("s_slice[s_slice.len]: {}\n", .{s_slice[s_slice.len]});
 }
 
 pub fn main() !void {
