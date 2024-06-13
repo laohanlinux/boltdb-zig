@@ -19,7 +19,7 @@ pub const PgidType = u64;
 
 pub const PgIds = []PgidType;
 
-pub const page_size = 1024;
+pub const page_size: usize = 1024;
 
 /// Returns the size of a page given the page size and branching factor.
 pub fn intFromFlags(pageFlage: PageFlage) u16 {

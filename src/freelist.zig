@@ -12,12 +12,16 @@ pub const FreeList = struct {
     // fast lookup of all free and pending pgae ids.
     cache: std.AutoHashMap(tx.TxId, bool),
 
+    allocator: std.mem.Allocator,
+
     const Self = @This();
-    pub fn new(allocator: std.mem.Allocator) Self {
+
+    pub fn init(allocator: std.mem.Allocator) Self {
         return FreeList{
             .ids = std.ArrayList(page.PgidType).init(allocator),
             .pending = std.AutoHashMap(tx.TxId, []page.PgidType).init(allocator),
             .cache = std.AutoHashMap(tx.TxId, bool).init(allocator),
+            .allocator = allocator,
         };
     }
 
@@ -28,8 +32,8 @@ pub const FreeList = struct {
     }
 
     // Return the size of the page after serlialization.
-    pub fn size(self: *Self) isize {
-        var n = self.count();
+    pub fn size(self: *Self) usize {
+        var n: usize = self.count();
         if (n >= 0xFFFF) {
             // The first elements will be used to store the count. See freelist.write.
             n += 1;
@@ -39,49 +43,51 @@ pub const FreeList = struct {
 
     // Returns count of pages on the freelist.
     pub fn count(self: *Self) usize {
-        return self.free_count() + self.pending_count();
+        return self.freeCount() + self.pendingCount();
     }
 
     // Returns count of free pages.
-    pub fn free_count(self: *Self) usize {
-        return self.ids.len;
+    pub fn freeCount(self: *Self) usize {
+        return self.ids.items.len;
     }
 
     // Returns count of pending pages.
-    pub fn pending_count(self: *Self) usize {
-        var _count = 0;
-        for (self.pending) |el| {
-            _count += el.len;
+    pub fn pendingCount(self: *Self) usize {
+        var _count: usize = 0;
+        var itr = self.pending.iterator();
+        while (itr.next()) |entry| {
+            _count += entry.value_ptr.len;
         }
         return _count;
     }
 
     // Copies into dst a list of all free ids end all pending ids in one sorted list.
-    pub fn copy_all(self: *Self, dst: []page.PgidType) void {
-        var array = [:self.pending_count()]page.PgidType{};
+    pub fn copyAll(self: *Self, dst: []page.PgidType) void {
+        var array = std.ArrayList(page.PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
+        array.appendNTimes(0, self.pendingCount()) catch unreachable;
         var p_itr = self.pending.valueIterator();
-        var index = 0;
+        var index: usize = 0;
 
         while (p_itr.next()) |entry| {
-            for (entry) |pgid| {
-                array[index] = pgid;
+            for (entry.*) |pgid| {
+                array.items[index] = pgid;
                 index += 1;
             }
         }
-        Self.merge_sorted_array(dst, self.ids, array);
+        Self.merge_sorted_array(dst, self.ids.items, array.items);
     }
 
     // Returns the starting page id of a contiguous list of pages of a given size.
     pub fn allocate(self: *Self, n: usize) page.PgidType {
-        if (self.ids.len == 0) {
+        if (self.ids.items.len == 0) {
             return 0;
         }
 
         var initial: usize = 0;
         const previd: usize = 0;
-        for (self.ids, 0..) |i, id| {
+        for (self.ids.items, 0..) |id, i| {
             if (id <= 1) {
-                unreachable;
+                @panic("invalid page allocation");
             }
             // Reset initial page if this is not contigous.
             if (previd == 0 or id - previd != 1) {
@@ -94,16 +100,17 @@ pub const FreeList = struct {
                 // temporarilly but then append() in free() will realloc the slice
                 // as is necessary.
                 if (i + 1 == n) {
-                    self.ids = self.ids[i + 1 ..];
+                    std.mem.copyForwards(page.PgidType, self.ids.items[0..], self.ids.items[i + 1 ..]);
+                    self.ids.resize(self.ids.items.len - i - 1) catch unreachable;
                 } else {
-                    std.mem.copyForwards(page.PgidType, self.ids[i - n + 1 ..], self.ids[i + 1 ..]);
-                    self.ids = self.ids[0 .. self.ids.len - n];
+                    std.mem.copyForwards(page.PgidType, self.ids.items[i - n + 1 ..], self.ids.items[(i + 1)..]);
+                    self.ids.resize(self.ids.items.len - n) catch unreachable;
                 }
 
                 // Remove from the free cache.
                 // TODO Notice
                 for (0..n) |ii| {
-                    self.cache.remove(initial + ii);
+                    _ = self.cache.remove(initial + ii);
                 }
 
                 return initial;
@@ -137,21 +144,25 @@ pub const FreeList = struct {
 
     // Moves all page ids for a transaction id (or older) to the freelist.
     pub fn release(self: *Self, txid: tx.TxId) !void {
-        var m = std.ArrayList(page.PgidType).init(std.heap.page_allocator);
-        for (self.pending, 0..) |tid, ids| {
-            if (tid <= txid) {
+        var m = std.ArrayList(page.PgidType).init(self.allocator);
+        defer m.deinit();
+        var itr = self.pending.iterator();
+        while (itr.next()) |entry| {
+            if (entry.key_ptr.* <= txid) {
                 // Move transaction's pending pages to the available freelist.
                 // Don't remove from the cache since the page is still free.
-                try m.appendSlice(ids);
-                self.pending.remove(tid);
+                try m.appendSlice(entry.value_ptr.*);
+                _ = self.pending.remove(entry.key_ptr.*);
             }
         }
 
         const array_ids = try m.toOwnedSlice();
-        std.sort.sort(page.PgidType, array_ids, .{}, std.sort.asc(page.PgidType));
-        const array = [_]page.PgidType{0} ** (array_ids.len + self.ids.len);
-        Self.merge_sorted_array(array, array_ids, self.ids);
-        self.ids = array;
+        std.mem.sort(page.PgidType, array_ids, {}, std.sort.asc(page.PgidType));
+        var array = try std.ArrayList(page.PgidType).initCapacity(self.allocator, array_ids.len + self.ids.items.len);
+        defer array.deinit();
+        Self.merge_sorted_array(array.items, array_ids, self.ids.items);
+        try self.ids.resize(0);
+        try self.ids.appendSlice(array.items);
     }
 
     // Removes the pages from a given pending tx.
@@ -254,21 +265,22 @@ pub const FreeList = struct {
             }
         }
     }
-
-    // free memory
-    pub fn drop(self: *Self) void {
-        self.cache.deinit();
-        self.pending.deinit();
-    }
 };
 
 test "meta" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; // instantiate allocator
     const galloc = gpa.allocator(); // retrieves the created allocator.
-    var ff = FreeList.new(galloc);
-    defer ff.drop();
+    var ff = FreeList.init(galloc);
+    defer ff.deinit();
+    _ = ff.size();
+    _ = ff.count();
+    const fCount = ff.freeCount();
+    _ = ff.pendingCount();
+    ff.copyAll(&.{});
+    const i = ff.allocate(100);
+    try ff.release(1);
     try ff.cache.put(1000, true);
-    std.debug.print("What the fuck {?}\n", .{ff.cache.getKey(1000)});
+    std.debug.print("What the fuck {d} {d}, {?}\n", .{ fCount, i, ff.cache.getKey(1000) });
 
     const a = [_]page.PgidType{ 1, 3, 4, 5 };
     const b = [_]page.PgidType{ 0, 2, 6, 7, 120 };
@@ -281,4 +293,19 @@ test "meta" {
     std.debug.print("\n", .{});
     var arr = try std.ArrayList(page.PgidType).initCapacity(std.heap.page_allocator, 100);
     defer arr.deinit();
+}
+
+test "freelist" {
+    var flist = FreeList.init(std.testing.allocator);
+    defer flist.deinit();
+
+    var ids = std.ArrayList(page.PgidType).initCapacity(std.testing.allocator, 0) catch unreachable;
+    for (0..29) |i| {
+        const pid = @as(u64, i);
+        ids.append(pid) catch unreachable;
+    }
+    defer ids.deinit();
+    std.mem.copyForwards(u64, ids.items[0..20], ids.items[10..12]);
+    ids.resize(2) catch unreachable;
+    std.debug.print("{any}\n", .{ids.items});
 }
