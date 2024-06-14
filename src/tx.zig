@@ -1,6 +1,7 @@
 const std = @import("std");
 const db = @import("./db.zig");
 const bucket = @import("./bucket.zig");
+const page = @import("./page.zig");
 // Represents the internal transaction indentifier.
 pub const TxId = u64;
 
@@ -15,6 +16,10 @@ pub const TX = struct {
     stats: TxStats,
 
     root: bucket.Bucket,
+    const Self = @This();
+    pub fn getPage(_: *Self, _: page.PgidType) page.Page {
+        unreachable;
+    }
 };
 
 // Represents statusctics about the actiosn performed by the transaction
@@ -32,7 +37,7 @@ pub const TxStats = packed struct {
 
     // Rebalance statstics
     rebalance: usize, // number of node rebalances
-    rebalance_time: std.time.Instant,
+    rebalance_time: u64,
 
     // Split/Spill statistics
     split: usize, // number of nodes split

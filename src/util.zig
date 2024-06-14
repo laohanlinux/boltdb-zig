@@ -37,3 +37,14 @@ pub fn equals(a: []const u8, b: []const u8) bool {
 pub fn greaterThan(a: []const u8, b: []const u8) bool {
     return cmpBytes(a, b) == std.math.Order.gt;
 }
+
+pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
+    if (ok) {
+        return;
+    }
+    const allocator = std.heap.page_allocator;
+    const s = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
+    std.debug.print("{s}\n", .{s});
+    defer allocator.free(s);
+    @panic(s);
+}

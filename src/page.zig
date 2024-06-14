@@ -3,8 +3,8 @@ const db = @import("./db.zig");
 
 const min_keys_page: usize = 2;
 
-pub const branchPageElementSize = BranchPageElement.headerSize;
-pub const leafPageElementSize = LeafPageElement.header_size;
+pub const branchPageElementSize = BranchPageElement.headerSize();
+pub const leafPageElementSize = LeafPageElement.headerSize();
 
 pub const PageFlage = enum(u8) {
     branch = 0x01,
@@ -33,11 +33,15 @@ pub const Page = struct {
     overflow: u32,
     const Self = @This();
     // the size of this, but why align(4)?
-    pub const HeaderSize = @sizeOf(@This());
+    // pub const headerSize: usize = 16; // Has some bug if use @sizeOf(Page), when other file reference it;
 
     pub fn init(slice: []u8) *Page {
         const ptr: *Page = @ptrCast(@alignCast(slice));
         return ptr;
+    }
+
+    pub inline fn headerSize() usize {
+        return @sizeOf(Self);
     }
 
     pub fn typ(self: *const Self) []const u8 {
@@ -70,12 +74,12 @@ pub const Page = struct {
         if (self.count <= index) {
             return null;
         }
-        const ptr = self.getDataPtrInt() + index * BranchPageElement.headerSize;
+        const ptr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
         const dPtr: *BranchPageElement = @ptrFromInt(ptr);
         return dPtr;
     }
 
-    pub fn opaqPtrTo(ptr: ?*anyopaque, comptime T: type) T {
+    pub fn opaqPtrTo(_: *Self, ptr: ?*anyopaque, comptime T: type) T {
         return @ptrCast(@alignCast(ptr));
     }
 
@@ -93,7 +97,7 @@ pub const Page = struct {
         if (self.count <= index) {
             return undefined;
         }
-        const ptr = self.getDataPtrInt() + index * BranchPageElement.headerSize;
+        const ptr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
         const dPtr: *BranchPageElement = @ptrFromInt(ptr);
         return dPtr;
     }
@@ -103,7 +107,7 @@ pub const Page = struct {
         if (self.count <= index) {
             return null;
         }
-        const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize;
+        const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize();
         const dPtr: *LeafPageElement = @ptrFromInt(ptr);
         return dPtr;
     }
@@ -112,7 +116,7 @@ pub const Page = struct {
         if (self.count <= index) {
             return undefined;
         }
-        const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize;
+        const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize();
         const dPtr: *LeafPageElement = @ptrFromInt(ptr);
         return dPtr;
     }
@@ -129,7 +133,7 @@ pub const Page = struct {
 
     pub fn getDataPtrInt(self: *Self) usize {
         const ptr = @intFromPtr(self);
-        return ptr + Self.HeaderSize;
+        return ptr + Self.headerSize();
     }
 
     pub fn getDataSlice(self: *Self) []u8 {
@@ -148,8 +152,9 @@ pub const BranchPageElement = packed struct {
     pgid: PgidType,
 
     const Self = @This();
-    pub const headerSize = @sizeOf(BranchPageElement);
-
+    pub inline fn headerSize() usize {
+        return @sizeOf(Self);
+    }
     /// Returns a byte slice of the node key.
     pub fn key(self: *Self) []u8 {
         const buf: [*]u8 = @ptrCast(self);
@@ -168,7 +173,11 @@ pub const LeafPageElement = packed struct {
     vSize: u32,
 
     const Self = @This();
-    pub const headerSize = @sizeOf(LeafPageElement);
+    // pub const headerSize = @sizeOf(LeafPageElement);
+
+    pub inline fn headerSize() usize {
+        return @sizeOf(Self);
+    }
 
     // Return a byte slice of the node key.
     pub fn key(self: *Self) []u8 {
@@ -335,7 +344,7 @@ test "page struct" {
 
             leaf.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
             std.debug.assert(leaf.pos == pageRef.leafPageElement(i).?.pos);
-            leftPos += LeafPageElement.headerSize;
+            leftPos += LeafPageElement.headerSize();
             rightPos -= @as(usize, kvSize);
             const key = leaf.key();
             for (0..key.len) |index| {
