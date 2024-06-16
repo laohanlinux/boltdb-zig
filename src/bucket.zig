@@ -8,13 +8,24 @@ const assert = @import("util.zig").assert;
 // This value can be changed by setting Bucket.FillPercent.
 const DefaultFillPercent = 0.5;
 
+pub const minFillPercent: f64 = 0.1;
+pub const maxFillPercent: f64 = 1.0;
+
 // Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
     _b: ?*_Bucket,
-    tx: ?*tx.TX,
-    nodes: std.AutoHashMap(page.PgidType, *Node),
-    rootNode: ?*Node,
-    page: ?page.Page,
+    tx: ?*tx.TX, // the associated transaction
+    buckets: std.AutoHashMap([]u8, *Bucket), // subbucket cache
+    nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
+    rootNode: ?*Node, // materialized node for the root page.
+    page: ?page.Page, // inline page reference
+
+    // Sets the thredshold for filling nodes when they split. By default,
+    // the bucket will fill to 50% but it can be useful to increase this
+    // amout if you know that your write workloads are mostly append-only.
+    //
+    // This is non-presisted across transactions so it must be set in every TX.
+    fillPercent: f64 = 0.50,
 
     allocator: std.mem.Allocator,
 

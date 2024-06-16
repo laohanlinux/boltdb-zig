@@ -5,6 +5,8 @@ const errors = @import("./error.zig");
 const bucket = @import("./bucket.zig");
 const freelist = @import("./freelist.zig");
 
+const Page = page.Page;
+
 // Represents a marker value to indicate that a file is a Bolt DB.
 const Magic = 0xED0CDAED;
 // The data file format verison.
@@ -49,7 +51,7 @@ pub const DB = struct {
     // Skipping truncation avoids pareallocation of hard drive space and
     // bypasssing a truncate() and fsync() syscall on remapping.
     //
-    no_grow_sync: bool,
+    noGrowSync: bool,
 
     // If you want to read the entire database fast. you can set MMAPFLAG to
     // syscall.MAP_POPULATE on linux 2.6.23+ for sequential read-ahead.
@@ -74,15 +76,131 @@ pub const DB = struct {
     // AllocSize is the amount of space allocated when the database
     // needs to create new pages. This is done to amortize the cost
     // of truncate() and fsync() when growing the data file.
-    alloc_size: isize,
+    allocSize: usize,
 
+    path: []const u8,
+    file: std.fs.File,
+    filesz: usize,
+    //lockFile: std.fs.File,
+    dataRef: []u8, // mmap'ed readonly, write throws SEGV
+    data: *[MaxMMapStep]u8,
+    datasz: usize,
+
+    rwtx: ?*tx.TX,
+    txs: std.ArrayList(*tx.TX),
     freelist: *freelist.FreeList,
+    stats: Stats,
 
     // Read only mode.
     // When true, Update() and Begin(true) return Error.DatabaseReadOnly.
     readOnly: bool,
 
+    meta0: *Meta,
+    meta1: *Meta,
+
+    allocate: std.mem.Allocator,
+
     const Self = @This();
+
+    /// Retrives a page reference from the mmap based on the current page size.
+    pub fn pageById(self: *Self, id: page.PgidType) *Page {
+        const pos: u64 = id * @as(u64, self.pageSize);
+        const buf = self.data[pos..self.pageSize];
+        return Page.init(buf);
+    }
+
+    /// Retrives a page reference from a given byte array based on the current page size.
+    pub fn pageInBuffer(self: *Self, buffer: []u8, id: page.PgidType) *page.Page {
+        const pos: u64 = id * @as(u64, self.pageSize);
+        const buf = buffer[pos..self.pageSize];
+        return Page.init(buf);
+    }
+
+    // meta retriews the current meta page reference.
+    pub fn getMeta(self: *Self) *Meta {
+        // We have to return the meta with the highest txid which does't fail
+        // validation. Otherwise, we can cause errors when in fact the database is
+        // in a consistent state. metaA is the one with thwe higher txid.
+        var metaA = self.meta0;
+        var metaB = self.meta1;
+
+        if (self.meta1.txid > self.meta0.txid) {
+            metaA = self.meta1;
+            metaB = self.meta0;
+        }
+
+        // Use higher meta page if valid. Otherwise fallback to prevous, if valid.
+        metaA.validate() catch |err| switch (err) {
+            errors.Error => {},
+            else => {
+                return metaA;
+            },
+        };
+        metaB.validate() catch |err| switch (err) {
+            errors.Error => {},
+            else => {
+                return metaB;
+            },
+        };
+
+        @panic("bolt.db.meta(): invalid meta pages");
+    }
+
+    pub fn allocate(self: *Self, count: usize) !*Page {
+        // TODO Allocate a tempory buffer for the page.
+        const buf = try self.allocate.alloc(u8, count * self.pageSize);
+        const p = Page.init(buf);
+        p.overflow = count - 1;
+
+        // Use pages from the freelist if they are availiable.
+        p.id = self.freelist.allocate(count);
+        if (p.id != 0) {
+            return p;
+        }
+
+        // Resize mmap() if we're at the end.
+        p.id = self.rwtx.?.meta.pgid;
+        const minsz: usize = (@as(usize, @intCast(p.id)) + 1 + count) * self.pageSize;
+        if (minsz >= self.datasz) {
+            try self.mmap(minsz);
+        }
+
+        // Move the page id high water mark.
+        self.rwtx.?.meta.pgid += @as(page.PgidType, count);
+
+        return p;
+    }
+
+    // Grows the size of the database to the given sz.
+    fn grow(self: *Self, sz: usize) !void {
+        // Ignore if the new size is less than valiable file size.
+        if (sz <= self.filesz) {
+            return;
+        }
+
+        // If the data is smaller than the alloc size then only allocate what's need.
+        // Once it goes over the allocation size then allocate in chunks.
+        if (self.datasz < self.allocSize) {
+            sz = self.datasz;
+        } else {
+            sz += self.allocSize;
+        }
+
+        // Truncate and fsync to ensure file size metadata is flushed.
+        // https://github.com/boltdb/bolt/issues/284
+        if (!self.noGrowSync and !self.readOnly) {
+            const util = @import("./util.zig");
+            if (util.isLinux()) {
+                _ = std.os.linux.fsync(self.file.handle);
+            }
+        }
+
+        self.filesz = sz;
+    }
+
+    pub fn isReadOnly(self: *const Self) bool {
+        return self.readOnly;
+    }
 };
 
 // Represents the options that can be set when opening a database.

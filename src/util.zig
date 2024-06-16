@@ -48,3 +48,18 @@ pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     defer allocator.free(s);
     @panic(s);
 }
+
+pub inline fn isWindows() bool {
+    const tag = @import("builtin").os.tag;
+    return (tag == .windows);
+}
+
+pub inline fn isLinux() bool {
+    const tag = @import("builtin").os.tag;
+    return (tag == .linux);
+}
+
+pub inline fn isMacOS() bool {
+    const tag = @import("builtin").os.tag;
+    return tag.isDarwin();
+}

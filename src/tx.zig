@@ -20,6 +20,11 @@ pub const TX = struct {
     pub fn getPage(_: *Self, _: page.PgidType) page.Page {
         unreachable;
     }
+
+
+    pub fn allocate(self: *Self, count usize) !*page.Page {
+        const p = self.db.allocate(count);
+    }
 };
 
 // Represents statusctics about the actiosn performed by the transaction

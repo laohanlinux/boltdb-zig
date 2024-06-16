@@ -224,45 +224,184 @@ pub const Node = struct {
             p.flags |= page.intFromFlags(page.PageFlage.branch);
         }
 
-        if (self.inodes.?.len >= 0xFFFF) {
-            @panic("inode overflow");
-        }
-
+        assert(self.inodes.items.len < 0xFFFF, "inode overflow: {} (pgid={})", .{ self.inodes.items.len, p.id });
+        p.count = @as(u16, @intCast(self.inodes.items.len));
         // Stop here if there are no items to write.
-        if (self.count == 0) {
+        if (p.count == 0) {
+            std.log.info("no inode need write, pid={}", .{p.id});
             return;
         }
-        const data = p.getDataSlice();
-        const index: usize = 0;
+        // |e1|e2|e3|b1|b2|b3|
+        // Loop over each item and write it to the page.
+        var b = p.getDataSlice();
         // Loop pver each inode and write it to the page.
-        for (self.inodes.?, 0..) |inode, i| {
-            std.debug.assert(inode.key.?.len > 0);
+        for (self.inodes.items, 0..) |inode, i| {
+            assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
             // Write the page element.
             if (self.isLeaf) {
-                const elem = p.leafPageElement(i);
-                elem.pgid = @as(u32, p.getDataPtrInt() - @intFromPtr(elem));
+                const elem = p.leafPageElement(i).?;
+                elem.pos = @as(u32, @intCast(@intFromPtr(b.ptr) - @intFromPtr(elem)));
                 elem.flags = inode.flags;
-                elem.kSize = inode.key.?.len;
-                elem.vSize = inode.value.?.len;
+                elem.kSize = @as(u32, @intCast(inode.key.?.len));
+                elem.vSize = @as(u32, @intCast(inode.value.?.len));
             } else {
-                const elem = p.branchPageElement(i);
-                elem.pgid = @as(u32, p.getDataPtrInt() - @intFromPtr(elem));
-                elem.kSize = inode.key.?.len;
-                std.debug.assert(inode.pgid != elem.pgid);
-                assert(inode.pgid != elem.?.pgid, "write: circulay dependency occuerd", {});
+                const elem = p.branchPageElement(i).?;
+                elem.pos = @as(u32, @intCast(@intFromPtr(b.ptr) - @intFromPtr(elem)));
+                elem.kSize = @as(u32, @intCast(inode.key.?.len));
+                elem.pgid = inode.pgid;
+                assert(inode.pgid != elem.pgid, "write: circulay dependency occuerd", .{});
+            }
+            // If the length of key+value is larger than the max allocation size
+            // then we need to reallocate the byte array pointer
+            //
+            // See: https://github.com/boltdb/bolt/pull/335
+            const kLen = inode.key.?.len;
+            const vLen: usize = if (inode.value) |value| value.len else 0;
+            if (b.len < (kLen + vLen)) {
+                @panic("it should be not happen!");
             }
 
-            const kLen = inode.key.?.len;
             // Write data for the element to the end of the page.
-            std.mem.copyForwards(u8, data[index..], inode.key.?);
-            index += kLen;
+            std.mem.copyForwards(u8, b[0..kLen], inode.key.?);
+            b = b[kLen..];
             if (inode.value) |value| {
-                std.mem.copyForwards(u8, data[index], value);
-                index += value.len;
+                std.mem.copyForwards(u8, b[0..vLen], value);
+                b = b[vLen..];
             }
         }
 
         // DEBUG ONLY: n.deump()
+    }
+
+    /// Split breaks up a node into multiple smaller nodes, If appropriate.
+    /// This should only be called from the spill() function.
+    fn split(self: *Self, pageSize: usize) []*Node {
+        var nodes = std.ArrayList(*Node).init(self.allocator);
+        var curNode = self;
+        while (true) {
+            // Split node into two.
+            const a, const b = self.splitTwo(pageSize);
+            nodes.append(a) catch unreachable;
+
+            // If we can't split then exit the loop.
+            if (b == null) {
+                break;
+            }
+
+            // Set node to be so it gets split on the next function.
+            curNode = b;
+        }
+
+        return nodes.items;
+    }
+
+    /// Breaks up a node into two smaller nodes, if approprivate.
+    /// This should only be called from the split() function.
+    fn splitTwo(self: *Self, pageSize: usize) [2]?*Node {
+        // Ignore the split if the page doesn't have a least enough nodes for
+        // two pages or if the nodes can fit in a single page.
+        if (self.inodes.items.len <= page.min_keys_page * 2 or self.sizeLessThan(pageSize)) {
+            return [2]*Node{ self, null };
+        }
+
+        // Determine the threshold before starting a new node.
+        var fillPercent = self.bucket.?.fillPercent;
+        if (fillPercent < bucket.minFillPercent) {
+            fillPercent = bucket.minFillPercent;
+        } else if (fillPercent > bucket.maxFillPercent) {
+            fillPercent = bucket.maxFillPercent;
+        }
+
+        const threshold = @as(usize, @intCast(@as(f64, @floatCast(pageSize)) * fillPercent));
+
+        // Determin split position and sizes of the two pages.
+        const _splitIndex, _ = self.splitIndex(threshold);
+
+        // Split node into two separate nodes.
+        if (self.parent == null) {
+            self.parent = Node.init(self.allocator);
+            self.parent.?.bucket = self.bucket;
+            self.children.append(self); // children also is you!
+        }
+
+        // Create a new node and add it to the parent.
+        const next = Node.init(self.allocator);
+        next.bucket = self.bucket;
+        next.isLeaf = self.isLeaf;
+        next.parent = next.parent;
+
+        // Split inodes across two nodes.
+        next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
+        self.inodes.resize(_splitIndex);
+
+        // Update the statistics.
+        self.bucket.?.tx.?.stats.split += 1;
+
+        return [2]*Node{ self, next };
+    }
+
+    /// Finds the position where a page will fill a given threshold.
+    /// It returns the index as well as the size of the first page.
+    /// This is only be called from split().
+    fn splitIndex(self: *Self, threshold: usize) [2]usize {
+        var sz = page.page_size;
+        if (self.inodes.items.len <= page.min_keys_page) {
+            return [2]usize{ 0, sz };
+        }
+        // Loop until we only have the minmum number of keys required for the second page.
+        var inodeIndex: usize = 0;
+        for (self.inodes.items, 0..) |inode, i| {
+            var elsize = self.pageElementSize() + inode.key.?.len;
+            if (inode.value) |value| {
+                elsize += value.len;
+            }
+            inodeIndex = i;
+
+            // If we have at least the minimum number of keys and adding another
+            // node would put us over the threshold then exit and return
+            if (inodeIndex >= self.inodes.items.len and sz + elsize > threshold) {
+                break;
+            }
+
+            // Add the element size the total size.
+            sz += elsize;
+        }
+
+        return [2]usize{inodeIndex};
+    }
+
+    /// Writes the nodes to dirty pages and splits nodes as it goes.
+    /// Returns and error if dirty pages cannot be allocated
+    fn spill(self: *Self) !void {
+        var tx = self.bucket.?.tx;
+        if (self.spilled) {
+            return nil;
+        }
+
+        // Spill child nodes first. Child nodes can materialize sibling nodes in
+        // the case of split-merge so we cannot use a range loop. We have to check
+        // the children size on every loop iteration.
+        std.mem.sort(
+            *Node,
+            self.children.items,
+            {},
+            std.mem.lessThan,
+        );
+
+        // Split nodes into approprivate sizes, The first node will always be n.
+        var nodes = self.split(tx.?.db.pageSize);
+        defer self.allocator.free(nodes);
+
+        for (nodes) |node| {
+            // Add node's page to the freelist if it's not new.
+            if (node.pgid > 0) {
+                tx.?.db.freelist.free(tx.?.meta.txid, tx.?.getPage(node.pgid)) catch unreachable;
+                node.pgid = 0;
+            }
+
+            // Allocate contiguous space for the node.
+            const p = tx.?.allocate();
+        }
     }
 
     /// Attempts to combine the node with sibling nodes if the node fill
@@ -468,6 +607,13 @@ test "node" {
     //_ = node.numChildren();
     _ = node.nextSlibling();
     _ = node.preSlibling();
+
+    const pageSlice = try std.testing.allocator.alloc(u8, page.page_size);
+    defer std.testing.allocator.free(pageSlice);
+    // const pagePtr = page.Page.init(pageSlice);
+    // @memset(pageSlice, 0);
+    //node.read(pagePtr);
+    // node.write(pagePtr);
     //  var oldKey = [_]u8{0};
     //  var newKey = [_]u8{0};
     //   var value = [_]u8{ 1, 2, 3 };

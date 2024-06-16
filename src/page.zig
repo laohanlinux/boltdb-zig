@@ -1,7 +1,7 @@
 const std = @import("std");
 const db = @import("./db.zig");
 
-const min_keys_page: usize = 2;
+pub const min_keys_page: usize = 2;
 
 pub const branchPageElementSize = BranchPageElement.headerSize();
 pub const leafPageElementSize = LeafPageElement.headerSize();
@@ -139,7 +139,7 @@ pub const Page = struct {
     pub fn getDataSlice(self: *Self) []u8 {
         const ptr = self.getDataPtrInt();
         const slice: [*]u8 = @ptrFromInt(ptr);
-        return slice[0..];
+        return slice[0..(page_size - Self.headerSize())];
     }
 };
 
