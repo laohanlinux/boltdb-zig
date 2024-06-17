@@ -17,4 +17,6 @@ pub const Error = error{
     KeyTooLarge,
     ValueTooLarge,
     IncompactibleValue,
+
+    MMapTooLarge,
 };

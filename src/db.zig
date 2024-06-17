@@ -4,6 +4,7 @@ const tx = @import("./tx.zig");
 const errors = @import("./error.zig");
 const bucket = @import("./bucket.zig");
 const freelist = @import("./freelist.zig");
+const util = @import("./util.zig");
 
 const Page = page.Page;
 
@@ -13,7 +14,7 @@ const Magic = 0xED0CDAED;
 const Version = 1;
 
 // The largest step that can be taken when remapping the mmap.
-const MaxMMapStep = 1 << 30; // 1 GB
+const MaxMMapStep: u64 = 1 << 30; // 1 GB
 
 // TODO
 const IgnoreNoSync = false;
@@ -78,18 +79,23 @@ pub const DB = struct {
     // of truncate() and fsync() when growing the data file.
     allocSize: usize,
 
-    path: []const u8,
+    _path: []const u8,
     file: std.fs.File,
     filesz: usize,
     //lockFile: std.fs.File,
-    dataRef: []u8, // mmap'ed readonly, write throws SEGV
-    data: *[MaxMMapStep]u8,
+    dataRef: ?[]u8, // mmap'ed readonly, write throws SEGV
+    data: ?*[MaxMMapStep]u8,
     datasz: usize,
 
     rwtx: ?*tx.TX,
     txs: std.ArrayList(*tx.TX),
     freelist: *freelist.FreeList,
     stats: Stats,
+
+    rwlock: std.Thread.Mutex, // Allows only one writer a a time.
+    metalock: std.Thread.Mutex, // Protects meta page access.
+    mmaplock: std.Thread.RwLock, // Protects mmap access during remapping.
+    statlock: std.Thread.RwLock, // Protects stats access.
 
     // Read only mode.
     // When true, Update() and Begin(true) return Error.DatabaseReadOnly.
@@ -102,10 +108,99 @@ pub const DB = struct {
 
     const Self = @This();
 
+    /// Return the path to currently open database file.
+    pub fn path(self: *const Self) []const u8 {
+        return self._path;
+    }
+
+    /// Opens the underlying memory-mapped file and initializes the meta references.
+    /// minsz is the minimum size that the new mmap can be.
+    pub fn mmap(self: *Self, minsz: usize) !void {
+        self.mmaplock.lock();
+        defer self.mmaplock.unlock();
+
+        const fileInfo = try self.file.metadata();
+        // ensure the size is at least the minmum size.
+        var size = usize(fileInfo.size());
+        if (size < minsz) {
+            size = minsz;
+        }
+
+        size = try self.mmapSize(size);
+
+        // Dereference call mmap references before unmmapping.
+        if (self.rwtx) |_rwtx| {
+            _rwtx.root.dereference();
+        }
+
+        // Unmap existing data before continuing.
+        if (self.dataRef) |ref| {
+            util.munmap(ref);
+            self.dataRef = null;
+            self.data = null;
+            self.datasz = 0;
+        }
+        // Memory-map the data file as a byte slice.
+        try util.mmap(self.file, size, true);
+
+        // Save references to the meta pages.
+        self.meta0 = self.pageById(0).meta();
+        self.meta1 = self.pageById(1).meta();
+
+        // Validate the meta pages. We only return an error if both meta pages fail
+        // validation, since meta0 failing validation means that it wasn't saved
+        // properly -- but we can recover using meta1. And voice-versa.
+        (self.meta0.validate()) catch |err0| {
+            self.meta1.validate() catch {
+                return err0;
+            };
+        };
+    }
+
+    /// Determines the appropriate size for the mmap given the current size
+    /// of the database. The minmum size is 32KB and doubles until it reaches 1GB.
+    /// Returns an error if the new mmap size is greater than the max allowed.
+    fn mmapSize(_: *const Self, size: usize) !usize {
+        // Double the size from 32KB until 1GB
+        for (15..30) |i| {
+            if (size <= (1 << i)) {
+                return 1 << i;
+            }
+        }
+
+        const _maxMapSize = util.maxMapSize();
+
+        // Verify the requested size is not above the maximum allowed.
+        if (size > _maxMapSize) {
+            return errors.Error.MMapTooLarge;
+        }
+
+        // If large than 1GB then grow by 1GB at a time.
+        var sz = @as(u64, size);
+        if (sz > MaxMMapStep) {
+            sz += (MaxMMapStep - sz % MaxMMapStep);
+        }
+
+        // If we've exeeded the max size then only grow up to the max size.
+        if (sz > @as(u64, _maxMapSize)) {
+            sz = @as(u64, _maxMapSize);
+        }
+
+        return @as(usize, sz);
+    }
+
+    /// Retrieves ongoing performance stats for the database.
+    /// This is only updated when a transaction closes.
+    pub fn stats(self: *const Self) Stats {
+        self.statlock.lockShared();
+        defer self.statlock.unlockShared();
+        return self.stats;
+    }
+
     /// Retrives a page reference from the mmap based on the current page size.
     pub fn pageById(self: *Self, id: page.PgidType) *Page {
         const pos: u64 = id * @as(u64, self.pageSize);
-        const buf = self.data[pos..self.pageSize];
+        const buf = self.data.?[pos..self.pageSize];
         return Page.init(buf);
     }
 
@@ -146,7 +241,7 @@ pub const DB = struct {
         @panic("bolt.db.meta(): invalid meta pages");
     }
 
-    pub fn allocate(self: *Self, count: usize) !*Page {
+    pub fn allocatePage(self: *Self, count: usize) !*Page {
         // TODO Allocate a tempory buffer for the page.
         const buf = try self.allocate.alloc(u8, count * self.pageSize);
         const p = Page.init(buf);
@@ -189,7 +284,6 @@ pub const DB = struct {
         // Truncate and fsync to ensure file size metadata is flushed.
         // https://github.com/boltdb/bolt/issues/284
         if (!self.noGrowSync and !self.readOnly) {
-            const util = @import("./util.zig");
             if (util.isLinux()) {
                 _ = std.os.linux.fsync(self.file.handle);
             }
@@ -280,20 +374,20 @@ pub const Info = packed struct {
 };
 
 pub const Meta = packed struct {
-    magic: u32,
-    version: u32,
-    page_size: u32,
-    flags: u32,
-    root: bucket._Bucket,
-    free_list: page.PgidType,
-    pgid: page.PgidType,
-    txid: tx.TxId,
-    check_sum: u64,
+    magic: u32 = 0,
+    version: u32 = 0,
+    page_size: u32 = 0,
+    flags: u32 = 0,
+    root: bucket._Bucket = bucket._Bucket{ .root = 0, .sequence = 0 },
+    free_list: page.PgidType = 0,
+    pgid: page.PgidType = 0,
+    txid: tx.TxId = 0,
+    check_sum: u64 = 0,
 
     const Self = @This();
     pub const header_size = @sizeOf(Meta);
 
-    pub fn validate(self: *Self) errors.Error!void {
+    pub fn validate(self: *const Self) errors.Error!void {
         if (self.magic != Magic) {
             return errors.Error.Invalid;
         } else if (self.version != Version) {
@@ -305,11 +399,12 @@ pub const Meta = packed struct {
         return;
     }
 
-    pub fn sum64(self: *Self) u64 {
-        const ptr: *Meta = @fieldParentPtr("check_sum", self);
-        const slice: [ptr - self]u8 = @ptrFromInt(ptr);
-        const crc32 = std.hash.Crc32.hash(slice);
-        return @as(crc32, u64);
+    pub fn sum64(_: *const Self) u64 {
+        // const ptr: *Meta = @fieldParentPtr("check_sum", self);
+        // const slice: [ptr - self]u8 = @ptrFromInt(ptr);
+        // const crc32 = std.hash.Crc32.hash(slice);
+        // return @as(crc32, u64);
+        return 0;
     }
 
     // Writes the meta onto a page.
@@ -334,4 +429,7 @@ pub const Meta = packed struct {
 test "meta" {
     const stats = Info{ .data = 10, .page_size = 20 };
     std.debug.print("{}\n", .{stats});
+
+    const meta = Meta{};
+    std.debug.print("{}\n", .{meta});
 }

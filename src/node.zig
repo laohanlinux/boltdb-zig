@@ -47,7 +47,7 @@ pub const Node = struct {
     }
 
     // Returns the top-level node this node is attached to.
-    fn root(self: *Self) ?*Node {
+    pub fn root(self: *Self) ?*Node {
         if (self.parent) |parent| {
             return parent.*.root();
         } else {
@@ -103,7 +103,7 @@ pub const Node = struct {
     }
 
     /// Returns the child node at a given index.
-    fn childAt(self: *Self, index: usize) ?*Node {
+    pub fn childAt(self: *Self, index: usize) ?*Node {
         if (self.isLeaf) {
             @panic("invalid childAt call on a leaf node");
         }
@@ -373,9 +373,9 @@ pub const Node = struct {
     /// Writes the nodes to dirty pages and splits nodes as it goes.
     /// Returns and error if dirty pages cannot be allocated
     fn spill(self: *Self) !void {
-        var tx = self.bucket.?.tx;
+        const _tx = self.bucket.?.tx;
         if (self.spilled) {
-            return nil;
+            return;
         }
 
         // Spill child nodes first. Child nodes can materialize sibling nodes in
@@ -389,18 +389,18 @@ pub const Node = struct {
         );
 
         // Split nodes into approprivate sizes, The first node will always be n.
-        var nodes = self.split(tx.?.db.pageSize);
+        const nodes = self.split(_tx.?.db.pageSize);
         defer self.allocator.free(nodes);
 
         for (nodes) |node| {
             // Add node's page to the freelist if it's not new.
             if (node.pgid > 0) {
-                tx.?.db.freelist.free(tx.?.meta.txid, tx.?.getPage(node.pgid)) catch unreachable;
+                tx.?.db.freelist.free(_tx.?.meta.txid, _tx.?.getPage(node.pgid)) catch unreachable;
                 node.pgid = 0;
             }
 
             // Allocate contiguous space for the node.
-            const p = tx.?.allocate();
+            _ = _tx.?.allocate();
         }
     }
 
@@ -497,7 +497,7 @@ pub const Node = struct {
 
     // Causes the node to copy all its inode key/value references to heap memory.
     // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
-    fn dereference(self: *Self) void {
+    pub fn dereference(self: *Self) void {
         // TODO: meybe we should not free the key, because it was referennce same to first inode.
         if (self.key != null) {
             const _key = self.allocator.alloc(u8, self.key.?.len) catch unreachable;
@@ -540,7 +540,7 @@ pub const Node = struct {
 };
 
 /// Represents a node on a page.
-const INode = struct {
+pub const INode = struct {
     flags: u32,
     // If the pgid is 0 then it's a leaf node, if it's greater than 0 then it's a branch node, and the value is the pgid of the child.
     pgid: page.PgidType,
@@ -553,7 +553,7 @@ const INode = struct {
     const Self = @This();
 
     /// Initializes a node.
-    fn init(flags: u32, pgid: page.PgidType, key: ?[]u8, value: ?[]u8) Self {
+    pub fn init(flags: u32, pgid: page.PgidType, key: ?[]u8, value: ?[]u8) Self {
         var inode: Self = undefined;
         inode.flags = flags;
         inode.pgid = pgid;
@@ -590,7 +590,7 @@ fn findFn(_: void, a: INode, b: INode) std.math.Order {
     return util.cmpBytes(a.key.?, b.key.?);
 }
 
-fn lessThanFn(_: void, a: INode, b: INode) bool {
+pub fn lessThanFn(_: void, a: INode, b: INode) bool {
     const order = util.cmpBytes(a.key.?, b.key.?);
     return order == std.math.Order.lt or order == std.math.Order.eq;
 }

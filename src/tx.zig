@@ -10,20 +10,62 @@ pub const TxId = u64;
 pub const TX = struct {
     writable: bool,
     managed: bool,
-    db: *db.DB,
+    db: ?*db.DB,
     meta: *db.Meta,
+    pages: std.AutoHashMap(page.PgidType, *page.Page),
 
     stats: TxStats,
 
     root: bucket.Bucket,
+
     const Self = @This();
-    pub fn getPage(_: *Self, _: page.PgidType) page.Page {
-        unreachable;
+
+    /// Iterates over every page within a given page and executes a function.
+    pub fn forEach(self: *Self, comptime CTX: type, c: CTX, id: page.PgidType, depth: usize, f: fn (c: CTX, *page.Page, usize) void) void {
+        const p = self.getPage(id);
+        // Execute function
+        f(c, p, depth);
+        // recursively loop over children
+        if (p.flags & page.intFromFlags(page.PageFlage.branch) != 0) {
+            for (0..p.count) |i| {
+                const elem = p.branchPageElementPtr(i);
+                self.forEach(CTX, c, elem.pgid, depth + 1, f);
+            }
+        }
     }
 
+    /// Returns a reference to the page with a given id.
+    /// If page has been written to then a temporary buffered page is returned.
+    pub fn getPage(self: *Self, id: page.PgidType) *page.Page {
+        // Check the dirty pages first.
+        if (self.pages.get(id)) |p| {
+            return p;
+        }
+        // Otherwise return directly form the mmap.
+        return self.db.?.pageById(id);
+    }
 
-    pub fn allocate(self: *Self, count usize) !*page.Page {
-        const p = self.db.allocate(count);
+    pub fn getID(self: *const Self) u64 {
+        self.meta.txid;
+    }
+
+    pub fn getDB(self: *Self) *db.DB {
+        return self.db;
+    }
+
+    /// Returns current database size in bytes as seen by this transaction.
+    pub fn size(self: *const Self) usize {
+        self.db.pageSize * @as(usize, self.meta.txid);
+    }
+
+    pub fn writable(self: *const Self) bool {
+        return self.writable;
+    }
+
+    pub fn allocate(self: *Self, count: usize) !*page.Page {
+        const p = self.db.allocatePage(count);
+
+        return p;
     }
 };
 
@@ -89,3 +131,13 @@ pub const TxStats = packed struct {
         };
     }
 };
+
+fn tEach(_: void, _: *page.Page, depth: usize) void {
+    std.debug.print("Hello Word: {}\n", .{depth});
+}
+
+test "forEach" {
+    const tx = std.testing.allocator.create(TX) catch unreachable;
+    defer std.testing.allocator.destroy(tx);
+    tx.forEach(void, {}, 1, 100, tEach);
+}

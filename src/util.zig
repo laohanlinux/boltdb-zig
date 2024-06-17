@@ -63,3 +63,22 @@ pub inline fn isMacOS() bool {
     const tag = @import("builtin").os.tag;
     return tag.isDarwin();
 }
+
+/// TODO check platform
+pub inline fn maxMapSize() usize {
+    return 1 << 32;
+}
+
+pub fn mmap(fp: std.fs.File, fileSize: u64, writeable: bool) ![]u8 {
+    var port: u32 = std.posix.PROT.READ;
+    if (writeable) {
+        port |= std.posix.PROT.WRITE;
+    }
+
+    const ptr = try std.posix.mmap(null, fileSize, port, .{ .TYPE = .SHARED }, fp.handle, 0);
+    return ptr;
+}
+
+pub fn munmap(ptr: []u8) void {
+    std.posix.munmap(ptr);
+}
