@@ -3,6 +3,8 @@ const tx = @import("./tx.zig");
 const std = @import("std");
 const Node = @import("./node.zig").Node;
 const assert = @import("util.zig").assert;
+const Tuple = @import("./consts.zig").Tuple;
+const Tuple2 = Tuple.t2(?*page.Page, *Node);
 
 // DefaultFilterPersent is the percentage that split pages are filled.
 // This value can be changed by setting Bucket.FillPercent.
@@ -54,23 +56,23 @@ pub const Bucket = struct {
         }
     }
 
-    pub fn pageNode(self: *Self, id: page.PgidType) std.meta.Tuple(&.{ ?*page.Page, ?*Node }) {
+    pub fn pageNode(self: *Self, id: page.PgidType) Tuple2 {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b.root == 0) {
             assert(id != 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
-                return .{ null, rNode };
+                return Tuple2{ .first = null, .second = rNode };
             }
-            return .{ self.page, null };
+            return Tuple2{ .first = self.page, .second = null };
         }
 
         // Check the node cache for non-inline buckets.
         if (self.nodes.get(id)) |cacheNode| {
-            return .{ null, cacheNode };
+            return Tuple2{ .first = null, .second = cacheNode };
         }
         // Finally lookup the page from the transaction if no node is materialized.
-        return .{ self.tx.?.getPage(id), null };
+        return Tuple2{ .first = self.tx.?.getPage(id), .second = null };
     }
 
     // Creates a node from a page and associates it with a given parent.

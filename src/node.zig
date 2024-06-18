@@ -586,7 +586,7 @@ fn sortFn(_: void, a: *INode, b: *INode) bool {
     return order == std.math.Order.lt or order == std.math.Order.eq;
 }
 
-fn findFn(_: void, a: INode, b: INode) std.math.Order {
+pub fn findFn(_: void, a: INode, b: INode) std.math.Order {
     return util.cmpBytes(a.key.?, b.key.?);
 }
 

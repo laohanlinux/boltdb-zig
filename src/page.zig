@@ -173,7 +173,6 @@ pub const LeafPageElement = packed struct {
     vSize: u32,
 
     const Self = @This();
-    // pub const headerSize = @sizeOf(LeafPageElement);
 
     pub inline fn headerSize() usize {
         return @sizeOf(Self);
