@@ -9,6 +9,7 @@ const util = @import("./util.zig");
 const assert = util.assert;
 const consts = @import("./consts.zig");
 const Tuple = consts.Tuple;
+const KeyValueRet = consts.Tuple.t3(?[]u8, ?[]u8, u32);
 
 /// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
 /// Cursors see nested buckets with value == nil.
@@ -52,10 +53,61 @@ pub const Cursor = struct {
         }
     }
 
-    // Search recursively performs a binary search against a given page/node until it finds a given key.
+    /// Moves to the next leaf element and returns the key and value.
+    /// If the cursor is at the last leaf element then it stays there and return null.
+    pub fn next(self: *Self) KeyValueRet {
+        while (true) {
+            // Attempt to move over one element until we're successful.
+            // Move up the stack as we hit the end of each page in our stack.
+            var i: usize = self.stack.items.len;
+            while (i > 0) : (i -= 1) {
+                const index = i - 1;
+                const elem = &self.stack.items[index];
+                if (elem.index < elem.count() - 1) {
+                    elem.index -= 1;
+                    break;
+                }
+            }
+
+            // If we've hit the root page then stop and return. This will leave the
+            // cursor on the last element of the past page.
+            if (i == 0) {
+                return KeyValueRet{ .first = null, .second = null, .third = 0 };
+            }
+
+            // Otherwise start from where we left off in the stack and find the
+            // first element of the first leaf page.
+            self.stack.resize(i) catch unreachable; // TODO
+            _ = self.first();
+
+            // If this is an empty page then restart and move back up the stack.
+            if (self.stack.getLast().count() == 0) {
+                continue;
+            }
+
+            return self.keyValue();
+        }
+    }
+
+    /// Search recursively performs a binary search against a given page/node until it finds a given key.
     pub fn search(self: *Self, key: []u8, pgid: page.PgidType) void {
         const p: ?*page.Page, const n: ?*Node = self._bucket.?.pageNode(pgid);
-        assert(p != null and p.?.flags & page.intFromFlags(), , )
+        assert(p != null and p.?.flags & (page.intFromFlags(page.PageFlage.branch) | page.intFromFlags(page.PageFlage.branch)) != 0, "invalid page type: {d}: {x}", .{ p.?.id, p.?.flags });
+        const e = ElementRef{ .p = p, .node = n };
+        self.stack.append(e) catch unreachable;
+
+        // If we're on a leaf page/node then find the specific node.
+        if (e.isLeaf()) {
+            self.nsearch(key);
+            return;
+        }
+
+        if (n) |_node| {
+            self.searchNode(key, _node);
+            return;
+        }
+
+        self.searchPage(key, p);
     }
 
     fn searchNode(self: *Self, key: []u8, n: *const Node) void {
@@ -97,22 +149,21 @@ pub const Cursor = struct {
         e.index = index;
     }
 
-    fn keyValue(self: *Self) Tuple.t3(?[]u8, ?[]u8, u32) {
+    fn keyValue(self: *Self) KeyValueRet(?[]u8, ?[]u8, u32) {
         const ref = self.stack.getLast();
-        const tuple = Tuple.t3(?[]u8, ?[]u8, u32);
         if (ref.count() == 0 or ref.index >= ref.count()) {
-            return tuple{ .first = null, .second = null, .third = 0 };
+            return KeyValueRet{ .first = null, .second = null, .third = 0 };
         }
 
         // Retrieve value from node.
         if (ref.node) |refNode| {
             const inode = refNode.inodes.items[ref.index];
-            return tuple{ .first = inode.key, .second = inode.value, .third = inode.flags };
+            return KeyValueRet{ .first = inode.key, .second = inode.value, .third = inode.flags };
         }
 
         // Or retrieve value from page.
         const elem = ref.p.?.leafPageElement(ref.index);
-        return tuple{ .first = elem.?.key(), .second = elem.?.value(), .third = elem.?.flags };
+        return KeyValueRet{ .first = elem.?.key(), .second = elem.?.value(), .third = elem.?.flags };
     }
 
     /// Returns the node that the cursor is currently positioned on.
