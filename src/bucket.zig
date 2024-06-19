@@ -56,11 +56,13 @@ pub const Bucket = struct {
         }
     }
 
+    /// Returns the in-memory node, if it exists.
     pub fn pageNode(self: *Self, id: page.PgidType) Tuple2 {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b.root == 0) {
-            assert(id != 0, "inline bucket non-zero page access(2): {} != 0", .{id});
+            std.log.info("this is a inline bucket, embed at page({})", .{id});
+            assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
                 return Tuple2{ .first = null, .second = rNode };
             }

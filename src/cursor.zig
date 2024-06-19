@@ -9,7 +9,9 @@ const util = @import("./util.zig");
 const assert = util.assert;
 const consts = @import("./consts.zig");
 const Tuple = consts.Tuple;
+const KeyPair = consts.KeyPair;
 const KeyValueRet = consts.Tuple.t3(?[]u8, ?[]u8, u32);
+const Error = @import("./error.zig").Error;
 
 /// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
 /// Cursors see nested buckets with value == nil.
@@ -21,41 +23,213 @@ const KeyValueRet = consts.Tuple.t3(?[]u8, ?[]u8, u32);
 /// and return unexpected keys and/or values. You must reposition your cursor
 /// after mutating data.
 pub const Cursor = struct {
-    _bucket: ?*Bucket,
+    _bucket: *Bucket,
     stack: std.ArrayList(ElementRef),
 
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, bucket: *Bucket) Self {
-        return Cursor{ ._bucket = bucket, .stack = std.ArrayList(ElementRef).init(allocator), .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator, _bt: *Bucket) Self {
+        return Cursor{ ._bucket = _bt, .stack = std.ArrayList(ElementRef).init(allocator), .allocator = allocator };
     }
 
     pub fn deinit(self: *Self) void {
         self.stack.deinit();
     }
 
-    /// First moves the cursor to the first item in the bucket and returns its key and value.
-    /// If the bucket is empty then a nil key and value are returned.
-    /// The returned key and value are only valid for the life of the transaction.
-    pub fn first(self: *Self) ?[2][]u8 {
-        assert(self._bucket.?.tx.?.db != null, "tx closed", .{});
-        self.stack.resize(0) catch unreachable;
-        const pacheCache = self._bucket.?.pageNode();
-        try self.stack.append(ElementRef{ .p = pacheCache[0], .node = pacheCache[1] });
-        self._first();
+    /// Returns the bucket that this cursor was created from.
+    pub fn bucket(self: *Self) *Bucket {
+        return self._bucket;
+    }
 
-        // If we land on an empty page then move th the next value.
+    /// Moves the cursor to the first item in the bucket and returns its key and value.
+    /// If the bucket is empty then a nil key and value are returned.
+    /// The returned key and value are only valid for the life of the transaction
+    pub fn first(self: *Self) KeyPair {
+        assert(self._bucket.tx.?.db != null, "tx closed", .{});
+        self.stack.resize(0) catch unreachable;
+        const pNode = self._bucket.pageNode(self._bucket._b.root);
+        const ref = ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 };
+        self.stack.append(ref) catch unreachable;
+        self.first();
+        // If we land on an empty page then move to the next value.
         // https://github.com/boltdb/bolt/issues/450
         if (self.stack.getLast().count() == 0) {
-            self.next();
+            _ = self._next();
+        }
+        const keyValueRet = self.keyValue();
+        // Return an error if current value is a bucket.
+        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+            return [2]?[]u8{ keyValueRet.first, null };
+        }
+    }
+
+    /// Moves the cursor to the last item in the bucket and returns its key and value.
+    /// If the bucket is empty then a nil key and value are returned.
+    pub fn last(self: *Self) [2]?[]u8 {
+        assert(self._bucket.tx.?.db == null, "tx closed", .{});
+        self.stack.resize(0) catch unreachable;
+        const pNode = self._bucket.?.pageNode(self._bucket.?._b.root);
+        var ref = ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 };
+        ref.index = ref.count() - 1;
+        self.stack.append(ref) catch unreachable;
+        self._last();
+        const keyValueRet = self.keyValue();
+        // Return an error if current value is a bucket.
+        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+            return [2]?[]u8{ keyValueRet.first, null };
+        }
+        return [2]?[]u8{ keyValueRet.first, keyValueRet.second };
+    }
+
+    /// Moves the cursor to the next item in the bucket and returns its key and value.
+    /// If the cursor is at the end of the bucket then a nil key and value are returned.
+    /// The returned key and value are only valid for the life of the transaction.
+    pub fn next(
+        self: *Self,
+    ) [2]?[]u8 {
+        assert(self._bucket.tx.?.db == null, "tx closed", .{});
+        const keyValueRet = self._next();
+        // Return an error if current value is a bucket.
+        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+            return [2]?[]u8{ keyValueRet.first, null };
+        }
+        return [2]?[]u8{ keyValueRet.first, keyValueRet.second };
+    }
+
+    /// Moves the cursor to the previous item in the bucket and returns its key and value.
+    /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
+    /// The returned key and value are only valid for the life of the transaction.
+    pub fn prev(self: *Self) [2]?[]u8 {
+        assert(self._bucket.?.tx.?.db != null, "tx closed", .{});
+        // Attempt to move back one element until we're successful.
+        // Move up the stack as we hit the beginning of each page in our stack.
+        var i: isize = self.stack.items.len - 1;
+        while (i >= 0) : (i -= 1) {
+            const index = @as(usize, i);
+            const elem = &self.stack.items[index];
+            if (elem.index > 0) {
+                elem.index -= 1;
+                break;
+            }
+            self.stack.resize(index);
+        }
+
+        // If we've hit the end then return nil.
+        if (self.stack.items.len == 0) {
+            return [2]?[]u8{ null, null };
+        }
+        // Move down the stack to find the last element of the last leaf under this branch.
+        self._last();
+
+        const keyValueRet = self.keyValue();
+        // Return an error if current value is a bucket.
+        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+            return [2]?[]u8{ keyValueRet.first, null };
+        }
+        return [2]?[]u8{ keyValueRet.first, keyValueRet.second };
+    }
+
+    /// Moves the cursor to a given key and returns it.
+    /// If the key does not exist then the next key is used. If no keys
+    /// follow, a nil key is returned.
+    /// The returned key and value are only valid for the life of the transaction.
+    pub fn seek(self: *Self, seekKey: []u8) [2]?[]u8 {
+        var keyValueRet = self._seek(seekKey);
+        // If we ended up after the last element of a page then move to the next one.
+        const ref = self.stack.getLast();
+        if (ref.index >= ref.count()) {
+            keyValueRet = self._next();
+        }
+        if (keyValueRet.first == null) {
+            return [2]?[]u8{ null, null };
+        } else if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+            return [2]?[]u8{ keyValueRet.first, null };
+        }
+
+        return [2]?[]u8{ keyValueRet.first, keyValueRet.second };
+    }
+
+    pub fn delete(self: *Self) Error!void {
+        if (self._bucket.tx.?.db == null) {
+            return Error.ErrTxClosed;
+        } else if (!self._bucket.tx.?.writable) {
+            return Error.TxNotWriteable;
+        }
+
+        const keyValueRet = self.keyValue();
+        // Return an error if current value is a bucket.
+        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+            return Error.IncompactibleValue;
+        }
+
+        self.getNode().?.del(keyValueRet.first);
+    }
+
+    // Moves the cursor to a given key and returns it.
+    // If the key does not exist then the next key is used.
+    fn _seek(self: *Self, seekKey: []u8) KeyValueRet {
+        assert(self._bucket.tx.?.db != null, "tx closed", .{});
+        // Start from root page/node and traverse to correct page.
+        self.stack.resize(0) catch unreachable;
+        self.search(seekKey, self._bucket.?._b.root);
+        var ref = &self.stack.getLast();
+        // If the cursor is pointing to the end of page/node then return nil.
+        if (ref.index() >= ref.count()) {
+            KeyValueRet{ .first = null, .second = null, .third = 0 };
+        }
+        // If this is a bucket then return a nil value.
+        return self.keyValue();
+    }
+
+    // Moves the cursor to the first leaf element under that last page in the stack.
+    fn _first(self: *Self) void {
+        while (true) {
+            // Exit when we hit a leaf page.
+            const ref = self.stack.getLast();
+            if (ref.isLeaf()) {
+                break;
+            }
+            // Keep adding pages pointing to the first element to the stack.
+            var pgid: page.PgidType = 0;
+            if (ref.node) |node| {
+                pgid = node.pgid;
+            } else {
+                pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
+            }
+
+            const pNode = self._bucket.pageNode(pgid);
+            self.stack.append(ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 }) catch unreachable;
+        }
+    }
+
+    fn _last(self: *Self) void {
+        while (true) {
+            // Exit when we hit a leaf page.
+            const ref = self.stack.getLast();
+            if (ref.isLeaf()) {
+                break;
+            }
+
+            // Keep adding pages pointing to the last element in the stack.
+            var pgid: page.PgidType = 0;
+            if (ref.node) |node| {
+                pgid = node.pgid;
+            } else {
+                pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
+            }
+
+            const pNode = self._bucket.pageNode(pgid);
+            var nextRef = ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 };
+            nextRef.index = nextRef.count() - 1;
+            self.stack.append(nextRef) catch unreachable;
         }
     }
 
     /// Moves to the next leaf element and returns the key and value.
     /// If the cursor is at the last leaf element then it stays there and return null.
-    pub fn next(self: *Self) KeyValueRet {
+    pub fn _next(self: *Self) KeyValueRet {
         while (true) {
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
@@ -91,7 +265,7 @@ pub const Cursor = struct {
 
     /// Search recursively performs a binary search against a given page/node until it finds a given key.
     pub fn search(self: *Self, key: []u8, pgid: page.PgidType) void {
-        const p: ?*page.Page, const n: ?*Node = self._bucket.?.pageNode(pgid);
+        const p: ?*page.Page, const n: ?*Node = self._bucket.pageNode(pgid);
         assert(p != null and p.?.flags & (page.intFromFlags(page.PageFlage.branch) | page.intFromFlags(page.PageFlage.branch)) != 0, "invalid page type: {d}: {x}", .{ p.?.id, p.?.flags });
         const e = ElementRef{ .p = p, .node = n };
         self.stack.append(e) catch unreachable;
@@ -179,7 +353,7 @@ pub const Cursor = struct {
         // Start from root and traverse down the lierarchy.
         var n = self.stack.items[0].node;
         if (n == null) {
-            n = self._bucket.?.node(self.stack.items[0].p.?.id, null);
+            n = self._bucket.node(self.stack.items[0].p.?.id, null);
         }
 
         for (self.stack.items[0..(self.stack.items.len - 1)]) |ref| {
@@ -247,3 +421,5 @@ pub fn lessThanLeafElementFn(findKey: []u8, a: page.LeafPageElement, b: page.Lea
     const order = util.cmpBytes(aKey, bKey);
     return order == std.math.Order.lt or order == std.math.Order.eq;
 }
+
+test "cursor" {}

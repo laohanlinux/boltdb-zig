@@ -15,3 +15,12 @@ pub const Tuple = struct {
         };
     }
 };
+
+pub const KeyPair = struct {
+    key: ?[]u8,
+    value: ?[]u8,
+
+    pub fn init(_key: ?[]u8, _value: ?[]u8) KeyPair {
+        return KeyPair{ .key = _key, .value = _value };
+    }
+};
