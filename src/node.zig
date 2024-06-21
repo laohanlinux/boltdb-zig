@@ -12,7 +12,7 @@ pub const Node = struct {
     unbalance: bool,
     spilled: bool,
     key: ?[]u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
-    pgid: page.PgidType,
+    pgid: page.PgidType, // The node's page id
     parent: ?*Node, // At memory
     children: Nodes, // the is a soft reference to the children of the node, so the children should not be free.
     // The inodes for this node. If the node is a leaf, the inodes are key/value pairs.
@@ -592,7 +592,7 @@ pub fn findFn(_: void, a: INode, b: INode) std.math.Order {
 
 pub fn lessThanFn(_: void, a: INode, b: INode) bool {
     const order = util.cmpBytes(a.key.?, b.key.?);
-    return order == std.math.Order.lt or order == std.math.Order.eq;
+    return order == std.math.Order.lt;
 }
 
 test "node" {
