@@ -20,6 +20,17 @@ pub const TX = struct {
 
     const Self = @This();
 
+    pub fn init(_db: *db.DB) *Self {
+        var self = _db.allocate.create(Self) catch unreachable;
+        self.db = _db;
+        self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(_db.allocate);
+
+        // Copy the meta page since it can be changed by the writer.
+        self.meta = _db.allocate.create(db.Meta) catch unreachable;
+
+        return self;
+    }
+
     /// Iterates over every page within a given page and executes a function.
     pub fn forEach(self: *Self, comptime CTX: type, c: CTX, id: page.PgidType, depth: usize, f: fn (c: CTX, *page.Page, usize) void) void {
         const p = self.getPage(id);

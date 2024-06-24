@@ -541,15 +541,15 @@ pub const Node = struct {
 
 /// Represents a node on a page.
 pub const INode = struct {
-    flags: u32,
+    flags: u32 = 0,
     // If the pgid is 0 then it's a leaf node, if it's greater than 0 then it's a branch node, and the value is the pgid of the child.
-    pgid: page.PgidType,
+    pgid: page.PgidType = 0,
     // The key is the first key in the inodes. the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
     // so the key should not be free. it will be free when the page is free.
-    key: ?[]u8,
+    key: ?[]u8 = null,
     // If the value is nil then it's a branch node.
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
-    value: ?[]u8,
+    value: ?[]u8 = null,
     const Self = @This();
 
     /// Initializes a node.

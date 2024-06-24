@@ -60,7 +60,7 @@ pub const Cursor = struct {
         }
         const keyValueRet = self.keyValue();
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.third, null);
         }
         return KeyPair.init(keyValueRet.first, keyValueRet.second);
@@ -78,7 +78,7 @@ pub const Cursor = struct {
         self._last();
         const keyValueRet = self.keyValue();
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.third, null);
         }
         return KeyPair.init(keyValueRet.first, keyValueRet.second);
@@ -93,7 +93,7 @@ pub const Cursor = struct {
         assert(self._bucket.tx.?.db == null, "tx closed", .{});
         const keyValueRet = self._next();
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.first, null);
         }
         return KeyPair.init(keyValueRet.first, keyValueRet.second);
@@ -124,7 +124,7 @@ pub const Cursor = struct {
         self._last();
 
         const keyValueRet = self.keyValue();
-        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.first, null);
         }
         return KeyPair.init(keyValueRet.first, keyValueRet.second);
@@ -139,16 +139,19 @@ pub const Cursor = struct {
         // If we ended up after the last element of a page then move to the next one.
         const ref = self.stack.getLast();
         if (ref.index >= ref.count()) {
+            // the level page has remove all key?
             keyValueRet = self._next();
         }
         if (keyValueRet.first == null) {
             return KeyPair.init(null, null);
-        } else if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+        } else if (keyValueRet.third & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.first, null);
         }
         return KeyPair.init(keyValueRet.first, keyValueRet.second);
     }
 
+    /// Removes the current key/value under the cursor from the bucket.
+    /// Delete fails if current key/value is a bucket or if the transaction is not writable.
     pub fn delete(self: *Self) Error!void {
         if (self._bucket.tx.?.db == null) {
             return Error.ErrTxClosed;
@@ -158,7 +161,7 @@ pub const Cursor = struct {
 
         const keyValueRet = self.keyValue();
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & page.intFromFlags(page.PageFlage.branch) != 0) {
+        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
             return Error.IncompactibleValue;
         }
 
@@ -174,7 +177,7 @@ pub const Cursor = struct {
         self.search(seekKey, self._bucket.?._b.root);
         var ref = &self.stack.getLast();
         // If the cursor is pointing to the end of page/node then return nil.
-        if (ref.index() >= ref.count()) {
+        if (ref.index >= ref.count()) {
             KeyValueRet{ .first = null, .second = null, .third = 0 };
         }
         // If this is a bucket then return a nil value.
@@ -230,9 +233,9 @@ pub const Cursor = struct {
         while (true) {
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
-            var i: usize = self.stack.items.len - 1;
+            var i: isize = self.stack.items.len - 1;
             while (i >= 0) : (i -= 1) {
-                const elem = &self.stack.items[@as(usize, i)];
+                const elem = &self.stack.items[i];
                 if (elem.index < elem.count() - 1) {
                     elem.index += 1;
                     break;
@@ -270,6 +273,7 @@ pub const Cursor = struct {
 
         // If we're on a leaf page/node then find the specific node.
         if (e.isLeaf()) {
+            // return a equal or greater than key?
             self.nsearch(key);
             return;
         }
@@ -324,6 +328,8 @@ pub const Cursor = struct {
     fn keyValue(self: *Self) KeyValueRet(?[]u8, ?[]u8, u32) {
         const ref = self.stack.getLast();
         if (ref.count() == 0 or ref.index >= ref.count()) {
+            // 1: all key remove of tx, the page's keys are 0,
+            // 2: index == count indicate not found the key.
             return KeyValueRet{ .first = null, .second = null, .third = 0 };
         }
 
