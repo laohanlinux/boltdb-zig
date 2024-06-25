@@ -2,6 +2,7 @@ const std = @import("std");
 const db = @import("./db.zig");
 const bucket = @import("./bucket.zig");
 const page = @import("./page.zig");
+const Cursor = @import("./cursor.zig").Cursor;
 // Represents the internal transaction indentifier.
 pub const TxId = u64;
 
@@ -27,8 +28,32 @@ pub const TX = struct {
 
         // Copy the meta page since it can be changed by the writer.
         self.meta = _db.allocate.create(db.Meta) catch unreachable;
+        _db.getMeta().copy(self.meta);
 
+        // Copy over the root bucket.
+        self.root = bucket.Bucket.init();
+        self.root._b.root = self.meta.root;
+        std.log.info("tx's root bucket {}", .{self.root._b.root});
+
+        // Increment the transaction id and add a page cache for writable transactions.
+        if (self.writable) {
+            self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.db.?.allocate);
+            self.meta.txid += 1;
+        }
         return self;
+    }
+
+    /// Returns the current database size in bytes as seen by this transaction.
+    pub fn size(self: *const Self) u64 {
+        return self.meta.pgid * @as(u64, self.db.?.pageSize);
+    }
+
+    /// Creates a cursor assosicated with the root bucket.
+    /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
+    /// The cursor is only valid as long as the transaction is open.
+    /// Do not use a cursor after the transaction is closed.
+    pub fn cursor(self: *Self) *Cursor {
+        return self.root.cursor();
     }
 
     /// Iterates over every page within a given page and executes a function.

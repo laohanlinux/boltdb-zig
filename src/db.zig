@@ -399,12 +399,18 @@ pub const Meta = packed struct {
         return;
     }
 
-    pub fn sum64(_: *const Self) u64 {
-        // const ptr: *Meta = @fieldParentPtr("check_sum", self);
-        // const slice: [ptr - self]u8 = @ptrFromInt(ptr);
-        // const crc32 = std.hash.Crc32.hash(slice);
-        // return @as(crc32, u64);
-        return 0;
+    pub fn sum64(self: *const Self) u64 {
+        const ptr = @intFromPtr(self);
+        const endPos = ptr + @sizeOf(Self) - @sizeOf(u64);
+        const buf: [*]u8 = @ptrCast(self);
+        const sumBytes = buf[0..][0..endPos];
+        const crc32 = std.hash.Crc32.hash(sumBytes);
+        return @as(crc32, u64);
+    }
+
+    /// Copies one meta object to another
+    pub fn copy(self: *Self, dest: *Self) void {
+        dest.* = self.*;
     }
 
     // Writes the meta onto a page.

@@ -5,6 +5,9 @@ const Node = @import("./node.zig").Node;
 const assert = @import("util.zig").assert;
 const Tuple = @import("./consts.zig").Tuple;
 const Tuple2 = Tuple.t2(?*page.Page, *Node);
+const Cursor = @import("./cursor.zig").Cursor;
+const consts = @import("./consts.zig");
+const util = @import("./util.zig");
 
 // DefaultFilterPersent is the percentage that split pages are filled.
 // This value can be changed by setting Bucket.FillPercent.
@@ -21,19 +24,74 @@ pub const Bucket = struct {
     tx: ?*tx.TX, // the associated transaction
     buckets: std.AutoHashMap([]u8, *Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
-    rootNode: ?*Node, // materialized node for the root page.
-    page: ?*page.Page, // inline page reference
+    rootNode: ?*Node = null, // materialized node for the root page.
+    page: ?*page.Page = null, // inline page reference
 
     // Sets the thredshold for filling nodes when they split. By default,
     // the bucket will fill to 50% but it can be useful to increase this
     // amout if you know that your write workloads are mostly append-only.
     //
     // This is non-presisted across transactions so it must be set in every TX.
-    fillPercent: f64 = 0.50,
+    fillPercent: f64 = DefaultFillPercent,
 
     allocator: std.mem.Allocator,
 
     const Self = @This();
+
+    pub fn init(_tx: *tx.TX) Bucket {
+        var b: Bucket = undefined;
+        b._b = _Bucket{};
+        b.tx = _tx;
+        b.allocator = _tx.db.?.allocate;
+        if (_tx.writable) { // TODO ?
+            b.buckets = std.AutoHashMap([]u8, *Bucket).init(b.allocator);
+            b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
+        }
+        return b;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.buckets.deinit();
+        self.nodes.deinit();
+        self.allocator.free(self.name);
+    }
+
+    /// Create a cursor associated with the bucket.
+    /// The cursor is only valid as long as the transaction is open.
+    /// Do not use a cursor after the transaction is closed.
+    pub fn cursor(self: *Self) *Cursor {
+        // Update transaction statistics.
+        self.tx.?.stats.cursor_count += 1;
+        // Allocate and return a cursor.
+        return Cursor.init(self.allocator, self);
+    }
+
+    /// Retrives a nested bucket by name.
+    /// Returns nil if the bucket does not exits.
+    /// The bucket instance is only valid for the lifetime of the transaction.
+    pub fn getBucket(self: *Self, name: []u8) ?*Bucket {
+        if (self.buckets.get(name)) |_bucket| {
+            return _bucket;
+        }
+
+        // Move cursor to key.
+        const _cursor = self.cursor();
+        const keyPairRef = _cursor._seek(name);
+        if (keyPairRef.key == null) {
+            return null;
+        }
+
+        // Return nil if the key dosn't exist or it is not a bucket.
+        if (std.mem.eql(u8, name, keyPairRef.key.?) or keyPairRef.first & consts.BucketLeafFlag == 0) {
+            return null;
+        }
+
+        std.log.info("get a new bucket: {}, current page: {}", .{ name, self.page.?.id });
+        const child = self.openBucket(keyPairRef.second);
+
+        self.buckets.put(util.cloneBytes(self.allocator, name), child);
+        return child;
+    }
 
     // Recursively frees all pages in the bucket.
     pub fn free(self: *Self) void {
