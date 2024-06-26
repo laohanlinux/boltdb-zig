@@ -8,6 +8,7 @@ const Tuple2 = Tuple.t2(?*page.Page, *Node);
 const Cursor = @import("./cursor.zig").Cursor;
 const consts = @import("./consts.zig");
 const util = @import("./util.zig");
+const Error = @import("./error.zig").Error;
 
 // DefaultFilterPersent is the percentage that split pages are filled.
 // This value can be changed by setting Bucket.FillPercent.
@@ -20,7 +21,7 @@ fn forEachPageNodeInner(_: anytype, _: *page.Page, _: *Node, _: usize) void {}
 
 // Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
-    _b: _Bucket = _Bucket{},
+    _b: ?*_Bucket = null,
     tx: ?*tx.TX, // the associated transaction
     buckets: std.AutoHashMap([]u8, *Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
@@ -38,8 +39,8 @@ pub const Bucket = struct {
 
     const Self = @This();
 
-    pub fn init(_tx: *tx.TX) Bucket {
-        var b: Bucket = undefined;
+    pub fn init(_tx: *tx.TX) *Bucket {
+        const b = _tx.db.?.allocator.create(Self) catch unreachable;
         b._b = _Bucket{};
         b.tx = _tx;
         b.allocator = _tx.db.?.allocate;
@@ -54,6 +55,9 @@ pub const Bucket = struct {
         self.buckets.deinit();
         self.nodes.deinit();
         self.allocator.free(self.name);
+        if (self.tx.?.writable) {
+            self.tx.?.getDB().allocator.destroy(self._b);
+        }
     }
 
     /// Create a cursor associated with the bucket.
@@ -91,6 +95,57 @@ pub const Bucket = struct {
 
         self.buckets.put(util.cloneBytes(self.allocator, name), child);
         return child;
+    }
+
+    /// Helper method that re-interprets a sub-bucket value
+    /// from a parent into a Bucket
+    pub fn openBucket(self: *Self, value: []u8) *Bucket {
+        var child = Bucket.init(self.tx.?);
+        // TODO
+        // If unaligned load/stores are broken on this arch and value is
+        // unaligned simply clone to an aligned byte array.
+
+        // If this is a writable transaction then we need to copy the bucket entry.
+        // Read-Only transactions can point directly at the mmap entry.
+        if (self.tx.?.writable) {
+            self._b = _Bucket.init(util.cloneBytes(self.tx.?.db.?.allocator, value));
+        } else {
+            self._b = _Bucket.init(value);
+        }
+
+        // Save a reference to the inline page if the bucket is inline.
+        if (self._b.root == 0) {
+            child.page = page.Page.init(value); // TODO
+            std.log.info("Save a reference to the inline page if the bucket is inline, the page is {}", .{child.page.?.id});
+        }
+
+        return child;
+    }
+
+    /// Creates a new bucket at the given key and returns the new bucket.
+    /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
+    /// The bucket instance is only valid for the lifetime of the transaction.
+    pub fn createBucket(self: *Self, key: []u8) Error!*Bucket {
+        if (self.tx.?.db == null) {
+            return Error.TxClosed;
+        } else if (!self.tx.?.writable) {
+            return Error.TxNotWriteable;
+        } else if (key.len == 0) {
+            return Error.BucketNameRequired;
+        }
+
+        // Move cursor to correct position.
+        const c = self.cursor();
+        std.log.info("first levels: {}", .{c._bucket._b.?.root});
+        const keyPairRef = c._seek(key);
+
+        // Return an error if there is an existing key.
+        if (keyPairRef.first != null and std.mem.eql(u8, key, keyPairRef.first.?)) {
+            if (keyPairRef.third & consts.BucketLeafFlag != 0) {
+                return Error.BucketExists;
+            }
+            return Error.IncompactibleValue;
+        }
     }
 
     // Recursively frees all pages in the bucket.
@@ -175,4 +230,9 @@ pub const Bucket = struct {
 pub const _Bucket = packed struct {
     root: page.PgidType = 0, // page id of the bucket's root-level page
     sequence: u64 = 0, // montotically incrementing. used by next_sequence().
+
+    pub fn init(slice: []u8) *_Bucket {
+        const ptr: *_Bucket = @ptrCast(@alignCast(slice));
+        return ptr;
+    }
 };

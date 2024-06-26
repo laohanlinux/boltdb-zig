@@ -88,3 +88,14 @@ pub fn mmap(fp: std.fs.File, fileSize: u64, writeable: bool) ![]u8 {
 pub fn munmap(ptr: []u8) void {
     std.posix.munmap(ptr);
 }
+
+test "arm" {
+    const arch = @import("builtin").cpu.arch;
+
+    // if (target == .arm or target == .aarch64) {
+    //     std.debug.print("This is an ARM platform.\n", .{});
+    // } else {
+    //     std.debug.print("This is not an ARM platform.\n", .{});
+    // }
+    std.debug.print("{}\n", .{std.Target.Cpu.Arch.isAARCH64(arch)});
+}
