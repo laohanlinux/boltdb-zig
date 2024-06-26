@@ -22,7 +22,7 @@ pub const TX = struct {
     const Self = @This();
 
     pub fn init(_db: *db.DB) *Self {
-        var self = _db.allocate.create(Self) catch unreachable;
+        var self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
         self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(_db.allocate);
 
@@ -90,7 +90,7 @@ pub const TX = struct {
     }
 
     /// Returns current database size in bytes as seen by this transaction.
-    pub fn size(self: *const Self) usize {
+    pub fn getSize(self: *const Self) usize {
         self.db.pageSize * @as(usize, self.meta.txid);
     }
 

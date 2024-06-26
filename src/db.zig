@@ -104,7 +104,7 @@ pub const DB = struct {
     meta0: *Meta,
     meta1: *Meta,
 
-    allocate: std.mem.Allocator,
+    allocator: std.mem.Allocator,
 
     const Self = @This();
 
@@ -243,7 +243,7 @@ pub const DB = struct {
 
     pub fn allocatePage(self: *Self, count: usize) !*Page {
         // TODO Allocate a tempory buffer for the page.
-        const buf = try self.allocate.alloc(u8, count * self.pageSize);
+        const buf = try self.allocator.alloc(u8, count * self.pageSize);
         const p = Page.init(buf);
         p.overflow = count - 1;
 
