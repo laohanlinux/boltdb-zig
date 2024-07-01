@@ -217,6 +217,63 @@ pub const Bucket = struct {
         return value;
     }
 
+    /// Returns the current integer for the bucket without incrementing it.
+    pub fn sequence(self: *const Self) u64 {
+        return self._b.?.sequence;
+    }
+
+    /// Updates the sequence number for the bucket.
+    pub fn setSequence(self: *Self, v: u64) Error!void {
+        if (self.tx.?.db == null) {
+            return Error.TxClosed;
+        } else if (!self.tx.?.writable) {
+            return Error.TxNotWriteable;
+        }
+
+        // Materialize the root node if it hasn't been already so that the
+        // bucket will be saved during commit.
+        if (self.rootNode == null) {
+            _ = self.node(self._b.?.root, null);
+        }
+
+        // Increment and return the sequence.
+        self._b.?.sequence = v;
+        return null;
+    }
+
+    /// Returns an autoincrementing integer for the bucket.
+    pub fn nextSequence(self: *Self) Error!u64 {
+        if (self.tx.?.db == null) {
+            return Error.TxClosed;
+        } else if (!self.tx.?.writable) {
+            return Error.TxNotWriteable;
+        }
+
+        // Materialize the root node if it hasn't been already so that the
+        // bucket will be saved during commit.
+        if (self.rootNode == null) {
+            _ = self.node(self._b.?.root, null);
+        }
+
+        // Increment and return the sequence
+        self._b.?.sequence += 1;
+        return self._b.?.sequence;
+    }
+
+    /// Executes a function for each key/value pair in a bucket.
+    /// If the provided function returns an error then the iteration is stopped and
+    /// the error is returned to the caller. The provided function must not modify
+    /// the bucket; this will result in undefined behavior.
+    pub fn forEach(self: *Self) Error!void {
+        if (self.tx.?.db == null) {
+            return Error.TxClosed;
+        } else if (!self.tx.?.writable) {
+            return Error.TxNotWriteable;
+        }
+
+        const c = self.cursor();
+    }
+
     fn bucketHeaderSize() usize {
         return @sizeOf(_Bucket);
     }
