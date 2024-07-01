@@ -175,7 +175,7 @@ pub const Cursor = struct {
 
     // Moves the cursor to a given key and returns it.
     // If the key does not exist then the next key is used.
-    fn _seek(self: *Self, seekKey: []u8) KeyValueRet {
+    pub fn _seek(self: *Self, seekKey: []u8) KeyValueRet {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Start from root page/node and traverse to correct page.
         self.stack.resize(0) catch unreachable;
@@ -289,6 +289,27 @@ pub const Cursor = struct {
         }
 
         self.searchPage(key, p);
+    }
+
+    /// Returns the node that then cursor is currently positioned on.
+    pub fn node(self: *Self) ?*Node {
+        assert(self.stack.items.len > 0, "accessing a node with a zero-length cursor stack", .{});
+
+        // If the top of the stack is a leaf node then just return it.
+        const topRef = self.stack.getLast();
+        if (topRef.node != null and topRef.node.?.isLeaf) {
+            return topRef.node;
+        }
+
+        // Start from root and traveerse down the hierarchy.
+        const n = self.stack.items[0].node orelse self._bucket.node(self.stack.items[0].p.?.id, null);
+        for (self.stack.items[0 .. self.stack.items.len - 1]) |ref| {
+            assert(!n.isLeaf, "expected branch node", .{});
+            n = n.childAt(ref.index);
+        }
+
+        assert(n.isLeaf, "expect leaf node", .{});
+        return n;
     }
 
     fn searchNode(self: *Self, key: []u8, n: *const Node) void {

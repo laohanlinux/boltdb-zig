@@ -146,6 +146,79 @@ pub const Bucket = struct {
             }
             return Error.IncompactibleValue;
         }
+
+        // Create empty, inline bucket.
+        const newBucket = Bucket.init(self.tx);
+        newBucket.rootNode = Node.init(self.allocator);
+        newBucket.rootNode.?.isLeaf = true;
+
+        const value = newBucket.write();
+        // Insert into node
+        const cpKey = util.cloneBytes(self.allocator, key);
+        c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
+
+        // Since subbuckets are not allowed on inline buckets, we need to
+        // dereference the inline page, if it exists. This will cause the bucket
+        // to be treated as regular, non-inline bucket for the rest of the tx.
+        // FIXME: why
+        self.page = null;
+
+        return self.getBucket(key);
+    }
+
+    /// Creates a new bucket if it doesn't already exist and returns a reference to it.
+    /// Returns an error if the bucket name is blank, or if the bucket name is too long.
+    /// The bucket instance is only valid for the lifetime of the transaction.
+    pub fn createBucketIfNotExists(self: *Self, key: []u8) Error!*Bucket {
+        const child = self.createBucket(key) catch |err| switch (err) {
+            Error.BucketExists => {
+                return self.getBucket(key);
+            },
+            else => {
+                return err;
+            },
+        };
+        return child;
+    }
+
+    /// Deletes a bucket at the give key.
+    /// Returns an error if the bucket does not exists, or if the key represents a non-bucket value.
+    pub fn deleteBucket(self: *Self, key: []u8) Error!void {
+        if (self.tx.db == null) {
+            return Error.TxClosed;
+        } else if (!self.tx.?.writable) {
+            return Error.TxNotWriteable;
+        }
+
+        // Move cursor to correct position.
+        const c = self.cursor();
+        const keyPairRef = c._seek(key);
+
+        // Returnsively delete all child buckets.
+        const child = self.getBucket(key).?;
+        child.forEach();
+    }
+
+    // Returns the maximum total size of a bucket to make it a candidate for inlining.
+    fn maxInlineBucketSize(self: *const Self) usize {
+        return self.tx.?.getDB().pageSize / 4;
+    }
+
+    // Allocates and writes a bucket to a byte slice.
+    fn write(self: *Self) []u8 {
+        // Allocate the approprivate size.
+        const n = self.rootNode;
+        const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize()) catch unreachable;
+        const _bt = _Bucket.init(value);
+        _bt.* = self._b.?.*;
+        const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
+        n.?.write(p);
+
+        return value;
+    }
+
+    fn bucketHeaderSize() usize {
+        return @sizeOf(_Bucket);
     }
 
     // Recursively frees all pages in the bucket.
