@@ -14,9 +14,6 @@ const Error = @import("./error.zig").Error;
 // This value can be changed by setting Bucket.FillPercent.
 const DefaultFillPercent = 0.5;
 
-pub const minFillPercent: f64 = 0.1;
-pub const maxFillPercent: f64 = 1.0;
-
 fn forEachPageNodeInner(_: anytype, _: *page.Page, _: *Node, _: usize) void {}
 
 // Represents a collection of key/value pairs inside the database.
@@ -272,6 +269,12 @@ pub const Bucket = struct {
         }
 
         const c = self.cursor();
+        var keyPairRef = c.first();
+        while (keyPairRef.key != null) {
+            keyPairRef = c.next();
+        }
+
+        return;
     }
 
     fn bucketHeaderSize() usize {

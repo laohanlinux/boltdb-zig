@@ -3,6 +3,7 @@ const page = @import("./page.zig");
 const bucket = @import("./bucket.zig");
 const tx = @import("./tx.zig");
 const util = @import("./util.zig");
+const consts = @import("./consts.zig");
 const assert = @import("./assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
@@ -306,10 +307,10 @@ pub const Node = struct {
 
         // Determine the threshold before starting a new node.
         var fillPercent = self.bucket.?.fillPercent;
-        if (fillPercent < bucket.minFillPercent) {
-            fillPercent = bucket.minFillPercent;
-        } else if (fillPercent > bucket.maxFillPercent) {
-            fillPercent = bucket.maxFillPercent;
+        if (fillPercent < consts.minFillPercent) {
+            fillPercent = consts.minFillPercent;
+        } else if (fillPercent > consts.maxFillPercent) {
+            fillPercent = consts.maxFillPercent;
         }
 
         const threshold = @as(usize, @intCast(@as(f64, @floatCast(pageSize)) * fillPercent));

@@ -2,6 +2,9 @@ const std = @import("std");
 
 pub const BucketLeafFlag: u32 = 0x01;
 
+pub const minFillPercent: f64 = 0.1;
+pub const maxFillPercent: f64 = 1.0;
+
 pub const Tuple = struct {
     pub fn t2(comptime firstType: type, comptime secondType: type) type {
         return struct {
