@@ -93,6 +93,7 @@ pub const Page = struct {
         return elements[0..self.count];
     }
 
+    /// Returns the pointer of index's branch elements
     pub fn branchPageElementPtr(self: *Self, index: usize) *BranchPageElement {
         if (self.count <= index) {
             return undefined;
@@ -102,7 +103,7 @@ pub const Page = struct {
         return dPtr;
     }
 
-    // Retrives the leaf node by index.
+    /// Retrives the leaf node by index.
     pub fn leafPageElement(self: *Self, index: usize) ?*LeafPageElement {
         if (self.count <= index) {
             return null;

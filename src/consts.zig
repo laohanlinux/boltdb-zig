@@ -5,6 +5,15 @@ pub const BucketLeafFlag: u32 = 0x01;
 pub const minFillPercent: f64 = 0.1;
 pub const maxFillPercent: f64 = 1.0;
 
+/// The maximum length of a key, in bytes
+pub const MaxKeySize: usize = 32768;
+/// The maximum length of a value, in bytes
+pub const MaxValueSize: usize = (1 << 32) - 2;
+
+// The percentage that split pages are filled.
+// This value can be changed by setting Bucket.FillPercent.
+pub const defaultFillPercent = 0.5;
+
 pub const Tuple = struct {
     pub fn t2(comptime firstType: type, comptime secondType: type) type {
         return struct {

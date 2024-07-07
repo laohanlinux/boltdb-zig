@@ -163,7 +163,6 @@ pub const Cursor = struct {
         } else if (!self._bucket.tx.?.writable) {
             return Error.TxNotWriteable;
         }
-
         const keyValueRet = self.keyValue();
         // Return an error if current value is a bucket.
         if (keyValueRet.third & consts.BucketLeafFlag != 0) {
@@ -219,8 +218,8 @@ pub const Cursor = struct {
 
             // Keep adding pages pointing to the last element in the stack.
             var pgid: page.PgidType = 0;
-            if (ref.node) |node| {
-                pgid = node.pgid;
+            if (ref.node) |_node| {
+                pgid = _node.pgid;
             } else {
                 pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
             }

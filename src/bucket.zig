@@ -10,12 +10,6 @@ const consts = @import("./consts.zig");
 const util = @import("./util.zig");
 const Error = @import("./error.zig").Error;
 
-// DefaultFilterPersent is the percentage that split pages are filled.
-// This value can be changed by setting Bucket.FillPercent.
-const DefaultFillPercent = 0.5;
-
-fn forEachPageNodeInner(_: anytype, _: *page.Page, _: *Node, _: usize) void {}
-
 // Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
     _b: ?*_Bucket = null,
@@ -30,7 +24,7 @@ pub const Bucket = struct {
     // amout if you know that your write workloads are mostly append-only.
     //
     // This is non-presisted across transactions so it must be set in every TX.
-    fillPercent: f64 = DefaultFillPercent,
+    fillPercent: f64 = consts.defaultFillPercent,
 
     allocator: std.mem.Allocator,
 
@@ -191,27 +185,100 @@ pub const Bucket = struct {
         const c = self.cursor();
         const keyPairRef = c._seek(key);
 
+        // Return an error if the bucket dosn't exist or is not a bucket.
+        if (!std.mem.eql(u8, key, keyPairRef.first)) {
+            return Error.BucketNotFound;
+        } else if (keyPairRef.third & consts.BucketLeafFlag == 0) {
+            return Error.IncompactibleValue;
+        }
+
         // Returnsively delete all child buckets.
         const child = self.getBucket(key).?;
-        child.forEach();
+        try child.forEach(traveBucket);
+
+        // Remove cached copy.
+        _ = self.buckets.remove(key);
+
+        // Release all bucket pages to the freelist.
+        child.deinit();
+
+        // Delete the node if we have a matching key.
+        c.node().?.del(key);
     }
 
-    // Returns the maximum total size of a bucket to make it a candidate for inlining.
-    fn maxInlineBucketSize(self: *const Self) usize {
-        return self.tx.?.getDB().pageSize / 4;
+    /// Retrives the value for a key in the bucket.
+    /// Return a nil value if the key does not exist or if the key is a nested bucket.
+    /// The returned value is only valid for the life of the transaction.
+    pub fn get(self: *Self, key: []u8) ?[]u8 {
+        const keyPairRef = self.cursor()._seek(key);
+        // Return nil if this is a bucket.
+        if (keyPairRef.third & consts.BucketLeafFlag != 0) {
+            return null;
+        }
+
+        // If our target node isn't the same key as what's passed in then return nil.
+        if (!std.mem.eql(u8, key, keyPairRef.first)) {
+            return null;
+        }
+
+        return keyPairRef.second;
     }
 
-    // Allocates and writes a bucket to a byte slice.
-    fn write(self: *Self) []u8 {
-        // Allocate the approprivate size.
-        const n = self.rootNode;
-        const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize()) catch unreachable;
-        const _bt = _Bucket.init(value);
-        _bt.* = self._b.?.*;
-        const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
-        n.?.write(p);
+    // Sets the value for a key in the bucket.
+    // If the key exist then its previous value will be overwritten.
+    // Supplied value must remain valid for the life of the transaction.
+    // Returns an error if the bucket was created from a read-only transaction, if the key is bucket, if the key is too large, or
+    // of if the value is too large.
+    pub fn put(self: *Self, keyPair: consts.KeyPair) !void {
+        if (self.tx.db == null) {
+            return Error.TxClosed;
+        } else if (!self.tx.?.writable) {
+            return Error.TxNotWriteable;
+        } else if (keyPair.key.?.len == 0) {
+            return Error.KeyRequired;
+        } else if (keyPair.key.?.len > consts.MaxKeySize) {
+            return Error.KeyTooLarge;
+        } else if (keyPair.value.?.len > consts.MaxValueSize) {
+            return Error.ValueTooLarge;
+        }
 
-        return value;
+        // Move cursor to correct position.
+        const c = self.cursor();
+        defer c.deinit();
+
+        const keyPairRef = c._seek(keyPair.key);
+
+        // Return an error if there is an existing key with a bucket value.
+        if (std.mem.eql(keyPair.key, keyPairRef.first) and keyPairRef.third & consts.BucketLeafFlag != 0) {
+            return Error.IncompactibleValue;
+        }
+
+        // Insert into node.
+        const cpKey = util.cloneBytes(self.allocator, keyPair.key);
+        c.node().?.put(cpKey, cpKey, keyPair.value, 0, 0);
+    }
+
+    /// Removes a key from the bucket.
+    /// If the key does not exist then nothing is done and a nil error is returned.
+    /// Returns an error if the bucket was created from a read-only transaction.
+    pub fn delete(self: *Self, key: []u8) Error!void {
+        if (self.tx.db == null) {
+            return Error.TxClosed;
+        } else if (!self.tx.writable) {
+            return Error.TxNotWriteable;
+        }
+
+        // Move cursor to correct position.
+        const c = self.cursor();
+        const keyPairRef = c._seek(key);
+
+        // Return on error if there is already existing bucket value.
+        if (keyPairRef.third & consts.BucketLeafFlag != 0) {
+            return Error.IncompactibleValue;
+        }
+
+        // Delete the node if we have a matching key.
+        c.node().?.del(key);
     }
 
     /// Returns the current integer for the bucket without incrementing it.
@@ -261,20 +328,42 @@ pub const Bucket = struct {
     /// If the provided function returns an error then the iteration is stopped and
     /// the error is returned to the caller. The provided function must not modify
     /// the bucket; this will result in undefined behavior.
-    pub fn forEach(self: *Self) Error!void {
+    pub fn forEach(self: *Self, travel: fn (bt: *Bucket, keyPairRef: *const consts.KeyPair) Error!void) Error!void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
             return Error.TxNotWriteable;
         }
-
         const c = self.cursor();
         var keyPairRef = c.first();
         while (keyPairRef.key != null) {
             keyPairRef = c.next();
+            try travel(self, &keyPairRef);
         }
-
         return;
+    }
+
+    // Return stats on a bucket.
+    pub fn stats(self: *const Self)  {
+        
+    }
+
+    // Returns the maximum total size of a bucket to make it a candidate for inlining.
+    fn maxInlineBucketSize(self: *const Self) usize {
+        return self.tx.?.getDB().pageSize / 4;
+    }
+
+    // Allocates and writes a bucket to a byte slice.
+    fn write(self: *Self) []u8 {
+        // Allocate the approprivate size.
+        const n = self.rootNode;
+        const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize()) catch unreachable;
+        const _bt = _Bucket.init(value);
+        _bt.* = self._b.?.*;
+        const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
+        n.?.write(p);
+
+        return value;
     }
 
     fn bucketHeaderSize() usize {
@@ -369,3 +458,36 @@ pub const _Bucket = packed struct {
         return ptr;
     }
 };
+
+pub const BucketStats = struct {
+    BranchPageN: usize, // number of logical branch pages.
+    BranchOverflowN: usize, // number of physical branch overflow pages
+    LeafPageN: usize, // number of logical leaf pages
+    LeafOverflowN: usize, // number of physical leaf overflow pages 
+
+    // Tree statistics.
+    keyN: usize, // number of keys/value pairs
+    depth: usize, // number of levels in B+tree
+
+    // Page size utilization.
+    BranchAlloc: usize, // bytes allocated for physical branch pages
+    BranchInuse: usize, // bytes actually used for branch data 
+    LeafAlloc: usize, // bytes allocated for physical leaf pages
+    LeafInuse: usize, // bytes actually used for leaf data 
+
+    // Bucket statistics
+    BucketN: usize, // total number of buckets including the top bucket
+    InlineBucketN: usize, // total number on inlined buckets 
+    InlineBucketInuse: usize, // bytes used for inlined buckets (also accouted for in LeafInuse)
+
+    pub fn add(self: *BucketStats, other: *const BucketStats) void {
+        self.BranchPageN += other.BranchPageN;
+    }
+};
+
+fn traveBucket(bucket: *Bucket, keyPair: *const consts.KeyPair) Error!void {
+    if (keyPair.value == null) {
+        try bucket.deleteBucket(keyPair.key);
+    }
+    return null;
+}
