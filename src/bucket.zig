@@ -344,8 +344,14 @@ pub const Bucket = struct {
     }
 
     // Return stats on a bucket.
-    pub fn stats(self: *const Self)  {
-        
+    pub fn stats(self: *const Self) void {
+        var s = BucketStats.init();
+        var subStats = BucketStats.init();
+        const pageSize = self.tx.?.db.?.pageSize;
+        s.BucketN += 1;
+        if (self._b.?.root == 0) {
+            s.InlineBucketN += 1;
+        }
     }
 
     // Returns the maximum total size of a bucket to make it a candidate for inlining.
@@ -460,28 +466,47 @@ pub const _Bucket = packed struct {
 };
 
 pub const BucketStats = struct {
-    BranchPageN: usize, // number of logical branch pages.
-    BranchOverflowN: usize, // number of physical branch overflow pages
-    LeafPageN: usize, // number of logical leaf pages
-    LeafOverflowN: usize, // number of physical leaf overflow pages 
+    BranchPageN: usize = 0, // number of logical branch pages.
+    BranchOverflowN: usize = 0, // number of physical branch overflow pages
+    LeafPageN: usize = 0, // number of logical leaf pages
+    LeafOverflowN: usize = 0, // number of physical leaf overflow pages
 
     // Tree statistics.
-    keyN: usize, // number of keys/value pairs
-    depth: usize, // number of levels in B+tree
+    keyN: usize = 0, // number of keys/value pairs
+    depth: usize = 0, // number of levels in B+tree
 
     // Page size utilization.
-    BranchAlloc: usize, // bytes allocated for physical branch pages
-    BranchInuse: usize, // bytes actually used for branch data 
-    LeafAlloc: usize, // bytes allocated for physical leaf pages
-    LeafInuse: usize, // bytes actually used for leaf data 
+    BranchAlloc: usize = 0, // bytes allocated for physical branch pages
+    BranchInuse: usize = 0, // bytes actually used for branch data
+    LeafAlloc: usize = 0, // bytes allocated for physical leaf pages
+    LeafInuse: usize = 0, // bytes actually used for leaf data
 
     // Bucket statistics
-    BucketN: usize, // total number of buckets including the top bucket
-    InlineBucketN: usize, // total number on inlined buckets 
-    InlineBucketInuse: usize, // bytes used for inlined buckets (also accouted for in LeafInuse)
+    BucketN: usize = 0, // total number of buckets including the top bucket
+    InlineBucketN: usize = 0, // total number on inlined buckets
+    InlineBucketInuse: usize = 0, // bytes used for inlined buckets (also accouted for in LeafInuse)
+
+    pub fn init() BucketStats {
+        return BucketStats{};
+    }
 
     pub fn add(self: *BucketStats, other: *const BucketStats) void {
         self.BranchPageN += other.BranchPageN;
+        self.BranchOverflowN += other.BranchOverflowN;
+        self.LeafPageN += other.LeafPageN;
+        self.LeafOverflowN += other.LeafOverflowN;
+        self.keyN += other.keyN;
+        if (self.depth < other.depth) {
+            self.depth = other.depth;
+        }
+        self.BranchAlloc += other.BranchAlloc;
+        self.BranchInuse += other.BranchInuse;
+        self.LeafAlloc += other.LeafAlloc;
+        self.LeafInuse += other.LeafInuse;
+
+        self.BucketN += other.BucketN;
+        self.InlineBucketN += other.InlineBucketN;
+        self.InlineBucketInuse += other.InlineBucketInuse;
     }
 };
 
