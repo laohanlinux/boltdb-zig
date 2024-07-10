@@ -354,6 +354,18 @@ pub const Bucket = struct {
         }
     }
 
+    /// Iterates over every page in a bucket, including inline pages.
+    fn forEachPage(self: *Self, _: *Bucket, travel: fn (p: *const page.Page, depth: usize) void) void {
+        // If we have an inline page then just use that.
+        if (self.page != null) {
+            travel(self.page, 0);
+            return;
+        }
+
+        // Otherwise traverse the page hierarchy.
+        self.tx.?.forEachPage(self._b.?.root, 0, travel);
+    }
+
     // Returns the maximum total size of a bucket to make it a candidate for inlining.
     fn maxInlineBucketSize(self: *const Self) usize {
         return self.tx.?.getDB().pageSize / 4;

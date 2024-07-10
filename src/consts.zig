@@ -14,6 +14,26 @@ pub const MaxValueSize: usize = (1 << 32) - 2;
 // This value can be changed by setting Bucket.FillPercent.
 pub const defaultFillPercent = 0.5;
 
+pub const PageFlage = enum(u8) {
+    branch = 0x01,
+    leaf = 0x02,
+    meta = 0x04,
+    free_list = 0x10,
+};
+
+pub const bucket_leaf_flag: u32 = 0x01;
+
+pub const PgidType = u64;
+
+pub const PgIds = []PgidType;
+
+pub const page_size: usize = std.mem.page_size;
+
+/// Returns the size of a page given the page size and branching factor.
+pub fn intFromFlags(pageFlage: PageFlage) u16 {
+    return @as(u16, @intFromEnum(pageFlage));
+}
+
 pub const Tuple = struct {
     pub fn t2(comptime firstType: type, comptime secondType: type) type {
         return struct {

@@ -3,6 +3,7 @@ const db = @import("./db.zig");
 const bucket = @import("./bucket.zig");
 const page = @import("./page.zig");
 const Cursor = @import("./cursor.zig").Cursor;
+const consts = @import("./consts.zig");
 // Represents the internal transaction indentifier.
 pub const TxId = u64;
 
@@ -66,6 +67,21 @@ pub const TX = struct {
             for (0..p.count) |i| {
                 const elem = p.branchPageElementPtr(i);
                 self.forEach(CTX, c, elem.pgid, depth + 1, f);
+            }
+        }
+    }
+
+    /// Iterates over every page within a given page and executes a function.
+    pub fn forEachPage(self: *Self, pgid: page.PgidType, depth: usize, f: fn (p: *const page.Page, n: usize) void) void {
+        const p = self.getPage(pgid);
+
+        // Execute function.
+        f(p, depth);
+
+        // Recursively loop over children.
+        if (p.flags & consts.intFromFlags(consts.PageFlage.branch) != 0) {
+            for (p.branchPageElements().?) |elem| {
+                self.forEachPage(elem.pgid, depth + 1, f);
             }
         }
     }
