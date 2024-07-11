@@ -79,7 +79,7 @@ pub const TX = struct {
         f(p, depth);
 
         // Recursively loop over children.
-        if (p.flags & consts.intFromFlags(consts.PageFlage.branch) != 0) {
+        if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
             for (p.branchPageElements().?) |elem| {
                 self.forEachPage(elem.pgid, depth + 1, f);
             }

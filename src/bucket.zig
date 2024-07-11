@@ -9,6 +9,7 @@ const Cursor = @import("./cursor.zig").Cursor;
 const consts = @import("./consts.zig");
 const util = @import("./util.zig");
 const Error = @import("./error.zig").Error;
+const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 
 // Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
@@ -344,7 +345,7 @@ pub const Bucket = struct {
     }
 
     // Return stats on a bucket.
-    pub fn stats(self: *const Self) void {
+    pub fn stats(self: *const Self) BucketStats {
         var s = BucketStats.init();
         var subStats = BucketStats.init();
         const pageSize = self.tx.?.db.?.pageSize;
@@ -352,18 +353,128 @@ pub const Bucket = struct {
         if (self._b.?.root == 0) {
             s.InlineBucketN += 1;
         }
+
+        //self.forEachPage(?*BucketStats, s, fn);
+    }
+
+    fn travelStats(ctx: Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats), p: *const page.Page, depth: usize) void {
+        const b = ctx.first.?;
+        const s = ctx.second.?;
+        const sub = ctx.third.?;
+
+        if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
+            s.keyN += @as(usize, p.count);
+
+            // used totals the used bytes for the page.
+            var used = page.Page.headerSize();
+
+            if (p.count != 0) {
+                // If page has any elements, add all element headers.
+                used += page.LeafPageElement.headerSize() * @as(usize, p.count - 1); // TODO why -1.
+
+                // Add all element key, value sizes.
+                // The computation takes advantage of the fact that the position
+                // of the last element's key/value equals to the total of the sizes.
+                // of all previous elements' keys and values.
+                // It also includes the last element's header.
+                const lastElement = p.leafPageElement(@as(usize, p.count - 1));
+                used += @as(usize, lastElement.?.pos + lastElement.?.kSize + lastElement.?.vSize);
+            }
+
+            if (b._b.?.root == 0) {
+                // For inlined bucket just update the inline stats
+                s.InlineBucketInuse += used;
+            } else {
+                // For non-inlined bucket update all the leaf stats.
+                s.LeafPageN += 1;
+                s.LeafInuse += used;
+                s.LeafOverflowN += @as(usize, p.overflow);
+
+                // Collect stats from sub-buckets.
+                // Do that by iterating over all element headers
+                // looking for the ones with the bucketLeafFlag.
+                for (p.leafPageElements().?) |elem| {
+                    if (elem.flags & consts.BucketLeafFlag != 0) {
+                        // For any bucket elements. open the element value
+                        // and recursively call Stats on the contained bucket.
+                        s.add(&b.openBucket(elem.value()).stats());
+                    }
+                }
+            }
+        } else if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
+            s.BranchPageN += 1;
+            const lastElement = p.branchPageElementPtr(p.count - 1);
+
+            // used totals the used bytes for the page.
+            // Add header and all element header.
+            const used = page.Page.headerSize() + (page.BranchPageElement.headerSize() * @as(usize, p.count - 1));
+
+            // Add size of all keys and values.
+            // Again, use the fact that last element's position euqals to
+            // the total of key, value sizes of all previous elements.
+            used += @as(usize, lastElement.pos + lastElement.kSize);
+            s.BranchInuse += used;
+            s.BranchOverflowN += @as(usize, p.overflow);
+        }
+
+        // Keep track of maximum page depth.
+        if (depth + 1 > ctx.second.?.depth) {
+            s.depth = (depth + 1);
+        }
+
+        // Alloc stats can be computed from page counts and pageSize.
+        s.BranchAlloc = (s.BranchPageN + s.BranchOverflowN) * consts.page_size;
+        s.LeafAlloc = (s.LeafPageN + s.LeafOverflowN) * consts.page_size;
+
+        // Add the max depth of sub-buckets to get total nested depth.
+        s.depth += sub.depth;
+        // Add the stats for all sub-buckets.
+        s.add(sub);
     }
 
     /// Iterates over every page in a bucket, including inline pages.
-    fn forEachPage(self: *Self, _: *Bucket, travel: fn (p: *const page.Page, depth: usize) void) void {
+    fn forEachPage(self: *Self, comptime CTX: type, c: CTX, travel: fn (ctx: CTX, p: *const page.Page, depth: usize) void) void {
         // If we have an inline page then just use that.
         if (self.page != null) {
-            travel(self.page, 0);
+            travel(c, self.page, 0);
             return;
         }
 
         // Otherwise traverse the page hierarchy.
         self.tx.?.forEachPage(self._b.?.root, 0, travel);
+    }
+
+    /// Iterators over every page （or node) in a bucket.
+    /// This also include inline pages.
+    pub fn forEachPageNode(self: *Self, travel: fn (p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
+        // If we have an inline page or root node then just user that.
+        if (self.page) |p| {
+            travel(p, null, 0);
+            return;
+        }
+
+        // Otherwaise traverse the page hiserarchy.
+        self._forEachPageNode(self._b.?.root, 0, travel);
+    }
+
+    fn _forEachPageNode(self: *Self, pgid: page.PgidType, depth: usize, travel: fn (p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
+        const pNode = self.pageNode(pgid);
+
+        // Execute function.
+        travel(pNode.first, pNode.second, depth);
+
+        // Recursively loop over children.
+        if (pNode.first) |p| {
+            if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
+                for (p.branchPageElements().?) |elem| {
+                    self._forEachPageNode(elem.pgid, depth + 1, travel);
+                }
+            }
+        } else if (pNode.second.?) |n| {
+            for (n.inodes.?) |iNode| {
+                self._forEachPageNode(iNode.pgid, depth + 1, travel);
+            }
+        }
     }
 
     // Returns the maximum total size of a bucket to make it a candidate for inlining.
@@ -410,24 +521,24 @@ pub const Bucket = struct {
     }
 
     /// Returns the in-memory node, if it exists.
-    pub fn pageNode(self: *Self, id: page.PgidType) Tuple2 {
+    pub fn pageNode(self: *Self, id: page.PgidType) PageOrNode {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b.root == 0) {
             std.log.info("this is a inline bucket, embed at page({})", .{id});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
-                return Tuple2{ .first = null, .second = rNode };
+                return PageOrNode{ .first = null, .second = rNode };
             }
-            return Tuple2{ .first = self.page, .second = null };
+            return PageOrNode{ .first = self.page, .second = null };
         }
 
         // Check the node cache for non-inline buckets.
         if (self.nodes.get(id)) |cacheNode| {
-            return Tuple2{ .first = null, .second = cacheNode };
+            return PageOrNode{ .first = null, .second = cacheNode };
         }
         // Finally lookup the page from the transaction if no node is materialized.
-        return Tuple2{ .first = self.tx.?.getPage(id), .second = null };
+        return PageOrNode{ .first = self.tx.?.getPage(id), .second = null };
     }
 
     // Creates a node from a page and associates it with a given parent.
