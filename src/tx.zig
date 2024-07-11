@@ -72,16 +72,16 @@ pub const TX = struct {
     }
 
     /// Iterates over every page within a given page and executes a function.
-    pub fn forEachPage(self: *Self, pgid: page.PgidType, depth: usize, f: fn (p: *const page.Page, n: usize) void) void {
+    pub fn forEachPage(self: *Self, pgid: page.PgidType, depth: usize, comptime CTX: type, c: CTX, travel: fn (ctx: CTX, p: *const page.Page, depth: usize) void) void {
         const p = self.getPage(pgid);
 
         // Execute function.
-        f(p, depth);
+        travel(c, p, depth);
 
         // Recursively loop over children.
         if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
             for (p.branchPageElements().?) |elem| {
-                self.forEachPage(elem.pgid, depth + 1, f);
+                self.forEachPage(elem.pgid, depth + 1, CTX, c, travel);
             }
         }
     }

@@ -347,21 +347,29 @@ pub const Bucket = struct {
     // Return stats on a bucket.
     pub fn stats(self: *const Self) BucketStats {
         var s = BucketStats.init();
-        var subStats = BucketStats.init();
+        const subStats = BucketStats.init();
         const pageSize = self.tx.?.db.?.pageSize;
         s.BucketN += 1;
         if (self._b.?.root == 0) {
             s.InlineBucketN += 1;
         }
+        const tuple3 = Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats);
+        const tuple3Arg = tuple3{ .first = self, .second = &s, .third = &subStats };
+        self.forEachPage(tuple3, tuple3Arg, travelStats);
 
-        //self.forEachPage(?*BucketStats, s, fn);
+        // Alloc stats can be computed from page counts and pageSize.
+        s.BranchAlloc = (s.BranchPageN + s.BranchOverflowN) * pageSize;
+        s.LeafAlloc = (s.LeafPageN + s.LeafOverflowN) * pageSize;
+
+        // Add the max depth of sub-buckets to get total nested depth.
+        s.depth += subStats.depth;
+        // Add the stats for all sub-buckets.
+        s.add(&subStats);
     }
 
     fn travelStats(ctx: Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats), p: *const page.Page, depth: usize) void {
         const b = ctx.first.?;
         const s = ctx.second.?;
-        const sub = ctx.third.?;
-
         if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
             s.keyN += @as(usize, p.count);
 
@@ -421,15 +429,6 @@ pub const Bucket = struct {
         if (depth + 1 > ctx.second.?.depth) {
             s.depth = (depth + 1);
         }
-
-        // Alloc stats can be computed from page counts and pageSize.
-        s.BranchAlloc = (s.BranchPageN + s.BranchOverflowN) * consts.page_size;
-        s.LeafAlloc = (s.LeafPageN + s.LeafOverflowN) * consts.page_size;
-
-        // Add the max depth of sub-buckets to get total nested depth.
-        s.depth += sub.depth;
-        // Add the stats for all sub-buckets.
-        s.add(sub);
     }
 
     /// Iterates over every page in a bucket, including inline pages.
@@ -441,7 +440,7 @@ pub const Bucket = struct {
         }
 
         // Otherwise traverse the page hierarchy.
-        self.tx.?.forEachPage(self._b.?.root, 0, travel);
+        self.tx.?.forEachPage(self._b.?.root, 0, CTX, c, travel);
     }
 
     /// Iterators over every page （or node) in a bucket.
@@ -453,7 +452,6 @@ pub const Bucket = struct {
             return;
         }
 
-        // Otherwaise traverse the page hiserarchy.
         self._forEachPageNode(self._b.?.root, 0, travel);
     }
 
@@ -470,10 +468,39 @@ pub const Bucket = struct {
                     self._forEachPageNode(elem.pgid, depth + 1, travel);
                 }
             }
-        } else if (pNode.second.?) |n| {
-            for (n.inodes.?) |iNode| {
+        } else if (!pNode.second.?.isLeaf) {
+            for (pNode.second.?.inodes.items) |iNode| {
                 self._forEachPageNode(iNode.pgid, depth + 1, travel);
             }
+        }
+    }
+
+    /// Writes all the nodes for this bucket to dirty pages.
+    pub fn spill(self: *Self) !void {
+        // Spill all child buckets first.
+        const itr = self.buckets.iterator();
+        while (itr.next()) |entry| {
+            // If the child bucket is small enough and it has no child buckets then
+            // write it inline into the parent bucket's page. Otherwise spill it
+            // like a normal bucket and make the parent value a pointer to the page.
+
+        }
+    }
+
+    fn inlineable(self: *const Self) bool {
+        var n = self.rootNode;
+        // Bucket must only contain a single leaf node.
+        if (n == null or !n.?.isLeaf) { // the inline node has not parent rootNode, because it inline.
+            return false;
+        }
+
+        // Bucket is not inlineable if it contains subbuckets or if it goes beyond
+        // our threshold for inline bucket size.
+        var size = page.Page.headerSize();
+        for (n.?.inodes.items) |inode| {
+            size += page.LeafPageElement.headerSize() + inode.key.?.len;
+            size += if (inode.value) |value| value.len orelse 0;
+            if (inode.flags & consts.BucketLeafFlag != 0) {}
         }
     }
 
