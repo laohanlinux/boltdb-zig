@@ -4,24 +4,38 @@ const bucket = @import("./bucket.zig");
 const page = @import("./page.zig");
 const Cursor = @import("./cursor.zig").Cursor;
 const consts = @import("./consts.zig");
-// Represents the internal transaction indentifier.
-pub const TxId = u64;
+const TxId = consts.TxId;
+const Error = @import("./error.zig").Error;
 
 // Represent a read-only or read/write transaction on the database.
 // Read-only transactions can be used for retriving values for keys and creating cursors.
+// Read/Write transactions can create and remove buckets and create and remove keys.
+//
+// IMPORTANT: You must commit or rollback transactions when you are done with
+// them. Pages can not be reclaimed by the writer until no more transactions
+// are using them. A long running read transaction can cause the database to
+// quickly grow.
 pub const TX = struct {
     writable: bool,
     managed: bool,
     db: ?*db.DB,
     meta: *db.Meta,
+    root: bucket.Bucket,
     pages: std.AutoHashMap(page.PgidType, *page.Page),
-
     stats: TxStats,
 
-    root: bucket.Bucket,
+    _commitHandlers: std.ArrayList(fn () void),
+    // WriteFlag specifies the flag for write-related methods like WriteTo().
+    // Tx opens the database file with the specified flag to copy the data.
+    //
+    // By default, the flag is unset, which works well for mostly in-memory
+    // workloads. For databases that are much larger than available RAM,
+    // set the flag to syscall.O_DIRECT to avoid trashing the page cache.
+    writeFlag: isize,
 
     const Self = @This();
 
+    /// Initializes the transaction.
     pub fn init(_db: *db.DB) *Self {
         var self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
@@ -57,17 +71,60 @@ pub const TX = struct {
         return self.root.cursor();
     }
 
-    /// Iterates over every page within a given page and executes a function.
-    pub fn forEach(self: *Self, comptime CTX: type, c: CTX, id: page.PgidType, depth: usize, f: fn (c: CTX, *page.Page, usize) void) void {
-        const p = self.getPage(id);
-        // Execute function
-        f(c, p, depth);
-        // recursively loop over children
-        if (p.flags & page.intFromFlags(page.PageFlage.branch) != 0) {
-            for (0..p.count) |i| {
-                const elem = p.branchPageElementPtr(i);
-                self.forEach(CTX, c, elem.pgid, depth + 1, f);
-            }
+    // Retrives a copy of the current transaction statistics.
+    pub fn getStats(self: *const Self) TxStats {
+        return self.stats;
+    }
+
+    /// Retrieves a bucket any name.
+    /// Returns null if the bucekt does not exist.
+    /// The bucket instance is only valid for the lifetime of the transaction.
+    pub fn getBucket(self: *Self, name: []const u8) ?*bucket.Bucket {
+        return self.root.getBucket(name);
+    }
+
+    /// Creates a new bucket.
+    /// Returns an error if the bucket already exists, if th bucket name is blank, or if the bucket name is too long.
+    /// The bucket instance is only valid for the lifetime of the transaction.
+    pub fn createBucket(self: *Self, name: []const u8) Error!*bucket.Bucket {
+        return self.root.createBucket(name);
+    }
+
+    /// Creates a new bucket if the bucket if it doesn't already exist.
+    /// Returns an error if the bucket name is blank, or if the bucket name is too long.
+    /// The bucket instance is only valid for the lifetime of the transaction.
+    pub fn createBucketIfNotExists(self: *Self, name: []const u8) Error!*bucket.Bucket {
+        return self.root.createBucketIfNotExists(name);
+    }
+
+    /// Deletes a bucket.
+    /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
+    pub fn deleteBucket(self: *Self, name: []const u8) Error!void {
+        return self.root.deleteBucket(name);
+    }
+
+    /// Executes a function for each bucket in the root.
+    /// If the provided function returns an error then the iteration is stopped and
+    /// the error is returned to the caller.
+    pub fn forEach(self: *Self, f: fn (*bucket.Bucket, *const consts.KeyPair) Error!void) Error!void {
+        return self.root.forEach(f);
+    }
+
+    /// Adds a handler function to be executed after the transaction successfully commits.
+    pub fn onCommit(self: *Self, f: fn () void) void {
+        self._commitHandlers.append(f) catch unreachable;
+    }
+
+    /// Writes all changes to disk and updates the meta page.
+    /// Returns an error if a disk write error occurs, or if commit is
+    /// called on a ready-only transaction.
+    pub fn commit(self: *Self) Error!void {
+        const assert = @import("./assert.zig").assert;
+        assert(!self.managed, "mananged tx commit not allowed", .{});
+        if (self.db == null) {
+            return Error.TxClosed;
+        } else if (!self.writable) {
+            return Error.TxNotWriteable;
         }
     }
 

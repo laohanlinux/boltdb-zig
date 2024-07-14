@@ -373,7 +373,7 @@ pub const Node = struct {
 
     /// Writes the nodes to dirty pages and splits nodes as it goes.
     /// Returns and error if dirty pages cannot be allocated
-    fn spill(self: *Self) !void {
+    pub fn spill(self: *Self) !void {
         const _tx = self.bucket.?.tx;
         if (self.spilled) {
             return;
@@ -531,7 +531,7 @@ pub const Node = struct {
     }
 
     /// adds the node's underlying page to the freelist.
-    fn free(self: *Self) void {
+    pub fn free(self: *Self) void {
         if (self.pgid != 0) {
             self.bucket.?.tx.?.db.freelist.free(self.bucket.?.tx.?.meta.txid, self.bucket.?.tx.?.page(self.pgid));
             // TODO why reset the node

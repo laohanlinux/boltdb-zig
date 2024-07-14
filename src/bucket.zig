@@ -15,7 +15,7 @@ const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 pub const Bucket = struct {
     _b: ?*_Bucket = null,
     tx: ?*tx.TX, // the associated transaction
-    buckets: std.AutoHashMap([]u8, *Bucket), // subbucket cache
+    buckets: std.AutoHashMap([]const u8, *Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
     rootNode: ?*Node = null, // materialized node for the root page.
     page: ?*page.Page = null, // inline page reference
@@ -65,7 +65,7 @@ pub const Bucket = struct {
     /// Retrives a nested bucket by name.
     /// Returns nil if the bucket does not exits.
     /// The bucket instance is only valid for the lifetime of the transaction.
-    pub fn getBucket(self: *Self, name: []u8) ?*Bucket {
+    pub fn getBucket(self: *Self, name: []const u8) ?*Bucket {
         if (self.buckets.get(name)) |_bucket| {
             return _bucket;
         }
@@ -117,7 +117,7 @@ pub const Bucket = struct {
     /// Creates a new bucket at the given key and returns the new bucket.
     /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
-    pub fn createBucket(self: *Self, key: []u8) Error!*Bucket {
+    pub fn createBucket(self: *Self, key: []const u8) Error!*Bucket {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
@@ -161,7 +161,7 @@ pub const Bucket = struct {
     /// Creates a new bucket if it doesn't already exist and returns a reference to it.
     /// Returns an error if the bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
-    pub fn createBucketIfNotExists(self: *Self, key: []u8) Error!*Bucket {
+    pub fn createBucketIfNotExists(self: *Self, key: []const u8) Error!*Bucket {
         const child = self.createBucket(key) catch |err| switch (err) {
             Error.BucketExists => {
                 return self.getBucket(key);
@@ -332,14 +332,12 @@ pub const Bucket = struct {
     pub fn forEach(self: *Self, travel: fn (bt: *Bucket, keyPairRef: *const consts.KeyPair) Error!void) Error!void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
-        } else if (!self.tx.?.writable) {
-            return Error.TxNotWriteable;
         }
         const c = self.cursor();
         var keyPairRef = c.first();
         while (keyPairRef.key != null) {
-            keyPairRef = c.next();
             try travel(self, &keyPairRef);
+            keyPairRef = c.next();
         }
         return;
     }
@@ -445,21 +443,21 @@ pub const Bucket = struct {
 
     /// Iterators over every page （or node) in a bucket.
     /// This also include inline pages.
-    pub fn forEachPageNode(self: *Self, travel: fn (p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
+    pub fn forEachPageNode(self: *Self, comptime CTX: type, c: CTX, travel: fn (c: CTX, p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
         // If we have an inline page or root node then just user that.
         if (self.page) |p| {
-            travel(p, null, 0);
+            travel(c, p, null, 0);
             return;
         }
 
-        self._forEachPageNode(self._b.?.root, 0, travel);
+        self._forEachPageNode(self._b.?.root, CTX, c, 0, travel);
     }
 
-    fn _forEachPageNode(self: *Self, pgid: page.PgidType, depth: usize, travel: fn (p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
+    fn _forEachPageNode(self: *Self, comptime CTX: type, c: CTX, pgid: page.PgidType, depth: usize, travel: fn (c: CTX, p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
         const pNode = self.pageNode(pgid);
 
         // Execute function.
-        travel(pNode.first, pNode.second, depth);
+        travel(c, pNode.first, pNode.second, depth);
 
         // Recursively loop over children.
         if (pNode.first) |p| {
@@ -483,12 +481,46 @@ pub const Bucket = struct {
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
+            const value = std.ArrayList(u8).init(self.allocator);
+            if (entry.value_ptr.inlineable()) {
+                entry.value_ptr.free(); // TODO
+            } else {
+                try entry.value_ptr.spill();
+                // Update the child bucket header in this bucket.
+                try value.appendNTimes(u8, _Bucket.size());
+                _ = _Bucket.init(value.items);
+            }
 
+            // Skip writing the bucket if there are no matterialized nodes.
+            if (entry.value_ptr.*.rootNode == null) {
+                continue;
+            }
+
+            // Update parent node.
+            const c = self.cursor();
+            const keyPairRef = c._seek(entry.key_ptr.*);
+            assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {:0x} -> {:0x}", .{ entry.key_ptr.*, keyPairRef.first.? });
+            assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: {:0x}", .{keyPairRef.third});
+            c.node().?.put(entry.key_ptr.*, entry.key_ptr.*, entry.value_ptr.*, 0, consts.BucketLeafFlag);
         }
+
+        // Ignore if there's not a materialized root node.
+        if (self.rootNode == null) {
+            return;
+        }
+
+        // Spill nodes.
+        try self.rootNode.?.spill();
+        self.rootNode = self.rootNode.?.root();
+        // Update the root node for this bucket.
+        assert(self.rootNode.?.pgid >= self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
+        self._b.?.root = self.rootNode.?.pgid;
     }
 
+    // Returns true if a bucket is small enough to be written inline
+    // and if it contains no subbuckets. Otherwise returns false.
     fn inlineable(self: *const Self) bool {
-        var n = self.rootNode;
+        const n = self.rootNode;
         // Bucket must only contain a single leaf node.
         if (n == null or !n.?.isLeaf) { // the inline node has not parent rootNode, because it inline.
             return false;
@@ -500,8 +532,14 @@ pub const Bucket = struct {
         for (n.?.inodes.items) |inode| {
             size += page.LeafPageElement.headerSize() + inode.key.?.len;
             size += if (inode.value) |value| value.len orelse 0;
-            if (inode.flags & consts.BucketLeafFlag != 0) {}
+            if (inode.flags & consts.BucketLeafFlag != 0) {
+                return false;
+            } else if (size > self.maxInlineBucketSize()) {
+                return false;
+            }
         }
+
+        return true;
     }
 
     // Returns the maximum total size of a bucket to make it a candidate for inlining.
@@ -522,6 +560,16 @@ pub const Bucket = struct {
         return value;
     }
 
+    // Attemps to balance all nodes
+    fn rebalance(self: *Self) void {
+        for (self.nodes.valueIterator().items) |n| {
+            n.rebalance();
+        }
+        for (self.buckets.valueIterator().items) |child| {
+            child.rebalance();
+        }
+    }
+
     fn bucketHeaderSize() usize {
         return @sizeOf(_Bucket);
     }
@@ -532,8 +580,17 @@ pub const Bucket = struct {
             return;
         }
 
-        //const trx = self.tx.?;
-        //self.forEachPageNode()
+        const trx = self.tx.?;
+        self.forEachPageNode(*tx.TX, trx, freeTravel);
+        self._b.?.root = 0;
+    }
+
+    fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*const Node, depth: usize) void {
+        if (p) |_p| {
+            trx.db.?.freelist.free(trx.meta.txid, _p);
+        } else {
+            n.?.free();
+        }
     }
 
     /// Removes all references to the old mmap.
@@ -548,6 +605,7 @@ pub const Bucket = struct {
     }
 
     /// Returns the in-memory node, if it exists.
+    /// Otherwise returns the underlying page.
     pub fn pageNode(self: *Self, id: page.PgidType) PageOrNode {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
@@ -613,9 +671,15 @@ pub const _Bucket = packed struct {
         const ptr: *_Bucket = @ptrCast(@alignCast(slice));
         return ptr;
     }
+
+    fn size() usize {
+        return @sizeOf(_Bucket);
+    }
 };
 
+/// Records statistics about resoureces used by a bucket.
 pub const BucketStats = struct {
+    // Page count statistics.
     BranchPageN: usize = 0, // number of logical branch pages.
     BranchOverflowN: usize = 0, // number of physical branch overflow pages
     LeafPageN: usize = 0, // number of logical leaf pages
