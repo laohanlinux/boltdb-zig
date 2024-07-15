@@ -1,5 +1,10 @@
 const std = @import("std");
 
+// Default values if not set in a DB instance.
+pub const DefaultMaxBatchSize = 1000;
+pub const DefaultMaxBatchDelay = 10; // millisecond
+pub const DefaultAllocSize = 16 * 1024 * 1024;
+
 pub const BucketLeafFlag: u32 = 0x01;
 
 pub const minFillPercent: f64 = 0.1;

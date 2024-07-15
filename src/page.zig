@@ -132,6 +132,37 @@ pub const Page = struct {
         return elements[0..self.count];
     }
 
+    pub fn freelistPageElements(self: *Self) ?[]PgidType {
+        const ptr = self.getDataPtrInt();
+        const firstPtr: *PgidType = @ptrFromInt(ptr);
+        var elements: [*]PgidType = @ptrCast(firstPtr);
+        return elements[0..self.count];
+    }
+
+    pub fn freelistPageOverElements(self: *Self) ?[]PgidType {
+        const ptr = self.getDataPtrInt();
+        const firstPtr: *PgidType = @ptrFromInt(ptr);
+        var elements: [*]PgidType = @ptrCast(firstPtr);
+        // because page has overflow, the page.Count bit flag the page is overflow page instead of count flag,
+        // so the page count flag has store at `next 64bit`.
+        const overflowCount = elements[0..1][0];
+        return elements[1..@as(usize, overflowCount)];
+    }
+
+    pub fn freelistPageOverWithCountElements(self: *Self) ?[]PgidType {
+        const ptr = self.getDataPtrInt();
+        const firstPtr: *PgidType = @ptrFromInt(ptr);
+        var elements: [*]PgidType = @ptrCast(firstPtr);
+        if (self.count == 0xFFFF) {
+            // because page has overflow, the page.Count bit flag the page is overflow page instead of count flag,
+            // so the page count flag has store at `next 64bit`.
+            const overflowCount = elements[0..1][0];
+            return elements[0..@as(usize, overflowCount + 1)];
+        } else {
+            return elements[0..@as(usize, self.count)];
+        }
+    }
+
     pub fn getDataPtrInt(self: *Self) usize {
         const ptr = @intFromPtr(self);
         return ptr + Self.headerSize();

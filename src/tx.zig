@@ -126,6 +126,96 @@ pub const TX = struct {
         } else if (!self.writable) {
             return Error.TxNotWriteable;
         }
+
+        // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
+        // Rebalance nodes which have had deletions.
+        var startTime = try std.time.Timer.start();
+        errdefer self.rollback();
+        try self.root.spill();
+        self.stats.spill_time += startTime.lap();
+
+        // Free the old root bucket.
+        self.meta.root.root = self.root._b.?.root;
+        const opgid = self.meta.pgid;
+
+        // Free the freelist and allocate new pages for it. This will overestimate
+        // the size of the freelist but not underestimate the size (wich would be bad).
+        self.db.?.freelist.free(self.meta.txid, self.getPage(self.meta.free_list));
+        const p = try self.allocate((self.db.?.freelist.size() / self.db.?.pageSize) + 1);
+        try self.db.?.freelist.write(p);
+        self.meta.free_list = p.id;
+
+        // If the high water mark has moved up then attempt to grow the database.
+        if (self.meta.pgid > opgid) {
+            const growSize = @as(usize, (self.meta.pgid + 1)) * self.db.?.pageSize;
+            try self.db.?.grow(growSize);
+        }
+
+        // Write dirty pages to disk.
+        startTime = try std.time.Timer.start();
+        try self.write();
+
+        // If strict mode is enabled then perform a consistency check.
+        // Only the first consistency error is reported in the panic.
+        if (self.db.?.strict_mode) {
+            // TODO
+        }
+
+        // Write meta to disk.
+        try self.writeMeta();
+
+        self.stats.write_time += startTime.lap();
+
+        // Finalize the transaction.
+        self.close();
+
+        // Execute commit handlers now that the locks have been removed.
+        for (self._commitHandlers.items) |h| {
+            h();
+        }
+
+        // ok
+    }
+
+    /// Closes the transaction and ignores all previous updates. Read-only
+    /// transactions must be rolled back and not committed.
+    pub fn rollback(self: *Self) Error!void {
+        const assert = @import("./assert.zig").assert;
+        assert(!self.managed, "managed tx rollback not allowed", .{});
+        if (self.db == null) {
+            return Error.TxClosed;
+        }
+        self._rollback();
+    }
+
+    pub fn _rollback(self: *Self) void {
+        if (self.db == null) {
+            return;
+        }
+        if (self.writable) {
+            self.db.?.freelist.rollback(self.meta.txid);
+            self.db.?.freelist.reload(self.db.?.pageById(self.db.?.getMeta().free_list));
+        }
+
+        self.close();
+    }
+
+    fn close(self: *Self) void {
+        if (self.db == null) {
+            return;
+        }
+        if (self.writable) {
+            // Grab freelist stats.
+
+        } else {
+            self.db.?.removeTx(tx);
+        }
+
+        // clear all reference.
+        self.db = null;
+        self.meta = null;
+        self.root = undefined;
+        self.pages.deinit();
     }
 
     /// Iterates over every page within a given page and executes a function.
@@ -198,11 +288,11 @@ pub const TxStats = packed struct {
     // Split/Spill statistics
     split: usize, // number of nodes split
     spill: usize, // number of nodes spilled
-    spill_time: i64, // total time spent spilling
+    spill_time: u64 = 0, // total time spent spilling
 
     // Write statistics
-    write: usize, // number of writes performed
-    write_time: usize, // total time spent writing to disk
+    write: usize = 0, // number of writes performed
+    write_time: u64 = 0, // total time spent writing to disk
 
     const Self = @This();
     pub fn add(self: *Self, other: *TxStats) void {

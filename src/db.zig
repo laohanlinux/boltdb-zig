@@ -5,6 +5,7 @@ const errors = @import("./error.zig");
 const bucket = @import("./bucket.zig");
 const freelist = @import("./freelist.zig");
 const util = @import("./util.zig");
+const consts = @import("./consts.zig");
 
 const Page = page.Page;
 
@@ -18,12 +19,6 @@ const MaxMMapStep: u64 = 1 << 30; // 1 GB
 
 // TODO
 const IgnoreNoSync = false;
-
-// Default values if not set in a DB instance.
-const DefaultMaxBatchSize = 1000;
-const DefaultMaxBatchDelay = 10; // millisecond
-const DefaultAllocSize = 16 * 1024 * 1024;
-
 // Page size for db is set to the OS page size.
 const default_page_size = std.os.getPageSize();
 
@@ -111,6 +106,36 @@ pub const DB = struct {
     /// Return the path to currently open database file.
     pub fn path(self: *const Self) []const u8 {
         return self._path;
+    }
+
+    /// Returns the string representation of the database.
+    pub fn string(self: *const Self, _allocator: std.mem.Allocator) []u8 {
+        const buf = std.ArrayList(u8).init(_allocator);
+        defer buf.deinit();
+        const writer = buf.writer();
+        writer.print("meta0: {}\n", .{self.meta0}) catch unreachable;
+        writer.print("meta1: {}\n", .{self.meta1}) catch unreachable;
+        writer.print("freelist:{}\n", .{self.freelist}) catch unreachable;
+        writer.print("DB<{}>\n", self._path);
+        return buf.toOwnedSlice();
+    }
+
+    /// Creates and opens a database at the given path.
+    /// If the file does not exist then it will be created automatically.
+    /// Passing in null options will cause Bolt to open the database with the default options.
+    pub fn open(allocator: std.mem.Allocator, path: []const u8, fileMode: isize, options: Options) Error!Self {
+        const db = try allocator.create(Self);
+        // Set default options if no options are proveide.
+        db.no_sync = options.no_grow_sync;
+        db.mmap_flags = options.mmap_flags;
+
+        // Set default values for later DB operations.
+        db.max_batch_size = consts.DefaultMaxBatchSize;
+        db.max_batch_delay = consts.DefaultMaxBatchDelay;
+        db.allocSize = consts.DefaultAllocSize;
+
+        // Open data file and separate sync handler for metadata writes.
+        db._path = path;
     }
 
     /// Opens the underlying memory-mapped file and initializes the meta references.
@@ -267,7 +292,7 @@ pub const DB = struct {
     }
 
     // Grows the size of the database to the given sz.
-    fn grow(self: *Self, sz: usize) !void {
+    pub fn grow(self: *Self, sz: usize) !void {
         // Ignore if the new size is less than valiable file size.
         if (sz <= self.filesz) {
             return;
@@ -327,7 +352,7 @@ pub const Options = packed struct {
 
 // Represents the options used if null options are passed into open().
 // No timeout is used which will cause Bolt to wait indefinitely for a lock.
-pub const default_options = Options{
+pub const defaultOptions = Options{
     .timeout = 0,
     .no_grow_sync = false,
 };
