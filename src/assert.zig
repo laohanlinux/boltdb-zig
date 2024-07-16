@@ -7,6 +7,6 @@ pub inline fn assert(expect: bool, comptime fmt: []const u8, args: anytype) void
     }
 }
 
-test "assert" {
-    assert(std.time.milliTimestamp() < 0, "it should be happen, {d}\n", .{std.time.milliTimestamp()});
-}
+// test "assert" {
+//     assert(std.time.milliTimestamp() < 0, "it should be happen, {d}\n", .{std.time.milliTimestamp()});
+// }

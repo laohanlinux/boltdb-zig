@@ -25,7 +25,7 @@ pub const Node = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) *Self {
-        var self: *Self = allocator.create(Self) catch unreachable;
+        const self = allocator.create(Self) catch unreachable;
         self.allocator = allocator;
         self.inodes = std.ArrayList(INode).init(self.allocator);
         self.children = std.ArrayList(*Node).init(self.allocator);

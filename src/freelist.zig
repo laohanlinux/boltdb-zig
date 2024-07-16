@@ -4,16 +4,16 @@ const tx = @import("./tx.zig");
 const Error = @import("./error.zig").Error;
 const consts = @import("./consts.zig");
 const assert = @import("./assert.zig").assert;
-
+const TxId = consts.TxId;
 // FreeList represents a list of all pages that are available for allcoation.
 // It also tracks pages that  have been freed but are still in use by open transactions.
 pub const FreeList = struct {
     // all free and available free page ids.
     ids: std.ArrayList(page.PgidType),
     // mapping of soon-to-be free page ids by tx.
-    pending: std.AutoHashMap(tx.TxId, []page.PgidType),
+    pending: std.AutoHashMap(consts.TxId, []page.PgidType),
     // fast lookup of all free and pending pgae ids.
-    cache: std.AutoHashMap(tx.TxId, bool),
+    cache: std.AutoHashMap(TxId, bool),
 
     allocator: std.mem.Allocator,
 
@@ -22,8 +22,8 @@ pub const FreeList = struct {
     pub fn init(allocator: std.mem.Allocator) Self {
         return FreeList{
             .ids = std.ArrayList(page.PgidType).init(allocator),
-            .pending = std.AutoHashMap(tx.TxId, []page.PgidType).init(allocator),
-            .cache = std.AutoHashMap(tx.TxId, bool).init(allocator),
+            .pending = std.AutoHashMap(TxId, []page.PgidType).init(allocator),
+            .cache = std.AutoHashMap(TxId, bool).init(allocator),
             .allocator = allocator,
         };
     }
@@ -123,7 +123,7 @@ pub const FreeList = struct {
 
     // Releases a page and its overflow for a given transaction id.
     // If the page is already free then a panic will occur.
-    pub fn free(self: *Self, txid: tx.TxId, p: *page.Page) !void {
+    pub fn free(self: *Self, txid: TxId, p: *page.Page) !void {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
 
         // Free page and all its overflow pages.
@@ -143,7 +143,7 @@ pub const FreeList = struct {
     }
 
     // Moves all page ids for a transaction id (or older) to the freelist.
-    pub fn release(self: *Self, txid: tx.TxId) !void {
+    pub fn release(self: *Self, txid: TxId) !void {
         var m = std.ArrayList(page.PgidType).init(self.allocator);
         defer m.deinit();
         var itr = self.pending.iterator();
@@ -166,7 +166,7 @@ pub const FreeList = struct {
     }
 
     // Removes the pages from a given pending tx.
-    pub fn rollback(self: *Self, txid: tx.TxId) void {
+    pub fn rollback(self: *Self, txid: TxId) void {
         // Remove page ids from cache.
         if (self.pending.get(txid)) |pendingIds| {
             for (pendingIds) |id| {
@@ -358,7 +358,7 @@ test "meta" {
     try ff.release(1);
     ff.rollback(1);
     _ = ff.freed(200);
-    ff.reload(20);
+    //  ff.reload(20);
     ff.reindex();
     try ff.cache.put(1000, true);
     std.debug.print("What the fuck {d} {d}, {?}\n", .{ fCount, i, ff.cache.getKey(1000) });

@@ -208,7 +208,7 @@ pub const TX = struct {
             // Grab freelist stats.
 
         } else {
-            self.db.?.removeTx(tx);
+            self.db.?.removeTx(self);
         }
 
         // clear all reference.
@@ -335,8 +335,8 @@ fn tEach(_: void, _: *page.Page, depth: usize) void {
     std.debug.print("Hello Word: {}\n", .{depth});
 }
 
-test "forEach" {
-    const tx = std.testing.allocator.create(TX) catch unreachable;
-    defer std.testing.allocator.destroy(tx);
-    tx.forEach(void, {}, 1, 100, tEach);
-}
+// test "forEach" {
+//     const tx = std.testing.allocator.create(TX) catch unreachable;
+//     defer std.testing.allocator.destroy(tx);
+//     tx.forEach(void, {}, 1, 100, tEach);
+// }

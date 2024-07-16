@@ -585,7 +585,7 @@ pub const Bucket = struct {
         self._b.?.root = 0;
     }
 
-    fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*const Node, depth: usize) void {
+    fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*const Node, _: usize) void {
         if (p) |_p| {
             trx.db.?.freelist.free(trx.meta.txid, _p);
         } else {

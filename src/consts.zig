@@ -1,5 +1,13 @@
 const std = @import("std");
 
+// Represents a marker value to indicate that a file is a Bolt DB.
+pub const Magic = 0xED0CDAED;
+// The data file format verison.
+pub const Version = 1;
+
+// The largest step that can be taken when remapping the mmap.
+pub const MaxMMapStep: u64 = 1 << 30; // 1 GB
+
 // Default values if not set in a DB instance.
 pub const DefaultMaxBatchSize = 1000;
 pub const DefaultMaxBatchDelay = 10; // millisecond

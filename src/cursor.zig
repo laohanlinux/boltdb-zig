@@ -198,8 +198,8 @@ pub const Cursor = struct {
             }
             // Keep adding pages pointing to the first element to the stack.
             var pgid: page.PgidType = 0;
-            if (ref.node) |node| {
-                pgid = node.pgid;
+            if (ref.node) |n| {
+                pgid = n.pgid;
             } else {
                 pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
             }
@@ -336,8 +336,8 @@ pub const Cursor = struct {
         const n = e.node;
 
         // If we have a node then search its inodes.
-        if (n) |node| {
-            const index = std.sort.lowerBound(INode, INode.init(0, 0, key, null), node.inodes.items, {}, lessThanFn);
+        if (n) |_node| {
+            const index = std.sort.lowerBound(INode, INode.init(0, 0, key, null), _node.inodes.items, {}, lessThanFn);
             e.index = index;
             return;
         }

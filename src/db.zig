@@ -6,17 +6,9 @@ const bucket = @import("./bucket.zig");
 const freelist = @import("./freelist.zig");
 const util = @import("./util.zig");
 const consts = @import("./consts.zig");
+const Error = @import("./error.zig").Error;
 
 const Page = page.Page;
-
-// Represents a marker value to indicate that a file is a Bolt DB.
-const Magic = 0xED0CDAED;
-// The data file format verison.
-const Version = 1;
-
-// The largest step that can be taken when remapping the mmap.
-const MaxMMapStep: u64 = 1 << 30; // 1 GB
-
 // TODO
 const IgnoreNoSync = false;
 // Page size for db is set to the OS page size.
@@ -79,7 +71,7 @@ pub const DB = struct {
     filesz: usize,
     //lockFile: std.fs.File,
     dataRef: ?[]u8, // mmap'ed readonly, write throws SEGV
-    data: ?*[MaxMMapStep]u8,
+    data: ?*[consts.MaxMMapStep]u8,
     datasz: usize,
 
     rwtx: ?*tx.TX,
@@ -99,6 +91,7 @@ pub const DB = struct {
     meta0: *Meta,
     meta1: *Meta,
 
+    opts: fn ([]u8, i64) void,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -123,19 +116,99 @@ pub const DB = struct {
     /// Creates and opens a database at the given path.
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
-    pub fn open(allocator: std.mem.Allocator, path: []const u8, fileMode: isize, options: Options) Error!Self {
-        const db = try allocator.create(Self);
+    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, _: std.fs.File.Mode, options: Options) Error!Self {
+        var db: DB = undefined;
+        db.allocator = allocator;
         // Set default options if no options are proveide.
         db.no_sync = options.no_grow_sync;
         db.mmap_flags = options.mmap_flags;
-
         // Set default values for later DB operations.
         db.max_batch_size = consts.DefaultMaxBatchSize;
         db.max_batch_delay = consts.DefaultMaxBatchDelay;
         db.allocSize = consts.DefaultAllocSize;
 
         // Open data file and separate sync handler for metadata writes.
-        db._path = path;
+        db._path = filePath;
+
+        // std.debug.print("_______________", .{});
+        if (options.read_only) {
+            db.readOnly = true;
+            db.file = try std.fs.cwd().openFile(db._path, std.fs.File.OpenFlags{
+                .lock = .shared,
+                .mode = .read_only,
+            });
+        }
+        if (!options.read_only) {
+            // const createFlag = std.fs.File.CreateFlags{
+            //     // .mode = fileMode,
+            //     .truncate = false,
+            //     .exclusive = true,
+            //     .lock = .exclusive,
+            // };
+            _ = std.fs.cwd().createFile("filePath", std.fs.File.CreateFlags{}) catch unreachable;
+            // std.debug.print("Read the first meta page to determine the page size\n", .{});
+        }
+        // Lock file so that other processes using Bolt in read-write mmode cannot
+        // use the database at the same time. This would cause corruption since
+        // the two processes would write meta pagesand free pages separately.
+        // The database file is locked exclusively (only one process can grab the lock)
+        // if !options.ReadOnly.
+        // The database file is locked using the shared lock (more than oe process may hold a lock at the same time) otherwise (options.ReadOnly is set).
+        // TODO
+
+        // Initialize the database if it doesn't exist.
+        // const stat = try db.file.stat();
+        // if (stat.size == 0) {
+        //     // Initialize new files with meta pagess.
+        //     db.init();
+        // } else {
+        //     // Read the first meta page to determine the page size.
+        // }
+
+        return db;
+    }
+
+    /// init creates a new database file and initializes its meta pages.
+    fn init(self: *Self) Error!void {
+        // Set the page size to the OS page size.
+        self.pageSize = consts.PageSize;
+        // Create two meta pages on a buffer.
+        const buf = try self.allocator.alloc(u8, self.pageSize * 2);
+        for (0..2) |i| {
+            const p = self.pageInBuffer(buf, @as(page.PgidType, i));
+            p.id = @as(page.PgidType, i);
+            p.flags = consts.intFromFlags(consts.PageFlag.meta);
+
+            // Initialize the meta pages.
+            const m = p.meta();
+            m.magic = consts.Magic;
+            m.version = consts.Version;
+            m.page_size = @as(u32, self.pageSize);
+            m.free_list = 2;
+            m.root = bucket._Bucket{ .root = 3 }; // So the top root bucket is a leaf
+            m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
+            m.txid = consts.TxId(@as(u64, i));
+            m.check_sum = m.sum64();
+        }
+
+        // Write an empty freelist at page 3.
+        {
+            const p = self.pageInBuffer(buf, 2);
+            p.id = 2;
+            p.flags = consts.intFromFlags(consts.PageFlag.free_list);
+            p.count = 0;
+        }
+        // Write an empty leaf page at page 4.
+        {
+            const p = self.pageInBuffer(buf[0..], 3);
+            p.id = 3;
+            p.flags = consts.intFromFlags(consts.PageFlag.leaf);
+            p.count = 0;
+        }
+
+        // Write the buffer to our data file.
+        try self.file.pwriteAll(buf, 0);
+        try self.file.sync();
     }
 
     /// Opens the underlying memory-mapped file and initializes the meta references.
@@ -202,8 +275,8 @@ pub const DB = struct {
 
         // If large than 1GB then grow by 1GB at a time.
         var sz = @as(u64, size);
-        if (sz > MaxMMapStep) {
-            sz += (MaxMMapStep - sz % MaxMMapStep);
+        if (sz > consts.MaxMMapStep) {
+            sz += (consts.MaxMMapStep - sz % consts.MaxMMapStep);
         }
 
         // If we've exeeded the max size then only grow up to the max size.
@@ -327,17 +400,17 @@ pub const Options = packed struct {
     // The amount of time to what wait to obtain a file lock.
     // When set to zero it will wait indefinitely. This option is only
     // available on Darwin and Linux.
-    timeout: i64, // unit:nas
+    timeout: i64 = 0, // unit:nas
 
     // Sets the DB.no_grow_sync flag before money mapping the file.
-    no_grow_sync: bool,
+    no_grow_sync: bool = false,
 
     // Open database in read-only mode, Uses flock(..., LOCK_SH | LOCK_NB) to
     // grab a shared lock (UNIX).
-    read_only: bool,
+    read_only: bool = false,
 
     // Sets the DB.mmap_flags before memory mapping the file.
-    mmap_flags: isize,
+    mmap_flags: isize = 0,
 
     // The initial mmap size of the database
     // in bytes. Read transactions won't block write transaction
@@ -347,7 +420,7 @@ pub const Options = packed struct {
     // If <= 0, the initial map size is 0.
     // If initial_mmap_size is smaller than the previous database size.
     // it takes no effect.
-    initial_mmap_size: isize,
+    initial_mmap_size: isize = 0,
 };
 
 // Represents the options used if null options are passed into open().
@@ -406,16 +479,16 @@ pub const Meta = packed struct {
     root: bucket._Bucket = bucket._Bucket{ .root = 0, .sequence = 0 },
     free_list: page.PgidType = 0,
     pgid: page.PgidType = 0,
-    txid: tx.TxId = 0,
+    txid: consts.TxId = 0,
     check_sum: u64 = 0,
 
     const Self = @This();
     pub const header_size = @sizeOf(Meta);
 
     pub fn validate(self: *const Self) errors.Error!void {
-        if (self.magic != Magic) {
+        if (self.magic != consts.Magic) {
             return errors.Error.Invalid;
-        } else if (self.version != Version) {
+        } else if (self.version != consts.Version) {
             return errors.Error.VersionMismatch;
         } else if (self.check_sum != 0 and self.check_sum != self.sum64()) {
             return errors.Error.CheckSum;
@@ -457,10 +530,17 @@ pub const Meta = packed struct {
     }
 };
 
-test "meta" {
-    const stats = Info{ .data = 10, .page_size = 20 };
-    std.debug.print("{}\n", .{stats});
+// test "meta" {
+//     const stats = Info{ .data = 10, .page_size = 20 };
+//     std.debug.print("{}\n", .{stats});
 
-    const meta = Meta{};
-    std.debug.print("{}\n", .{meta});
+//     const meta = Meta{};
+//     std.debug.print("{}\n", .{meta});
+// }
+
+test "DB" {
+    _ = DB.open(std.testing.allocator, "test.db", 0, defaultOptions) catch |err| std.debug.print("{any}\n", .{err});
+    // const fp = std.fs.cwd().createFile("test.db", std.fs.File.CreateFlags{}) catch unreachable;
+    // defer fp.close();
+    // std.debug.print("{any}\n", .{db});
 }
