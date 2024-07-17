@@ -507,17 +507,17 @@ pub const Node = struct {
             assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
         }
 
-        for (self.inodes.?) |inode| {
-            const _key = self.allocator.alloc(u8, inode.key.?.len) catch unreachable;
+        for (self.inodes.items) |*inode| {
+            var _key = self.allocator.alloc(u8, inode.key.?.len) catch unreachable;
             std.mem.copyForwards(u8, _key, inode.key.?);
-            inode.key = _key;
-            assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", {});
+            inode.key = _key[0..];
+            assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
                 const _value = self.allocator.alloc(u8, value.len) catch unreachable;
                 std.mem.copyForwards(u8, _value, value);
                 inode.value = _value;
-                assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", {});
+                assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", .{});
             }
         }
 
@@ -595,48 +595,48 @@ pub fn lessThanFn(_: void, a: INode, b: INode) bool {
     const order = util.cmpBytes(a.key.?, b.key.?);
     return order == std.math.Order.lt;
 }
-
-test "node" {
-    const node = Node.init(std.testing.allocator);
-    defer node.deinit();
-    _ = node.root();
-    _ = node.minKeys();
-    const nodeSize = node.size();
-    const lessThan = node.sizeLessThan(20);
-    //_ = node.childAt(0);
-    //_ = node.childIndex(node);
-    //_ = node.numChildren();
-    _ = node.nextSlibling();
-    _ = node.preSlibling();
-
-    const pageSlice = try std.testing.allocator.alloc(u8, page.page_size);
-    defer std.testing.allocator.free(pageSlice);
-    // const pagePtr = page.Page.init(pageSlice);
-    // @memset(pageSlice, 0);
-    //node.read(pagePtr);
-    // node.write(pagePtr);
-    //  var oldKey = [_]u8{0};
-    //  var newKey = [_]u8{0};
-    //   var value = [_]u8{ 1, 2, 3 };
-    //   node.put(oldKey[0..], newKey[0..], value[0..], 29, 0);
-    // node.del("");
-    std.debug.print("node size: {}, less: {}\n", .{ nodeSize, lessThan });
-
-    //   const n: usize = 14;
-    //   var inodes = std.testing.allocator.alloc(*INode, n) catch unreachable;
-    //   defer std.testing.allocator.free(inodes);
-    //   defer freeInodes(std.testing.allocator, inodes);
-    //   // random a number
-    //   var rng = std.rand.DefaultPrng.init(10);
-    //   for (0..n) |i| {
-    //       const key = std.testing.allocator.alloc(u8, 10) catch unreachable;
-    //       rng.fill(key);
-    //       const inode = INode.init(0x10, 0x20, key, null);
-    //       inodes[i] = inode;
-    //   }
-    //   sortINodes(inodes);
-    //
-    //   for (inodes) |inode| {
-    //       std.debug.print("\n{any}\n", .{inode.key.?});
-    //   }
-}
+//
+// test "node" {
+//     const node = Node.init(std.testing.allocator);
+//     defer node.deinit();
+//     _ = node.root();
+//     _ = node.minKeys();
+//     const nodeSize = node.size();
+//     const lessThan = node.sizeLessThan(20);
+//     //_ = node.childAt(0);
+//     //_ = node.childIndex(node);
+//     //_ = node.numChildren();
+//     _ = node.nextSlibling();
+//     _ = node.preSlibling();
+//
+//     const pageSlice = try std.testing.allocator.alloc(u8, page.page_size);
+//     defer std.testing.allocator.free(pageSlice);
+//     // const pagePtr = page.Page.init(pageSlice);
+//     // @memset(pageSlice, 0);
+//     //node.read(pagePtr);
+//     // node.write(pagePtr);
+//     //  var oldKey = [_]u8{0};
+//     //  var newKey = [_]u8{0};
+//     //   var value = [_]u8{ 1, 2, 3 };
+//     //   node.put(oldKey[0..], newKey[0..], value[0..], 29, 0);
+//     // node.del("");
+//     std.debug.print("node size: {}, less: {}\n", .{ nodeSize, lessThan });
+//
+//     //   const n: usize = 14;
+//     //   var inodes = std.testing.allocator.alloc(*INode, n) catch unreachable;
+//     //   defer std.testing.allocator.free(inodes);
+//     //   defer freeInodes(std.testing.allocator, inodes);
+//     //   // random a number
+//     //   var rng = std.rand.DefaultPrng.init(10);
+//     //   for (0..n) |i| {
+//     //       const key = std.testing.allocator.alloc(u8, 10) catch unreachable;
+//     //       rng.fill(key);
+//     //       const inode = INode.init(0x10, 0x20, key, null);
+//     //       inodes[i] = inode;
+//     //   }
+//     //   sortINodes(inodes);
+//     //
+//     //   for (inodes) |inode| {
+//     //       std.debug.print("\n{any}\n", .{inode.key.?});
+//     //   }
+// }

@@ -24,7 +24,7 @@ pub const TX = struct {
     pages: std.AutoHashMap(page.PgidType, *page.Page),
     stats: TxStats,
 
-    _commitHandlers: std.ArrayList(fn () void),
+    _commitHandlers: std.ArrayList(*const fn () void),
     // WriteFlag specifies the flag for write-related methods like WriteTo().
     // Tx opens the database file with the specified flag to copy the data.
     //
@@ -188,6 +188,7 @@ pub const TX = struct {
         self._rollback();
     }
 
+    // Internal rollback function.
     pub fn _rollback(self: *Self) void {
         if (self.db == null) {
             return;

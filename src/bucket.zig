@@ -15,7 +15,7 @@ const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 pub const Bucket = struct {
     _b: ?*_Bucket = null,
     tx: ?*tx.TX, // the associated transaction
-    buckets: std.AutoHashMap([]const u8, *Bucket), // subbucket cache
+    buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
     rootNode: ?*Node = null, // materialized node for the root page.
     page: ?*page.Page = null, // inline page reference
@@ -37,7 +37,7 @@ pub const Bucket = struct {
         b.tx = _tx;
         b.allocator = _tx.db.?.allocate;
         if (_tx.writable) { // TODO ?
-            b.buckets = std.AutoHashMap([]u8, *Bucket).init(b.allocator);
+            b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
             b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
         }
         return b;
@@ -594,13 +594,14 @@ pub const Bucket = struct {
     }
 
     /// Removes all references to the old mmap.
-    pub fn dereference(self: *Self) void {
+    pub fn dereference(self: *Bucket) void {
         if (self.rootNode) |rNode| {
             rNode.root().?.dereference();
         }
+        defer self.buckets.deinit();
         var itr = self.buckets.iterator();
         while (itr.next()) |entry| {
-            entry.value_ptr.dereference();
+            entry.value_ptr.*.dereference();
         }
     }
 

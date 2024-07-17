@@ -86,7 +86,9 @@ pub fn mmap(fp: std.fs.File, fileSize: u64, writeable: bool) ![]u8 {
 }
 
 pub fn munmap(ptr: []u8) void {
-    std.posix.munmap(ptr);
+    const alignPtr: []align(std.mem.page_size) const u8 = @alignCast(ptr);
+    // const alignPtr: []align(std.mem.page_size) u8 = ptr;
+    std.posix.munmap(alignPtr[0..]);
 }
 
 test "arm" {
