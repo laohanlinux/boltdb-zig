@@ -202,7 +202,7 @@ pub const FreeList = struct {
             self.ids.appendSlice(ids[idx.._count]) catch unreachable;
 
             // Make sure they're sorted
-            std.mem.sortUnstable(page.PgidType, self.ids.items, {}, std.sort.asc(page.Page));
+            std.mem.sortUnstable(page.PgidType, self.ids.items, {}, std.sort.asc(page.PgidType));
         }
         // Rebuild the page cache.
         self.reindex();

@@ -39,20 +39,20 @@ pub const TX = struct {
     pub fn init(_db: *db.DB) *Self {
         var self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
-        self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(_db.allocate);
+        self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(_db.allocator);
 
         // Copy the meta page since it can be changed by the writer.
-        self.meta = _db.allocate.create(db.Meta) catch unreachable;
+        self.meta = _db.allocator.create(db.Meta) catch unreachable;
         _db.getMeta().copy(self.meta);
 
         // Copy over the root bucket.
-        self.root = bucket.Bucket.init();
+        self.root = bucket.Bucket.init(self);
         self.root._b.root = self.meta.root;
         std.log.info("tx's root bucket {}", .{self.root._b.root});
 
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
-            self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.db.?.allocate);
+            self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.db.?.allocator);
             self.meta.txid += 1;
         }
         return self;

@@ -116,6 +116,18 @@ pub const DB = struct {
         return buf.toOwnedSlice() catch unreachable;
     }
 
+    pub fn pageString(self: *const Self, _allocator: std.mem.Allocator) []u8 {
+        var buf = std.ArrayList(u8).init(_allocator);
+        defer buf.deinit();
+        const writer = buf.writer();
+        writer.print("meta0:{}\n", .{self.pageById(0).*}) catch unreachable;
+        writer.print("meta1:{}\n", .{self.pageById(1).*}) catch unreachable;
+        const m = self.getMeta();
+        writer.print("rootBucket:{}\n", .{self.pageById(m.root.root).*}) catch unreachable;
+        writer.print("freelist:{}\n", .{self.pageById(m.free_list).*}) catch unreachable;
+        return buf.toOwnedSlice() catch unreachable;
+    }
+
     /// Creates and opens a database at the given path.
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
@@ -201,7 +213,8 @@ pub const DB = struct {
 
         // Read in the freelist.
         db.freelist = freelist.FreeList.init(db.allocator);
-        db.freelist.read(db.pageById(db.getMeta().free_list));
+        const allocPage = db.pageById(db.getMeta().free_list);
+        db.freelist.read(allocPage);
         db.opened = true;
         return db;
     }
@@ -217,6 +230,8 @@ pub const DB = struct {
             const p = self.pageInBuffer(buf, @as(page.PgidType, i));
             p.id = @as(page.PgidType, i);
             p.flags = consts.intFromFlags(consts.PageFlag.meta);
+            p.overflow = 0;
+            p.count = 0;
 
             // Initialize the meta pages.
             const m = p.meta();
@@ -238,6 +253,7 @@ pub const DB = struct {
             p.id = 2;
             p.flags = consts.intFromFlags(consts.PageFlag.free_list);
             p.count = 0;
+            p.overflow = 0;
         }
         // Write an empty leaf page at page 4.
         {
@@ -245,6 +261,7 @@ pub const DB = struct {
             p.id = 3;
             p.flags = consts.intFromFlags(consts.PageFlag.leaf);
             p.count = 0;
+            p.overflow = 0;
         }
 
         // Write the buffer to our data file.
@@ -340,9 +357,9 @@ pub const DB = struct {
     }
 
     /// Retrives a page reference from the mmap based on the current page size.
-    pub fn pageById(self: *Self, id: page.PgidType) *Page {
+    pub fn pageById(self: *const Self, id: page.PgidType) *Page {
         const pos: u64 = id * @as(u64, self.pageSize);
-        const buf = self.dataRef.?[pos..self.pageSize];
+        const buf = self.dataRef.?[pos..(pos + self.pageSize)];
         return Page.init(buf);
     }
 
@@ -354,7 +371,7 @@ pub const DB = struct {
     }
 
     // meta retriews the current meta page reference.
-    pub fn getMeta(self: *Self) *Meta {
+    pub fn getMeta(self: *const Self) *Meta {
         // We have to return the meta with the highest txid which does't fail
         // validation. Otherwise, we can cause errors when in fact the database is
         // in a consistent state. metaA is the one with thwe higher txid.
@@ -367,20 +384,15 @@ pub const DB = struct {
         }
 
         // Use higher meta page if valid. Otherwise fallback to prevous, if valid.
-        metaA.validate() catch |err| switch (err) {
-            errors.Error => {},
-            else => {
-                return metaA;
-            },
+        const maxMeta = blk: {
+            _ = metaA.validate() catch {
+                _ = metaB.validate() catch unreachable;
+                break :blk metaB;
+            };
+            break :blk metaA;
         };
-        metaB.validate() catch |err| switch (err) {
-            errors.Error => {},
-            else => {
-                return metaB;
-            },
-        };
-
-        @panic("bolt.db.meta(): invalid meta pages");
+        //@panic("bolt.db.meta(): invalid meta pages");
+        return maxMeta;
     }
 
     pub fn allocatePage(self: *Self, count: usize) !*Page {
@@ -629,6 +641,12 @@ test "DB" {
         const dbStr = kvDB.string(std.testing.allocator);
         defer std.testing.allocator.free(dbStr);
         std.debug.print("String: {s}\n", .{dbStr});
+
+        const pageStr = kvDB.pageString(std.testing.allocator);
+        defer std.testing.allocator.free(pageStr);
+        std.debug.print("{s}\n", .{pageStr});
         try kvDB.close();
+
+        _ = tx.TX.init(kvDB);
     }
 }
