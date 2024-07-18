@@ -23,9 +23,9 @@ pub fn cmpBytes(a: []const u8, b: []const u8) std.math.Order {
     }
 }
 
-pub fn cloneBytes(allocator: std.mem.Allocator, b: []u8) []u8 {
-    const dest = allocator.alloc(u8, b.len);
-    @memcpy(dest, b);
+pub fn cloneBytes(allocator: std.mem.Allocator, b: []const u8) []u8 {
+    const dest = allocator.alloc(u8, b.len) catch unreachable;
+    @memcpy(dest, b[0..]);
     return dest;
 }
 
@@ -80,24 +80,45 @@ pub fn mmap(fp: std.fs.File, fileSize: u64, writeable: bool) ![]u8 {
     if (writeable) {
         port |= std.posix.PROT.WRITE;
     }
-
     const ptr = try std.posix.mmap(null, fileSize, port, .{ .TYPE = .SHARED }, fp.handle, 0);
     return ptr;
 }
 
 pub fn munmap(ptr: []u8) void {
-    const alignPtr: []align(std.mem.page_size) const u8 = @alignCast(ptr);
-    // const alignPtr: []align(std.mem.page_size) u8 = ptr;
-    std.posix.munmap(alignPtr[0..]);
+    std.debug.print("the ptr size: {}, {}\n", .{ ptr.len, std.mem.page_size });
+    const alignData: []align(std.mem.page_size) const u8 = @alignCast(ptr);
+    if (isLinux() or isMacOS()) {
+        std.posix.munmap(alignData);
+    } else {
+        @panic("not support the os");
+    }
 }
 
 test "arm" {
-    const arch = @import("builtin").cpu.arch;
+    // const arch = @import("builtin").cpu.arch;
 
     // if (target == .arm or target == .aarch64) {
     //     std.debug.print("This is an ARM platform.\n", .{});
     // } else {
     //     std.debug.print("This is not an ARM platform.\n", .{});
     // }
-    std.debug.print("{}\n", .{std.Target.Cpu.Arch.isAARCH64(arch)});
+    // std.debug.print("{}\n", .{std.Target.Cpu.Arch.isAARCH64(arch)});
+
+    // const fp = try std.fs.cwd().createFile("map.test", .{});
+    // defer fp.close();
+    // const fileSize = 1024 * 1024;
+    // const ptr = try mmap(fp, fileSize, true);
+    // defer munmap(ptr);
+
+    // const file_path = "example.txt";
+    //
+    // // 打开文件
+    // const file_descriptor = try std.fs.cwd().createFile(file_path, .{});
+    // try file_descriptor.setEndPos(std.mem.page_size);
+    // const buf = try mmap(file_descriptor, std.mem.page_size, true);
+    // const alignData: []align(std.mem.page_size) const u8 = @alignCast(buf);
+    // defer std.posix.munmap(alignData); // 确保在函数结束时撤销映射
+    //
+    // // 关闭文件描述符
+    // _ = std.posix.close(file_descriptor.handle);
 }

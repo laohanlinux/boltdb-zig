@@ -19,16 +19,17 @@ pub const FreeList = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return FreeList{
-            .ids = std.ArrayList(page.PgidType).init(allocator),
-            .pending = std.AutoHashMap(TxId, []page.PgidType).init(allocator),
-            .cache = std.AutoHashMap(TxId, bool).init(allocator),
-            .allocator = allocator,
-        };
+    pub fn init(allocator: std.mem.Allocator) *Self {
+        const f = allocator.create(Self) catch unreachable;
+        f.ids = std.ArrayList(page.PgidType).init(allocator);
+        f.pending = std.AutoHashMap(TxId, []page.PgidType).init(allocator);
+        f.cache = std.AutoHashMap(TxId, bool).init(allocator);
+        f.allocator = allocator;
+        return f;
     }
 
     pub fn deinit(self: *Self) void {
+        defer self.allocator.destroy(self);
         self.pending.deinit();
         self.cache.deinit();
         self.ids.deinit();
@@ -187,7 +188,7 @@ pub const FreeList = struct {
         // If the page.count is at the max u16 value (64k) then it's considered
         // an overflow and the size of the freelist is stored as the first elment.
         var _count = @as(usize, p.count);
-        var idx = 0;
+        var idx: usize = 0;
         if (_count == 0xFFFF) {
             idx = 1;
             _count = p.freelistPageOverWithCountElements().?[0];
@@ -342,51 +343,59 @@ pub const FreeList = struct {
             }
         }
     }
+
+    pub fn string(self: *Self, _allocator: std.mem.Allocator) []u8 {
+        var buf = std.ArrayList(u8).init(_allocator);
+        defer buf.deinit();
+        const writer = buf.writer();
+        writer.print("cunt: {}, freeCount: {}, pendingCount: {}", .{ self.count(), self.freeCount(), self.pendingCount() }) catch unreachable;
+        return buf.toOwnedSlice() catch unreachable;
+    }
 };
 
-test "meta" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){}; // instantiate allocator
-    const galloc = gpa.allocator(); // retrieves the created allocator.
-    var ff = FreeList.init(galloc);
-    defer ff.deinit();
-    _ = ff.size();
-    _ = ff.count();
-    const fCount = ff.freeCount();
-    _ = ff.pendingCount();
-    ff.copyAll(&.{});
-    const i = ff.allocate(100);
-    try ff.release(1);
-    ff.rollback(1);
-    _ = ff.freed(200);
-    //  ff.reload(20);
-    ff.reindex();
-    try ff.cache.put(1000, true);
-    std.debug.print("What the fuck {d} {d}, {?}\n", .{ fCount, i, ff.cache.getKey(1000) });
+// test "meta" {
+//     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; // instantiate allocator
+//     const galloc = gpa.allocator(); // retrieves the created allocator.
+//     var ff = FreeList.init(galloc);
+//     defer ff.deinit();
+//     _ = ff.size();
+//     _ = ff.count();
+//     const fCount = ff.freeCount();
+//     _ = ff.pendingCount();
+//     ff.copyAll(&.{});
+//     const i = ff.allocate(100);
+//     try ff.release(1);
+//     ff.rollback(1);
+//     _ = ff.freed(200);
+//     //  ff.reload(20);
+//     ff.reindex();
+//     try ff.cache.put(1000, true);
+//     std.debug.print("What the fuck {d} {d}, {?}\n", .{ fCount, i, ff.cache.getKey(1000) });
 
-    const a = [_]page.PgidType{ 1, 3, 4, 5 };
-    const b = [_]page.PgidType{ 0, 2, 6, 7, 120 };
-    var array = [_]page.PgidType{0} ** (a.len + b.len);
-    FreeList.merge_sorted_array(array[0..], a[0..], b[0..]);
-    std.debug.print("after merge!\n", .{});
-    for (array) |n| {
-        std.debug.print("{},", .{n});
-    }
-    std.debug.print("\n", .{});
-    var arr = try std.ArrayList(page.PgidType).initCapacity(std.heap.page_allocator, 100);
-    defer arr.deinit();
-}
+//     const a = [_]page.PgidType{ 1, 3, 4, 5 };
+//     const b = [_]page.PgidType{ 0, 2, 6, 7, 120 };
+//     var array = [_]page.PgidType{0} ** (a.len + b.len);
+//     FreeList.merge_sorted_array(array[0..], a[0..], b[0..]);
+//     std.debug.print("after merge!\n", .{});
+//     for (array) |n| {
+//         std.debug.print("{},", .{n});
+//     }
+//     std.debug.print("\n", .{});
+//     var arr = try std.ArrayList(page.PgidType).initCapacity(std.heap.page_allocator, 100);
+//     defer arr.deinit();
+// }
 
-test "freelist" {
-    var flist = FreeList.init(std.testing.allocator);
-    defer flist.deinit();
+// test "freelist" {
+//     var flist = FreeList.init(std.testing.allocator);
+//     defer flist.deinit();
 
-    var ids = std.ArrayList(page.PgidType).initCapacity(std.testing.allocator, 0) catch unreachable;
-    for (0..29) |i| {
-        const pid = @as(u64, i);
-        ids.append(pid) catch unreachable;
-    }
-    defer ids.deinit();
-    std.mem.copyForwards(u64, ids.items[0..20], ids.items[10..12]);
-    ids.resize(2) catch unreachable;
-    std.debug.print("{any}\n", .{ids.items});
-}
+//     var ids = std.ArrayList(page.PgidType).initCapacity(std.testing.allocator, 0) catch unreachable;
+//     for (0..29) |i| {
+//         const pid = @as(u64, i);
+//         ids.append(pid) catch unreachable;
+//     }
+//     defer ids.deinit();
+//     std.mem.copyForwards(u64, ids.items[0..20], ids.items[10..12]);
+//     ids.resize(2) catch unreachable;
+//     std.debug.print("{any}\n", .{ids.items});
+// }

@@ -69,8 +69,9 @@ pub const DB = struct {
     _path: []const u8,
     file: std.fs.File,
     filesz: usize,
+    opened: bool,
     //lockFile: std.fs.File,
-    dataRef: ?[]u8, // mmap'ed readonly, write throws SEGV
+    dataRef: ?[]u8 = null, // mmap'ed readonly, write throws SEGV
     // data: ?*[consts.MaxMMapStep]u8,
     datasz: usize,
 
@@ -103,20 +104,22 @@ pub const DB = struct {
 
     /// Returns the string representation of the database.
     pub fn string(self: *const Self, _allocator: std.mem.Allocator) []u8 {
-        const buf = std.ArrayList(u8).init(_allocator);
+        var buf = std.ArrayList(u8).init(_allocator);
         defer buf.deinit();
         const writer = buf.writer();
-        writer.print("meta0: {}\n", .{self.meta0}) catch unreachable;
-        writer.print("meta1: {}\n", .{self.meta1}) catch unreachable;
-        writer.print("freelist:{}\n", .{self.freelist}) catch unreachable;
-        writer.print("DB<{}>\n", self._path);
-        return buf.toOwnedSlice();
+        writer.print("meta0: {}\n", .{self.meta0.*}) catch unreachable;
+        writer.print("meta1: {}\n", .{self.meta1.*}) catch unreachable;
+        const str = self.freelist.string(self.allocator);
+        defer self.allocator.free(str);
+        writer.print("freelist:<{s}>\n", .{str}) catch unreachable;
+        writer.print("DB:<{s}>\n", .{self._path}) catch unreachable;
+        return buf.toOwnedSlice() catch unreachable;
     }
 
     /// Creates and opens a database at the given path.
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
-    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: std.fs.File.Mode, options: Options) !*Self {
+    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: Options) !*Self {
         const db = try allocator.create(DB);
         db.allocator = allocator;
         // Set default options if no options are proveide.
@@ -129,11 +132,13 @@ pub const DB = struct {
         db.mmaplock = .{};
         db.metalock = .{};
         db.statlock = .{};
+        db.rwlock = .{};
         db.rwtx = null;
+        db.dataRef = null;
+        db.pageSize = 0;
 
         // Open data file and separate sync handler for metadata writes.
-        db._path = filePath;
-
+        db._path = util.cloneBytes(db.allocator, filePath);
         if (options.read_only) {
             db.readOnly = true;
             db.file = try std.fs.cwd().openFile(db._path, std.fs.File.OpenFlags{
@@ -143,12 +148,25 @@ pub const DB = struct {
         }
         if (!options.read_only) {
             const createFlag = std.fs.File.CreateFlags{
-                .mode = fileMode,
+                .mode = fileMode orelse std.fs.File.default_mode,
                 .truncate = false,
                 .exclusive = true,
                 .lock = .exclusive,
+                .read = true,
             };
-            db.file = try std.fs.cwd().createFile(db._path, createFlag);
+
+            db.file = blk: {
+                const fileFp = std.fs.cwd().createFile(db._path, createFlag) catch |err| switch (err) {
+                    std.fs.File.OpenError.PathAlreadyExists => {
+                        const fp = try std.fs.cwd().openFile(db._path, .{ .mode = .read_write });
+                        break :blk fp;
+                    },
+                    else => {
+                        return err;
+                    },
+                };
+                break :blk fileFp;
+            };
         }
         // Lock file so that other processes using Bolt in read-write mmode cannot
         // use the database at the same time. This would cause corruption since
@@ -164,12 +182,27 @@ pub const DB = struct {
             // Initialize new files with meta pagess.
             try db.init();
         } else {
-            // TODO
             // Read the first meta page to determine the page size.
+            const buf = try db.allocator.alloc(u8, 0x1000);
+            defer db.allocator.free(buf);
+            const sz = try db.file.readAll(buf[0..]);
+            std.debug.print("has load meta size: {}\n", .{sz});
+            const m = db.pageInBuffer(buf[0..sz], 0).meta();
+            db.pageSize = blk: {
+                m.validate() catch {
+                    break :blk consts.PageSize;
+                };
+                break :blk m.page_size;
+            };
         }
         errdefer db.close() catch unreachable;
         // Memory map the data file.
         try db.mmap(options.initialMmapSize);
+
+        // Read in the freelist.
+        db.freelist = freelist.FreeList.init(db.allocator);
+        db.freelist.read(db.pageById(db.getMeta().free_list));
+        db.opened = true;
         return db;
     }
 
@@ -179,6 +212,7 @@ pub const DB = struct {
         self.pageSize = consts.PageSize;
         // Create two meta pages on a buffer.
         const buf = try self.allocator.alloc(u8, self.pageSize * 4);
+        defer self.allocator.free(buf);
         for (0..2) |i| {
             const p = self.pageInBuffer(buf, @as(page.PgidType, i));
             p.id = @as(page.PgidType, i);
@@ -193,6 +227,7 @@ pub const DB = struct {
             m.root = bucket._Bucket{ .root = 3 }; // So the top root bucket is a leaf
             m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
             m.txid = @as(consts.TxId, i);
+            m.flags = 0;
             std.debug.print("init meta{}\n", .{i});
             m.check_sum = m.sum64();
         }
@@ -215,6 +250,7 @@ pub const DB = struct {
         // Write the buffer to our data file.
         try self.file.pwriteAll(buf, 0);
         try self.file.sync();
+        self.filesz = buf.len;
     }
 
     /// Opens the underlying memory-mapped file and initializes the meta references.
@@ -222,7 +258,6 @@ pub const DB = struct {
     pub fn mmap(self: *Self, minsz: usize) !void {
         self.mmaplock.lock();
         defer self.mmaplock.unlock();
-
         const fileInfo = try self.file.metadata();
         // ensure the size is at least the minmum size.
         var size = @as(usize, fileInfo.size());
@@ -245,11 +280,12 @@ pub const DB = struct {
         }
 
         // Memory-map the data file as a byte slice.
-        _ = try util.mmap(self.file, size, true);
-
+        self.dataRef = try util.mmap(self.file, size, true);
+        std.debug.print("succeed to init data reference: {}\n", .{size});
         // Save references to the meta pages.
         self.meta0 = self.pageById(0).meta();
         self.meta1 = self.pageById(1).meta();
+        // defer std.debug.print("succeed to load meta, {any}\t {any}\n", .{ self.meta0.*, self.meta1.* });
 
         // Validate the meta pages. We only return an error if both meta pages fail
         // validation, since meta0 failing validation means that it wasn't saved
@@ -267,7 +303,7 @@ pub const DB = struct {
     fn mmapSize(_: *const Self, size: usize) !usize {
         // Double the size from 32KB until 1GB
         var i: u32 = 15;
-        while (i < 30) {
+        while (i <= 30) {
             const shifted = i << 1;
             if (size <= shifted) {
                 return shifted;
@@ -403,12 +439,30 @@ pub const DB = struct {
     }
 
     pub fn close(self: *Self) !void {
+        defer std.debug.print("succeed to close db!\n", .{});
         defer self.allocator.destroy(self);
-        // self.metalock.lock();
-        // defer self.metalock.unlock();
-        if (self.dataRef) |data| {
-            self.allocator.free(data);
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+
+        self.metalock.lock();
+        defer self.metalock.unlock();
+
+        self.mmaplock.lock();
+        self.mmaplock.unlock();
+        self._close();
+    }
+
+    fn _close(self: *Self) void {
+        if (!self.opened) {
+            return;
         }
+        self.opened = false;
+
+        util.munmap(self.dataRef.?);
+        self.file.close();
+        self.allocator.free(self._path);
+
+        self.freelist.deinit();
     }
 };
 
@@ -563,9 +617,18 @@ fn opfn(p: []u8, n: i64) void {
 test "DB" {
     var options = defaultOptions;
     options.read_only = false;
-    options.initialMmapSize = consts.PageSize;
+    options.initialMmapSize = 10 * consts.PageSize;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
     defer std.testing.allocator.free(filePath);
-    const kvDB = DB.open(std.testing.allocator, filePath, 0, options) catch unreachable;
-    defer kvDB.close() catch unreachable;
+    {
+        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+        try kvDB.close();
+    }
+    {
+        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+        const dbStr = kvDB.string(std.testing.allocator);
+        defer std.testing.allocator.free(dbStr);
+        std.debug.print("String: {s}\n", .{dbStr});
+        try kvDB.close();
+    }
 }
