@@ -20,7 +20,7 @@ pub const TX = struct {
     managed: bool,
     db: ?*db.DB,
     meta: *db.Meta,
-    root: bucket.Bucket,
+    root: *bucket.Bucket,
     pages: std.AutoHashMap(page.PgidType, *page.Page),
     stats: TxStats,
 
@@ -37,18 +37,18 @@ pub const TX = struct {
 
     /// Initializes the transaction.
     pub fn init(_db: *db.DB) *Self {
-        var self = _db.allocator.create(Self) catch unreachable;
+        const self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
         self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(_db.allocator);
+        std.debug.print("the meta copy is \n", .{});
 
         // Copy the meta page since it can be changed by the writer.
         self.meta = _db.allocator.create(db.Meta) catch unreachable;
         _db.getMeta().copy(self.meta);
-
         // Copy over the root bucket.
         self.root = bucket.Bucket.init(self);
-        self.root._b.root = self.meta.root;
-        std.log.info("tx's root bucket {}", .{self.root._b.root});
+        self.root._b.? = self.meta.root;
+        std.log.info("tx's root bucket {any}", .{self.root._b.?});
 
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
@@ -190,6 +190,7 @@ pub const TX = struct {
 
     // Internal rollback function.
     pub fn _rollback(self: *Self) void {
+        //std.debug.print("transaction executes rollback!\n", .{});
         if (self.db == null) {
             return;
         }
@@ -213,10 +214,13 @@ pub const TX = struct {
         }
 
         // clear all reference.
+        const allocator = self.db.?.allocator;
+        self.db.?.allocator.destroy(self.meta);
         self.db = null;
-        self.meta = null;
         self.root = undefined;
         self.pages.deinit();
+        self.root.deinit();
+        allocator.destroy(self);
     }
 
     /// Iterates over every page within a given page and executes a function.
@@ -250,7 +254,7 @@ pub const TX = struct {
     }
 
     pub fn getDB(self: *Self) *db.DB {
-        return self.db;
+        return self.db.?;
     }
 
     /// Returns current database size in bytes as seen by this transaction.
@@ -272,23 +276,23 @@ pub const TX = struct {
 // Represents statusctics about the actiosn performed by the transaction
 pub const TxStats = packed struct {
     // Page statistics.
-    page_count: usize, // number of page allocations
-    page_alloc: usize, // total bytes allocated
+    page_count: usize = 0, // number of page allocations
+    page_alloc: usize = 0, // total bytes allocated
 
     // Cursor statistics
-    cursor_count: usize, // number of cursors created
+    cursor_count: usize = 0, // number of cursors created
 
     // Node statistics.
-    nodeCount: usize, // number of node allocations
-    nodeDeref: usize, // number of node dereferences
+    nodeCount: usize = 0, // number of node allocations
+    nodeDeref: usize = 0, // number of node dereferences
 
     // Rebalance statstics
-    rebalance: usize, // number of node rebalances
-    rebalance_time: u64,
+    rebalance: usize = 0, // number of node rebalances
+    rebalance_time: u64 = 0,
 
     // Split/Spill statistics
-    split: usize, // number of nodes split
-    spill: usize, // number of nodes spilled
+    split: usize = 0, // number of nodes split
+    spill: usize = 0, // number of nodes spilled
     spill_time: u64 = 0, // total time spent spilling
 
     // Write statistics

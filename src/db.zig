@@ -7,6 +7,7 @@ const freelist = @import("./freelist.zig");
 const util = @import("./util.zig");
 const consts = @import("./consts.zig");
 const Error = @import("./error.zig").Error;
+const TX = tx.TX;
 
 const Page = page.Page;
 // TODO
@@ -148,6 +149,8 @@ pub const DB = struct {
         db.rwtx = null;
         db.dataRef = null;
         db.pageSize = 0;
+        db.txs = std.ArrayList(*TX).init(allocator);
+        db.stats = Stats{};
 
         // Open data file and separate sync handler for metadata writes.
         db._path = util.cloneBytes(db.allocator, filePath);
@@ -464,6 +467,188 @@ pub const DB = struct {
         self._close();
     }
 
+    // Begin starts a new transaction.
+    // Multiple read-only transactions can be used concurrently but only one write transaction can be used at a time. Starting multiple write transactions
+    // will cause the calls to back and be serialized until the current write transaction finishes.
+    //
+    // Transactions should not be dependent on the one another. Opening a read
+    // transaction and a write transaction in the same goroutine can cause the
+    // writer to deadlock because the databases periodically needs to re-map itself
+    // as it grows and it cannot do that while a read transaction is open.
+    //
+    // If a long running read transaction (for example, a snapshot transaction) is
+    // needed, you might want to send DB.initialMmapSize to a larger enough value to avoid potential blocking of write transaction.
+    //
+    // *IMPORTANT*: You must close read-only transactions after you are finished or else the database will not reclaim old pages.
+    pub fn begin(self: *Self, writable: bool) Error!*TX {
+        if (writable) {
+            return self.beginRWTx();
+        }
+        return self.beginTx();
+    }
+
+    fn beginTx(self: *Self) Error!*TX {
+        // Lock the meta pages while we initialize the transaction. We obtain
+        // the meta lock before the mmap lock because that's the order that the
+        // write transaction will obtain them.
+        self.metalock.lock();
+
+        // Obtain a read-only lock on the mmap. When the mmap is remapped it will
+        // obtain a write lock so all transactions must finish before it can be
+        // remapped.
+        self.mmaplock.lockShared();
+
+        // Exit if the database is not open yet.
+        if (!self.opened) {
+            self.mmaplock.unlockShared();
+            self.metalock.unlock();
+            return Error.DatabaseNotOpen;
+        }
+
+        // Create a transaction associated with the database.
+        const trx = TX.init(self);
+        // Keep track of transaction until it closes.
+        self.txs.append(tx) catch unreachable;
+        const n = self.txs.items.len;
+
+        // Unlock the meta pages
+        self.metalock.unlock();
+
+        // Update the transaction stats.
+        self.statlock.lock();
+        self.stats.tx_n += 1;
+        self.stats.open_tx_n = n;
+        self.statlock.unlock();
+
+        return trx;
+    }
+
+    fn beginRWTx(self: *Self) Error!*TX {
+        // If the database was opened with Options.ReadOnly, return an error.
+        if (self.readOnly) {
+            return Error.DatabaseReadOnly;
+        }
+
+        // Obtain writer lock. This released by the transaction when it closes.
+        // This is enforces only one writer transaction at a time.
+        self.rwlock.lock();
+
+        // Once we have the writer lock then we can lock the meta pages so that
+        // we can set up the transaction.
+        self.metalock.lock();
+        defer self.metalock.unlock();
+
+        // Exit if the database is not open yet.
+        if (!self.opened) {
+            self.rwlock.unlock();
+            return Error.DatabaseNotOpen;
+        }
+
+        // Create a transaction associated with the database.
+        const trx = TX.init(self);
+        self.rwtx = trx;
+
+        // Free any pages associated with closed read-only transactions.
+        var minid: u64 = std.math.maxInt(u64);
+        if (self.txs.items) |_trx| {
+            if (_trx.getMeta().txid < minid) {
+                minid = _trx.getMeta().txid;
+            }
+        }
+
+        if (minid > 0) {
+            self.freelist.release(minid - 1);
+        }
+
+        return trx;
+    }
+
+    /// Executes a function within the context of a read-write managed transaction.
+    /// If no error is returned from the function then the transaction is committed.
+    /// If an error is returned then the entire transaction is rolled back.
+    /// Any error that is returned from the function or returned from the commit is
+    /// returned from the update() method.
+    ///
+    /// Attempting to manually commit or rollback within the function will cause a panic.
+    pub fn update(self: *Self, func: fn (self: *Self) (!void)) !void {
+        const trx = try self.begin(true);
+
+        // Make sure the transaction rolls back in the event of a panic.
+        errdefer {
+            if (trx.db) {
+                trx._rollback();
+            }
+        }
+
+        // Mark as a managed tx so that the inner function cannot manually commit.
+        trx.managed = true;
+
+        // If an errors is returned from the function then rollback and return error.
+
+        defer trx.managed = false;
+        const err = func(trx);
+        trx._rollback();
+        if (err) {} else {
+            _ = trx.rollback();
+            return err;
+        }
+
+        try trx.commit();
+    }
+
+    /// Executes a function within the context of a managed read-only transaction.
+    /// Any error that is returned from the function is returned from the view() method.
+    ///
+    /// Attempting to manually rollback within the function will cause a panic.
+    pub fn view(self: *Self, func: fn (self: *Self) (!void)) !void {
+        const trx = try self.begin(false);
+
+        // Make sure the transaction rolls back in the event of a panic.
+        defer if (trx.db) trx._rollback();
+
+        // Mark as managed tx so that the inner function cannot manually rollback.
+        trx.managed = true;
+
+        // If an error is returned from the function then pass it through.
+        const err = func(trx);
+        trx.managed = false;
+        if (err) {} else {
+            _ = trx.rollback();
+            return err;
+        }
+
+        try trx.rollback();
+    }
+
+    /// Removes a transaction from the database.
+    pub fn removeTx(self: *Self, trx: *TX) void {
+        // Release the read lock on the mmap.
+        self.mmaplock.unlockShared();
+
+        // Use the meta lock to restrict access to the DB object.
+        self.metalock.lock();
+
+        std.debug.print("transaction executes rollback!\n", .{});
+        // Remove the transaction.
+        for (self.txs.items, 0..) |_trx, i| {
+            if (_trx == trx) {
+                _ = self.txs.orderedRemove(i);
+            }
+        }
+
+        const n = self.txs.items.len;
+
+        std.debug.print("1transaction executes rollback!\n", .{});
+        // Unlock the meta pages.
+        self.metalock.unlock();
+
+        // Merge statistics.
+        self.statlock.lock();
+        self.stats.open_tx_n = n;
+        self.stats.tx_stats.add(&trx.stats);
+        self.statlock.unlock();
+    }
+
     fn _close(self: *Self) void {
         if (!self.opened) {
             return;
@@ -516,16 +701,16 @@ pub const defaultOptions = Options{
 // Represents statistics about the database
 pub const Stats = packed struct {
     // freelist stats
-    free_page_n: usize, // total number of free pages on the freelist
-    pending_page_n: usize, // total number of pending pages on the freelist
-    free_alloc: usize, // total bytes allocated in free pages
-    free_list_inuse: usize, // total bytes used by the freelist
+    free_page_n: usize = 0, // total number of free pages on the freelist
+    pending_page_n: usize = 0, // total number of pending pages on the freelist
+    free_alloc: usize = 0, // total bytes allocated in free pages
+    free_list_inuse: usize = 0, // total bytes used by the freelist
 
     // Transaction stats
-    tx_n: usize, // total number of started read transactions
-    open_tx_n: usize, // number of currently open read transactions
+    tx_n: usize = 0, // total number of started read transactions
+    open_tx_n: usize = 0, // number of currently open read transactions
 
-    tx_stats: tx.TxStats, // global, ongoing stats
+    tx_stats: tx.TxStats = tx.TxStats{}, // global, ongoing stats
 
     const Self = @This();
 
@@ -645,8 +830,9 @@ test "DB" {
         const pageStr = kvDB.pageString(std.testing.allocator);
         defer std.testing.allocator.free(pageStr);
         std.debug.print("{s}\n", .{pageStr});
-        try kvDB.close();
+        defer kvDB.close() catch unreachable;
 
-        _ = tx.TX.init(kvDB);
+        const trx = tx.TX.init(kvDB);
+        defer trx.rollback() catch unreachable;
     }
 }

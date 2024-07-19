@@ -238,18 +238,18 @@ pub const FreeList = struct {
         self.read(p);
 
         // Build a cache of only pending pages.
-        const pcache = std.AutoHashMap(page.PgidType, bool).init(self.allocator);
-        const vitr = self.pending.valueIterator();
+        var pcache = std.AutoHashMap(page.PgidType, bool).init(self.allocator);
+        var vitr = self.pending.valueIterator();
 
         while (vitr.next()) |pendingIDs| {
-            for (pendingIDs.items) |pendingID| {
+            for (pendingIDs.*) |pendingID| {
                 pcache.put(pendingID, true) catch unreachable;
             }
         }
 
         // Check each page in the freelist and build a new available freelist.
         // with any pages not in the pending lists.
-        const a = std.ArrayList(page.PgidType).init(self.allocator);
+        var a = std.ArrayList(page.PgidType).init(self.allocator);
         defer a.deinit();
         for (self.ids.items) |id| {
             if (!pcache.contains(id)) {

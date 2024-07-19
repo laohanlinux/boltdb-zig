@@ -13,7 +13,7 @@ const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 
 // Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
-    _b: ?*_Bucket = null,
+    _b: ?_Bucket = null,
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
@@ -35,7 +35,7 @@ pub const Bucket = struct {
         const b = _tx.db.?.allocator.create(Self) catch unreachable;
         b._b = _Bucket{};
         b.tx = _tx;
-        b.allocator = _tx.db.?.allocate;
+        b.allocator = _tx.db.?.allocator;
         if (_tx.writable) { // TODO ?
             b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
             b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
@@ -46,10 +46,10 @@ pub const Bucket = struct {
     pub fn deinit(self: *Self) void {
         self.buckets.deinit();
         self.nodes.deinit();
-        self.allocator.free(self.name);
         if (self.tx.?.writable) {
-            self.tx.?.getDB().allocator.destroy(self._b);
+            // self.tx.?.getDB().allocator.destroy(self._b.?);
         }
+        self.allocator.destroy(self);
     }
 
     /// Create a cursor associated with the bucket.
