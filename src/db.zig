@@ -8,6 +8,7 @@ const util = @import("./util.zig");
 const consts = @import("./consts.zig");
 const Error = @import("./error.zig").Error;
 const TX = tx.TX;
+const PageFlag = consts.PageFlag;
 
 const Page = page.Page;
 // TODO
@@ -245,7 +246,7 @@ pub const DB = struct {
             m.root = bucket._Bucket{ .root = 3 }; // So the top root bucket is a leaf
             m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
             m.txid = @as(consts.TxId, i);
-            m.flags = 0;
+            m.flags = consts.intFromFlags(PageFlag.meta);
             std.debug.print("init meta{}\n", .{i});
             m.check_sum = m.sum64();
         }
@@ -508,7 +509,7 @@ pub const DB = struct {
         // Create a transaction associated with the database.
         const trx = TX.init(self);
         // Keep track of transaction until it closes.
-        self.txs.append(tx) catch unreachable;
+        self.txs.append(trx) catch unreachable;
         const n = self.txs.items.len;
 
         // Unlock the meta pages
@@ -550,14 +551,14 @@ pub const DB = struct {
 
         // Free any pages associated with closed read-only transactions.
         var minid: u64 = std.math.maxInt(u64);
-        if (self.txs.items) |_trx| {
-            if (_trx.getMeta().txid < minid) {
-                minid = _trx.getMeta().txid;
+        for (self.txs.items) |_trx| {
+            if (_trx.meta.txid < minid) {
+                minid = _trx.meta.txid;
             }
         }
 
         if (minid > 0) {
-            self.freelist.release(minid - 1);
+            self.freelist.release(minid - 1) catch unreachable;
         }
 
         return trx;
@@ -600,23 +601,22 @@ pub const DB = struct {
     /// Any error that is returned from the function is returned from the view() method.
     ///
     /// Attempting to manually rollback within the function will cause a panic.
-    pub fn view(self: *Self, func: fn (self: *Self) (!void)) !void {
+    pub fn view(self: *Self, func: fn (self: *TX) void) !void {
         const trx = try self.begin(false);
 
         // Make sure the transaction rolls back in the event of a panic.
-        defer if (trx.db) trx._rollback();
+        errdefer if (trx.db) |_| trx._rollback();
 
         // Mark as managed tx so that the inner function cannot manually rollback.
         trx.managed = true;
 
         // If an error is returned from the function then pass it through.
-        const err = func(trx);
+        func(trx);
         trx.managed = false;
-        if (err) {} else {
-            _ = trx.rollback();
-            return err;
-        }
-
+        // if (err) {} else {
+        //     _ = trx.rollback();
+        //     return err;
+        // }
         try trx.rollback();
     }
 
@@ -645,6 +645,7 @@ pub const DB = struct {
         // Merge statistics.
         self.statlock.lock();
         self.stats.open_tx_n = n;
+        std.debug.print("{any}\n", .{self.stats});
         self.stats.tx_stats.add(&trx.stats);
         self.statlock.unlock();
     }
@@ -660,6 +661,7 @@ pub const DB = struct {
         self.allocator.free(self._path);
 
         self.freelist.deinit();
+        self.txs.deinit();
     }
 };
 
@@ -831,8 +833,17 @@ test "DB" {
         defer std.testing.allocator.free(pageStr);
         std.debug.print("{s}\n", .{pageStr});
         defer kvDB.close() catch unreachable;
-
-        const trx = tx.TX.init(kvDB);
-        defer trx.rollback() catch unreachable;
+        const viewFn = struct {
+            const _kvDB = kvDB;
+            fn view(_: *TX) void {
+                std.debug.print("page count: {}\n", .{_kvDB.pageSize});
+            }
+        };
+        for (0..10) |i| {
+            try kvDB.view(viewFn.view);
+            std.debug.assert(kvDB.stats.tx_n == (i + 1));
+        }
+        // const trx = tx.TX.init(kvDB);
+        // defer trx.rollback() catch unreachable;
     }
 }

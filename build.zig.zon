@@ -15,11 +15,11 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .string = .{
-            .url = "https://github.com/JakubSzark/zig-string/archive/refs/heads/master.tar.gz",
-            .hash = "1220fc05a513524010e93b4734392c728d5364fb6669b33cec9dae7225d56a5eedde"
-            //the correct hash will be suggested by zig
-        }
+        // .string = .{
+        //     .url = "https://github.com/JakubSzark/zig-string/archive/refs/heads/master.tar.gz",
+        //     .hash = "1220fc05a513524010e93b4734392c728d5364fb6669b33cec9dae7225d56a5eedde"
+        //     //the correct hash will be suggested by zig
+        // }
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.
         //.example = .{
         //    // When updating this field to a new URL, be sure to delete the corresponding

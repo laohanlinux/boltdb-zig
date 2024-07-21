@@ -6,6 +6,10 @@ const Cursor = @import("./cursor.zig").Cursor;
 const consts = @import("./consts.zig");
 const TxId = consts.TxId;
 const Error = @import("./error.zig").Error;
+const DB = db.DB;
+const Meta = db.Meta;
+const Page = page.Page;
+const Bucket = bucket.Bucket;
 
 // Represent a read-only or read/write transaction on the database.
 // Read-only transactions can be used for retriving values for keys and creating cursors.
@@ -18,10 +22,10 @@ const Error = @import("./error.zig").Error;
 pub const TX = struct {
     writable: bool,
     managed: bool,
-    db: ?*db.DB,
-    meta: *db.Meta,
-    root: *bucket.Bucket,
-    pages: std.AutoHashMap(page.PgidType, *page.Page),
+    db: ?*DB,
+    meta: *Meta,
+    root: *Bucket,
+    pages: std.AutoHashMap(page.PgidType, *Page),
     stats: TxStats,
 
     _commitHandlers: std.ArrayList(*const fn () void),
@@ -36,14 +40,15 @@ pub const TX = struct {
     const Self = @This();
 
     /// Initializes the transaction.
-    pub fn init(_db: *db.DB) *Self {
+    pub fn init(_db: *DB) *Self {
         const self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
-        self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(_db.allocator);
+        self.pages = std.AutoHashMap(page.PgidType, *Page).init(_db.allocator);
+        self.stats = TxStats{};
         std.debug.print("the meta copy is \n", .{});
 
         // Copy the meta page since it can be changed by the writer.
-        self.meta = _db.allocator.create(db.Meta) catch unreachable;
+        self.meta = _db.allocator.create(Meta) catch unreachable;
         _db.getMeta().copy(self.meta);
         // Copy over the root bucket.
         self.root = bucket.Bucket.init(self);
@@ -55,6 +60,8 @@ pub const TX = struct {
             self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.db.?.allocator);
             self.meta.txid += 1;
         }
+
+        self._commitHandlers = std.ArrayList(*const fn () void).init(_db.allocator);
         return self;
     }
 
@@ -208,16 +215,15 @@ pub const TX = struct {
         }
         if (self.writable) {
             // Grab freelist stats.
-
         } else {
             self.db.?.removeTx(self);
+            std.debug.print("remove tx({}) from db\n", .{self.meta.txid});
         }
 
         // clear all reference.
         const allocator = self.db.?.allocator;
         self.db.?.allocator.destroy(self.meta);
         self.db = null;
-        self.root = undefined;
         self.pages.deinit();
         self.root.deinit();
         allocator.destroy(self);

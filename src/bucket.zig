@@ -36,10 +36,10 @@ pub const Bucket = struct {
         b._b = _Bucket{};
         b.tx = _tx;
         b.allocator = _tx.db.?.allocator;
-        if (_tx.writable) { // TODO ?
-            b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
-            b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
-        }
+        // if (_tx.writable) { // TODO ?
+        b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
+        b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
+        // }
         return b;
     }
 

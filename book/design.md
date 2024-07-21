@@ -31,3 +31,19 @@ rootBucket:page.Page{ .id = 3, .flags = 2, .count = 0, .overflow = 0 }
 freelist:page.Page{ .id = 2, .flags = 16, .count = 0, .overflow = 0 }
 ````
 
+
+
+```mermaid
+---
+title: Page Tree
+---
+flowchart TD
+	m0(meta0)
+	m1(meta1: rootBucketPgid=3, freelistPgid=2)
+	r0(((rootBucket)))
+	f(freelistPgid)
+	m1 --> r0
+	m1 --> f
+
+```
+
