@@ -601,7 +601,7 @@ pub const DB = struct {
     /// Any error that is returned from the function is returned from the view() method.
     ///
     /// Attempting to manually rollback within the function will cause a panic.
-    pub fn view(self: *Self, func: fn (self: *TX) void) !void {
+    pub fn view(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
 
         // Make sure the transaction rolls back in the event of a panic.
@@ -611,12 +611,13 @@ pub const DB = struct {
         trx.managed = true;
 
         // If an error is returned from the function then pass it through.
-        func(trx);
+        errdefer trx.managed = false;
+        // errdefer trx.rollback() catch |err| {
+        //      std.debug.print("failed to rollback, err: {any}\n", .{err});
+        //};
+        errdefer trx.rollback() catch {};
         trx.managed = false;
-        // if (err) {} else {
-        //     _ = trx.rollback();
-        //     return err;
-        // }
+        try func(ctx, trx);
         try trx.rollback();
     }
 
@@ -834,15 +835,22 @@ test "DB" {
         std.debug.print("{s}\n", .{pageStr});
         defer kvDB.close() catch unreachable;
         const viewFn = struct {
-            const _kvDB = kvDB;
-            fn view(_: *TX) void {
-                std.debug.print("page count: {}\n", .{_kvDB.pageSize});
+            fn view(_kvDB: ?*DB, _: *TX) Error!void {
+                if (_kvDB == null) {
+                    return Error.DatabaseNotOpen;
+                }
+                std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
             }
         };
         for (0..10) |i| {
-            try kvDB.view(viewFn.view);
+            try kvDB.view(?*DB, kvDB, viewFn.view);
             std.debug.assert(kvDB.stats.tx_n == (i + 1));
+            if (i == 9) {
+                const err = kvDB.view(?*DB, null, viewFn.view);
+                std.debug.assert(err == Error.DatabaseNotOpen);
+            }
         }
+
         // const trx = tx.TX.init(kvDB);
         // defer trx.rollback() catch unreachable;
     }
