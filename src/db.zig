@@ -374,7 +374,7 @@ pub const DB = struct {
         return Page.init(buf);
     }
 
-    // meta retriews the current meta page reference.
+    /// meta retriews the current meta page reference.
     pub fn getMeta(self: *const Self) *Meta {
         // We have to return the meta with the highest txid which does't fail
         // validation. Otherwise, we can cause errors when in fact the database is
@@ -424,7 +424,7 @@ pub const DB = struct {
         return p;
     }
 
-    // Grows the size of the database to the given sz.
+    /// Grows the size of the database to the given sz.
     pub fn grow(self: *Self, sz: usize) !void {
         // Ignore if the new size is less than valiable file size.
         if (sz <= self.filesz) {
@@ -571,7 +571,7 @@ pub const DB = struct {
     /// returned from the update() method.
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
-    pub fn update(self: *Self, func: fn (self: *Self) (!void)) !void {
+    pub fn update(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *Self) (!void)) !void {
         const trx = try self.begin(true);
 
         // Make sure the transaction rolls back in the event of a panic.
@@ -587,7 +587,7 @@ pub const DB = struct {
         // If an errors is returned from the function then rollback and return error.
 
         defer trx.managed = false;
-        const err = func(trx);
+        const err = func(CTX, ctx, trx);
         trx._rollback();
         if (err) {} else {
             _ = trx.rollback();
@@ -611,13 +611,9 @@ pub const DB = struct {
         trx.managed = true;
 
         // If an error is returned from the function then pass it through.
-        errdefer trx.managed = false;
-        // errdefer trx.rollback() catch |err| {
-        //      std.debug.print("failed to rollback, err: {any}\n", .{err});
-        //};
-        errdefer trx.rollback() catch {};
-        trx.managed = false;
+        //errdefer trx.managed = false;
         try func(ctx, trx);
+        trx.managed = false;
         try trx.rollback();
     }
 
@@ -834,24 +830,51 @@ test "DB" {
         defer std.testing.allocator.free(pageStr);
         std.debug.print("{s}\n", .{pageStr});
         defer kvDB.close() catch unreachable;
-        const viewFn = struct {
-            fn view(_kvDB: ?*DB, _: *TX) Error!void {
-                if (_kvDB == null) {
-                    return Error.DatabaseNotOpen;
+        {
+            const viewFn = struct {
+                fn view(_kvDB: ?*DB, _: *TX) Error!void {
+                    if (_kvDB == null) {
+                        return Error.DatabaseNotOpen;
+                    }
+                    std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
                 }
-                std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
-            }
-        };
-        for (0..10) |i| {
-            try kvDB.view(?*DB, kvDB, viewFn.view);
-            std.debug.assert(kvDB.stats.tx_n == (i + 1));
-            if (i == 9) {
-                const err = kvDB.view(?*DB, null, viewFn.view);
-                std.debug.assert(err == Error.DatabaseNotOpen);
+            };
+            for (0..10) |i| {
+                try kvDB.view(?*DB, kvDB, viewFn.view);
+                std.debug.assert(kvDB.stats.tx_n == (i + 1));
+                if (i == 9) {
+                    const err = kvDB.view(?*DB, null, viewFn.view);
+                    std.debug.assert(err == Error.DatabaseNotOpen);
+                }
             }
         }
 
-        // const trx = tx.TX.init(kvDB);
-        // defer trx.rollback() catch unreachable;
+        // parallel
+        var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
+        defer joins.deinit();
+        const parallelViewFn = struct {
+            fn view(_kdb: *DB) void {
+                const viewFn = struct {
+                    fn view(_kvDB: ?*DB, _: *TX) Error!void {
+                        if (_kvDB == null) {
+                            return Error.DatabaseNotOpen;
+                        }
+                        std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
+                    }
+                };
+                _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
+            }
+        };
+        for (0..10) |_| {
+            const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
+            try joins.append(sp);
+        }
+
+        for (joins.items) |join| {
+            join.join();
+        }
+
+        std.debug.print("after stats count: {}\n", .{kvDB.stats.tx_n});
+        std.debug.assert(kvDB.stats.tx_n == 21);
     }
 }

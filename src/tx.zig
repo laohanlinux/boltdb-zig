@@ -187,7 +187,6 @@ pub const TX = struct {
     /// Closes the transaction and ignores all previous updates. Read-only
     /// transactions must be rolled back and not committed.
     pub fn rollback(self: *Self) Error!void {
-        std.debug.print("<<<<<<<>>>>>>>\n", .{});
         const assert = @import("./assert.zig").assert;
         assert(!self.managed, "managed tx rollback not allowed", .{});
         if (self.db == null) {
