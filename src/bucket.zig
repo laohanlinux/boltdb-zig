@@ -450,7 +450,7 @@ pub const Bucket = struct {
             return;
         }
 
-        self._forEachPageNode(self._b.?.root, CTX, c, 0, travel);
+        self._forEachPageNode(CTX, c, self._b.?.root, 0, travel);
     }
 
     fn _forEachPageNode(self: *Self, comptime CTX: type, c: CTX, pgid: page.PgidType, depth: usize, travel: fn (c: CTX, p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
@@ -463,12 +463,12 @@ pub const Bucket = struct {
         if (pNode.first) |p| {
             if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
                 for (p.branchPageElements().?) |elem| {
-                    self._forEachPageNode(elem.pgid, depth + 1, travel);
+                    self._forEachPageNode(CTX, c, elem.pgid, depth + 1, travel);
                 }
             }
         } else if (!pNode.second.?.isLeaf) {
             for (pNode.second.?.inodes.items) |iNode| {
-                self._forEachPageNode(iNode.pgid, depth + 1, travel);
+                self._forEachPageNode(CTX, c, iNode.pgid, depth + 1, travel);
             }
         }
     }
@@ -476,18 +476,18 @@ pub const Bucket = struct {
     /// Writes all the nodes for this bucket to dirty pages.
     pub fn spill(self: *Self) !void {
         // Spill all child buckets first.
-        const itr = self.buckets.iterator();
+        var itr = self.buckets.iterator();
         while (itr.next()) |entry| {
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
-            const value = std.ArrayList(u8).init(self.allocator);
-            if (entry.value_ptr.inlineable()) {
-                entry.value_ptr.free(); // TODO
+            var value = std.ArrayList(u8).init(self.allocator);
+            if (entry.value_ptr.*.inlineable()) {
+                entry.value_ptr.*.free(); // TODO
             } else {
-                try entry.value_ptr.spill();
+                try entry.value_ptr.*.spill();
                 // Update the child bucket header in this bucket.
-                try value.appendNTimes(u8, _Bucket.size());
+                try value.appendNTimes(0, _Bucket.size());
                 _ = _Bucket.init(value.items);
             }
 
@@ -531,7 +531,9 @@ pub const Bucket = struct {
         var size = page.Page.headerSize();
         for (n.?.inodes.items) |inode| {
             size += page.LeafPageElement.headerSize() + inode.key.?.len;
-            size += if (inode.value) |value| value.len orelse 0;
+            if (inode.value) |value| {
+                size += value.len;
+            }
             if (inode.flags & consts.BucketLeafFlag != 0) {
                 return false;
             } else if (size > self.maxInlineBucketSize()) {
@@ -576,7 +578,7 @@ pub const Bucket = struct {
 
     // Recursively frees all pages in the bucket.
     pub fn free(self: *Self) void {
-        if (self._b.root == 0) {
+        if (self._b == null or self._b.?.root == 0) {
             return;
         }
 
@@ -587,7 +589,7 @@ pub const Bucket = struct {
 
     fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*const Node, _: usize) void {
         if (p) |_p| {
-            trx.db.?.freelist.free(trx.meta.txid, _p);
+            trx.db.?.freelist.free(trx.meta.txid, _p) catch unreachable;
         } else {
             n.?.free();
         }
@@ -610,7 +612,7 @@ pub const Bucket = struct {
     pub fn pageNode(self: *Self, id: page.PgidType) PageOrNode {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
-        if (self._b.root == 0) {
+        if (self._b == null or self._b.?.root == 0) {
             std.log.info("this is a inline bucket, embed at page({})", .{id});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {

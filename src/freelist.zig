@@ -124,13 +124,15 @@ pub const FreeList = struct {
 
     // Releases a page and its overflow for a given transaction id.
     // If the page is already free then a panic will occur.
-    pub fn free(self: *Self, txid: TxId, p: *page.Page) !void {
+    pub fn free(self: *Self, txid: TxId, p: *const page.Page) !void {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
 
         // Free page and all its overflow pages.
-        const pending_ids = try self.pending.getKey(txid);
+        const pending_ids = self.pending.get(txid);
         var ids = std.ArrayList(page.PgidType).init(std.heap.page_allocator);
-        try ids.appendSlice(pending_ids);
+        if (pending_ids) |_pending_ids| {
+            try ids.appendSlice(_pending_ids);
+        }
         for (p.id..p.id + p.overflow) |id| {
             // Verify that page is not already free.
             assert(!self.cache.contains(id), "page({}) already free", .{id});
@@ -139,8 +141,11 @@ pub const FreeList = struct {
             try ids.append(id);
             try self.cache.put(id, true);
         }
-
-        self.pending[txid] = try ids.toOwnedSlice();
+        if (pending_ids != null) {
+            self.allocator.free(pending_ids.?);
+        }
+        const _ids = try ids.toOwnedSlice();
+        try self.pending.put(txid, _ids);
     }
 
     // Moves all page ids for a transaction id (or older) to the freelist.

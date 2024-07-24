@@ -533,7 +533,7 @@ pub const Node = struct {
     /// adds the node's underlying page to the freelist.
     pub fn free(self: *Self) void {
         if (self.pgid != 0) {
-            self.bucket.?.tx.?.db.freelist.free(self.bucket.?.tx.?.meta.txid, self.bucket.?.tx.?.page(self.pgid));
+            self.bucket.?.tx.?.db.?.freelist.free(self.bucket.?.tx.?.meta.txid, self.bucket.?.tx.?.getPage(self.pgid)) catch unreachable;
             // TODO why reset the node
             self.pgid = 0;
         }
@@ -547,14 +547,14 @@ pub const INode = struct {
     pgid: page.PgidType = 0,
     // The key is the first key in the inodes. the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
     // so the key should not be free. it will be free when the page is free.
-    key: ?[]u8 = null,
+    key: ?[]const u8 = null,
     // If the value is nil then it's a branch node.
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
     value: ?[]u8 = null,
     const Self = @This();
 
     /// Initializes a node.
-    pub fn init(flags: u32, pgid: page.PgidType, key: ?[]u8, value: ?[]u8) Self {
+    pub fn init(flags: u32, pgid: page.PgidType, key: ?[]const u8, value: ?[]u8) Self {
         var inode: Self = undefined;
         inode.flags = flags;
         inode.pgid = pgid;

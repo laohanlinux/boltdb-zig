@@ -65,6 +65,12 @@ pub const TX = struct {
         return self;
     }
 
+    pub fn destroy(self: *Self) void {
+        if (self.db) |_db| {
+            _db.allocator.destroy(self);
+        }
+    }
+
     /// Returns the current database size in bytes as seen by this transaction.
     pub fn size(self: *const Self) u64 {
         return self.meta.pgid * @as(u64, self.db.?.pageSize);
@@ -136,7 +142,7 @@ pub const TX = struct {
 
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
-        var startTime = try std.time.Timer.start();
+        var startTime = std.time.Timer.start() catch unreachable;
         errdefer self.rollback();
         try self.root.spill();
         self.stats.spill_time += startTime.lap();

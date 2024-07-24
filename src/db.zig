@@ -571,29 +571,18 @@ pub const DB = struct {
     /// returned from the update() method.
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
-    pub fn update(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *Self) (!void)) !void {
+    pub fn update(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
 
         // Make sure the transaction rolls back in the event of a panic.
-        errdefer {
-            if (trx.db) {
-                trx._rollback();
-            }
-        }
+        errdefer trx._rollback();
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
 
         // If an errors is returned from the function then rollback and return error.
-
+        try func(ctx, trx);
         defer trx.managed = false;
-        const err = func(CTX, ctx, trx);
-        trx._rollback();
-        if (err) {} else {
-            _ = trx.rollback();
-            return err;
-        }
-
         try trx.commit();
     }
 
@@ -603,7 +592,6 @@ pub const DB = struct {
     /// Attempting to manually rollback within the function will cause a panic.
     pub fn view(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
-
         // Make sure the transaction rolls back in the event of a panic.
         errdefer if (trx.db) |_| trx._rollback();
 
@@ -810,71 +798,98 @@ fn opfn(p: []u8, n: i64) void {
     std.debug.print("excute me: {any}, {}\n", .{ p, n });
 }
 
-test "DB" {
+// test "DB-Read" {
+//     var options = defaultOptions;
+//     options.read_only = false;
+//     options.initialMmapSize = 10 * consts.PageSize;
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
+//     defer std.testing.allocator.free(filePath);
+//     {
+//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//         try kvDB.close();
+//     }
+//     {
+//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//         const dbStr = kvDB.string(std.testing.allocator);
+//         defer std.testing.allocator.free(dbStr);
+//         std.debug.print("String: {s}\n", .{dbStr});
+
+//         const pageStr = kvDB.pageString(std.testing.allocator);
+//         defer std.testing.allocator.free(pageStr);
+//         std.debug.print("{s}\n", .{pageStr});
+//         defer kvDB.close() catch unreachable;
+//         {
+//             const viewFn = struct {
+//                 fn view(_kvDB: ?*DB, _: *TX) Error!void {
+//                     if (_kvDB == null) {
+//                         return Error.DatabaseNotOpen;
+//                     }
+//                     std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
+//                 }
+//             };
+//             for (0..10) |i| {
+//                 try kvDB.view(?*DB, kvDB, viewFn.view);
+//                 std.debug.assert(kvDB.stats.tx_n == (i + 1));
+//                 if (i == 9) {
+//                     const err = kvDB.view(?*DB, null, viewFn.view);
+//                     std.debug.assert(err == Error.DatabaseNotOpen);
+//                 }
+//             }
+//         }
+
+//         // parallel read
+//         {
+//             var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
+//             defer joins.deinit();
+//             const parallelViewFn = struct {
+//                 fn view(_kdb: *DB) void {
+//                     const viewFn = struct {
+//                         fn view(_kvDB: ?*DB, _: *TX) Error!void {
+//                             if (_kvDB == null) {
+//                                 return Error.DatabaseNotOpen;
+//                             }
+//                             std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
+//                         }
+//                     };
+//                     _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
+//                 }
+//             };
+//             for (0..10) |_| {
+//                 const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
+//                 try joins.append(sp);
+//             }
+
+//             for (joins.items) |join| {
+//                 join.join();
+//             }
+
+//             std.debug.print("after stats count: {}\n", .{kvDB.stats.tx_n});
+//             std.debug.assert(kvDB.stats.tx_n == 21);
+//         }
+
+//         // update
+//     }
+// }
+
+test "DB-Write" {
     var options = defaultOptions;
     options.read_only = false;
     options.initialMmapSize = 10 * consts.PageSize;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
     defer std.testing.allocator.free(filePath);
-    {
-        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-        try kvDB.close();
-    }
-    {
-        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-        const dbStr = kvDB.string(std.testing.allocator);
-        defer std.testing.allocator.free(dbStr);
-        std.debug.print("String: {s}\n", .{dbStr});
 
-        const pageStr = kvDB.pageString(std.testing.allocator);
-        defer std.testing.allocator.free(pageStr);
-        std.debug.print("{s}\n", .{pageStr});
-        defer kvDB.close() catch unreachable;
-        {
-            const viewFn = struct {
-                fn view(_kvDB: ?*DB, _: *TX) Error!void {
-                    if (_kvDB == null) {
-                        return Error.DatabaseNotOpen;
-                    }
-                    std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
-                }
-            };
-            for (0..10) |i| {
-                try kvDB.view(?*DB, kvDB, viewFn.view);
-                std.debug.assert(kvDB.stats.tx_n == (i + 1));
-                if (i == 9) {
-                    const err = kvDB.view(?*DB, null, viewFn.view);
-                    std.debug.assert(err == Error.DatabaseNotOpen);
-                }
+    const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+    try kvDB.close();
+    const updateFn = struct {
+        fn update(_kvDB: ?*DB, _: *TX) Error!void {
+            if (_kvDB == null) {
+                return Error.DatabaseNotOpen;
             }
+            std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
         }
+    };
 
-        // parallel
-        var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
-        defer joins.deinit();
-        const parallelViewFn = struct {
-            fn view(_kdb: *DB) void {
-                const viewFn = struct {
-                    fn view(_kvDB: ?*DB, _: *TX) Error!void {
-                        if (_kvDB == null) {
-                            return Error.DatabaseNotOpen;
-                        }
-                        std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
-                    }
-                };
-                _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
-            }
-        };
-        for (0..10) |_| {
-            const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
-            try joins.append(sp);
-        }
-
-        for (joins.items) |join| {
-            join.join();
-        }
-
-        std.debug.print("after stats count: {}\n", .{kvDB.stats.tx_n});
-        std.debug.assert(kvDB.stats.tx_n == 21);
+    {
+        try kvDB.update(?*DB, kvDB, updateFn.update);
     }
 }

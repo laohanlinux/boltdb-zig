@@ -174,11 +174,11 @@ pub const Cursor = struct {
 
     // Moves the cursor to a given key and returns it.
     // If the key does not exist then the next key is used.
-    pub fn _seek(self: *Self, seekKey: []u8) KeyValueRet {
+    pub fn _seek(self: *Self, seekKey: []const u8) KeyValueRet {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Start from root page/node and traverse to correct page.
         self.stack.resize(0) catch unreachable;
-        self.search(seekKey, self._bucket.?._b.root);
+        self.search(seekKey, self._bucket._b.?.root);
         var ref = &self.stack.getLast();
         // If the cursor is pointing to the end of page/node then return nil.
         if (ref.index >= ref.count()) {
@@ -268,8 +268,10 @@ pub const Cursor = struct {
     }
 
     /// Search recursively performs a binary search against a given page/node until it finds a given key.
-    pub fn search(self: *Self, key: []u8, pgid: page.PgidType) void {
-        const p: ?*page.Page, const n: ?*Node = self._bucket.pageNode(pgid);
+    pub fn search(self: *Self, key: []const u8, pgid: page.PgidType) void {
+        const pNode = self._bucket.pageNode(pgid);
+        const p = pNode.first;
+        const n = pNode.second;
         const condition = p == null or p.?.flags & (page.intFromFlags(page.PageFlage.branch) | page.intFromFlags(page.PageFlage.leaf)) != 0;
         assert(condition, "invalid page type: {d}: {x}", .{ p.?.id, p.?.flags });
         const e = ElementRef{ .p = p, .node = n };
@@ -301,10 +303,10 @@ pub const Cursor = struct {
         }
 
         // Start from root and traveerse down the hierarchy.
-        const n = self.stack.items[0].node orelse self._bucket.node(self.stack.items[0].p.?.id, null);
+        var n = self.stack.items[0].node orelse self._bucket.node(self.stack.items[0].p.?.id, null);
         for (self.stack.items[0 .. self.stack.items.len - 1]) |ref| {
             assert(!n.isLeaf, "expected branch node", .{});
-            n = n.childAt(ref.index);
+            n = n.childAt(ref.index).?;
         }
 
         assert(n.isLeaf, "expect leaf node", .{});
@@ -330,8 +332,8 @@ pub const Cursor = struct {
     }
 
     // Searches the leaf node on the top of the stack for a key
-    fn nsearch(self: *Self, key: []u8) void {
-        const e = &self.stack.getLast();
+    fn nsearch(self: *Self, key: []const u8) void {
+        var e = self.stack.getLast();
         const p = e.p;
         const n = e.node;
 
@@ -434,7 +436,7 @@ pub fn findEqualBranchElementFn(findKey: []u8, a: page.BranchPageElement, b: pag
     return order == std.math.Order.eq;
 }
 
-pub fn lessThanLeafElementFn(findKey: []u8, a: page.LeafPageElement, b: page.LeafPageElement) bool {
+pub fn lessThanLeafElementFn(findKey: []const u8, a: page.LeafPageElement, b: page.LeafPageElement) bool {
     var aKey: []u8 = undefined;
     if (a.pos == 0) {
         aKey = findKey;
