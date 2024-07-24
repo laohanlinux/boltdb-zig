@@ -492,6 +492,7 @@ pub const Bucket = struct {
             }
 
             // Skip writing the bucket if there are no matterialized nodes.
+            // If we delete a bucket ?
             if (entry.value_ptr.*.rootNode == null) {
                 continue;
             }
@@ -501,7 +502,7 @@ pub const Bucket = struct {
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {:0x} -> {:0x}", .{ entry.key_ptr.*, keyPairRef.first.? });
             assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: {:0x}", .{keyPairRef.third});
-            c.node().?.put(entry.key_ptr.*, entry.key_ptr.*, entry.value_ptr.*, 0, consts.BucketLeafFlag);
+            c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.items, 0, consts.BucketLeafFlag);
         }
 
         // Ignore if there's not a materialized root node.

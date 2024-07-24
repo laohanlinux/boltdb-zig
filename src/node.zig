@@ -153,7 +153,7 @@ pub const Node = struct {
     }
 
     // Inserts a key/value.
-    pub fn put(self: *Self, oldKey: []u8, newKey: []u8, value: []u8, pgid: page.PgidType, flags: u32) void {
+    pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: []u8, pgid: page.PgidType, flags: u32) void {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
         } else if (oldKey.len <= 0) {
@@ -374,7 +374,7 @@ pub const Node = struct {
     /// Writes the nodes to dirty pages and splits nodes as it goes.
     /// Returns and error if dirty pages cannot be allocated
     pub fn spill(self: *Self) !void {
-        const _tx = self.bucket.?.tx;
+        const _tx = self.bucket.?.tx.?;
         if (self.spilled) {
             return;
         }
@@ -382,26 +382,35 @@ pub const Node = struct {
         // Spill child nodes first. Child nodes can materialize sibling nodes in
         // the case of split-merge so we cannot use a range loop. We have to check
         // the children size on every loop iteration.
+        const lessThan = struct {
+            fn func(_: void, lhs: *Node, rhs: *Node) bool {
+                return std.mem.order([]u8, lhs.key.?, rhs.key.?) == .lt;
+            }
+        };
         std.mem.sort(
             *Node,
             self.children.items,
             {},
-            std.mem.lessThan,
+            lessThan.func,
         );
 
+        // We no longer need the child list because it's only used for spill tracking.
+        self.children.clearAndFree();
+
         // Split nodes into approprivate sizes, The first node will always be n.
-        const nodes = self.split(_tx.?.db.pageSize);
+        const nodes = self.split(_tx.db.?.pageSize);
         defer self.allocator.free(nodes);
 
         for (nodes) |node| {
             // Add node's page to the freelist if it's not new.
             if (node.pgid > 0) {
-                tx.?.db.freelist.free(_tx.?.meta.txid, _tx.?.getPage(node.pgid)) catch unreachable;
+                try _tx.db.?.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 node.pgid = 0;
             }
 
             // Allocate contiguous space for the node.
-            _ = _tx.?.allocate();
+            _ = _tx.allocate();
+            // TODO
         }
     }
 

@@ -313,7 +313,7 @@ pub const Cursor = struct {
         return n;
     }
 
-    fn searchNode(self: *Self, key: []u8, n: *const Node) void {
+    fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
         const index = std.sort.binarySearch(*INode, INode.init(0, 0, key, null), n.inodes.items, {}, findINodeFn);
         // Recursively search to the next node.
         self.stack.getLast().index = index orelse (self.stack.items.len - 1);
