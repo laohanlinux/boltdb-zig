@@ -188,9 +188,13 @@ pub const BranchPageElement = packed struct {
         return @sizeOf(Self);
     }
     /// Returns a byte slice of the node key.
-    pub fn key(self: *Self) []u8 {
-        const buf: [*]u8 = @ptrCast(self);
-        return buf[0..][self.pos..(self.pos + self.kSize)];
+    // pub fn key(self: *Self) []u8 {
+    //     const buf: [*]u8 = @ptrCast(self);
+    //     return buf[0..][self.pos..(self.pos + self.kSize)];
+    // }
+    pub fn key(self: *const Self) []const u8 {
+        const ptr = @as([*]u8, @ptrCast(@constCast(self)));
+        return ptr[self.pos..self.pos + self.kSize];
     }
 };
 
@@ -211,8 +215,8 @@ pub const LeafPageElement = packed struct {
     }
 
     // Return a byte slice of the node key.
-    pub fn key(self: *Self) []u8 {
-        const buf: [*]u8 = @ptrCast(self);
+    pub fn key(self: *const Self) []u8 {
+        const buf = @as([*]u8, @ptrCast(@constCast(self)));
         return buf[0..][self.pos..(self.pos + self.kSize)];
     }
 

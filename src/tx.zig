@@ -143,7 +143,7 @@ pub const TX = struct {
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;
-        errdefer self.rollback();
+        errdefer self.rollback() catch unreachable;
         try self.root.spill();
         self.stats.spill_time += startTime.lap();
 
@@ -153,8 +153,8 @@ pub const TX = struct {
 
         // Free the freelist and allocate new pages for it. This will overestimate
         // the size of the freelist but not underestimate the size (wich would be bad).
-        self.db.?.freelist.free(self.meta.txid, self.getPage(self.meta.free_list));
-        const p = try self.allocate((self.db.?.freelist.size() / self.db.?.pageSize) + 1);
+        self.db.?.freelist.free(self.meta.txid, self.getPage(self.meta.free_list)) catch unreachable;
+        const p = self.allocate((self.db.?.freelist.size() / self.db.?.pageSize) + 1) catch unreachable;
         try self.db.?.freelist.write(p);
         self.meta.free_list = p.id;
 
@@ -165,7 +165,7 @@ pub const TX = struct {
         }
 
         // Write dirty pages to disk.
-        startTime = try std.time.Timer.start();
+        startTime = std.time.Timer.start() catch unreachable;
         try self.write();
 
         // If strict mode is enabled then perform a consistency check.
@@ -200,6 +200,12 @@ pub const TX = struct {
         }
         self._rollback();
     }
+
+    pub fn write(_: *Self) Error!void {
+
+    }
+
+    pub fn writeMeta(_: *Self) Error!void {}
 
     // Internal rollback function.
     pub fn _rollback(self: *Self) void {
@@ -279,8 +285,7 @@ pub const TX = struct {
     }
 
     pub fn allocate(self: *Self, count: usize) !*page.Page {
-        const p = self.db.allocatePage(count);
-
+        const p = self.db.?.allocatePage(count);
         return p;
     }
 };

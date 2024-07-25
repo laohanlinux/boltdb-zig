@@ -12,7 +12,7 @@ pub const Node = struct {
     isLeaf: bool,
     unbalance: bool,
     spilled: bool,
-    key: ?[]u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
+    key: ?[]const u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
     pgid: page.PgidType, // The node's page id
     parent: ?*Node, // At memory
     children: Nodes, // the is a soft reference to the children of the node, so the children should not be free.
@@ -282,7 +282,7 @@ pub const Node = struct {
         while (true) {
             // Split node into two.
             const a, const b = self.splitTwo(pageSize);
-            nodes.append(a) catch unreachable;
+            nodes.append(a.?) catch unreachable;
 
             // If we can't split then exit the loop.
             if (b == null) {
@@ -290,7 +290,7 @@ pub const Node = struct {
             }
 
             // Set node to be so it gets split on the next function.
-            curNode = b;
+            curNode = b.?;
         }
 
         return nodes.items;
@@ -302,7 +302,7 @@ pub const Node = struct {
         // Ignore the split if the page doesn't have a least enough nodes for
         // two pages or if the nodes can fit in a single page.
         if (self.inodes.items.len <= page.min_keys_page * 2 or self.sizeLessThan(pageSize)) {
-            return [2]*Node{ self, null };
+            return [2]?*Node{ self, null };
         }
 
         // Determine the threshold before starting a new node.
@@ -312,8 +312,8 @@ pub const Node = struct {
         } else if (fillPercent > consts.maxFillPercent) {
             fillPercent = consts.maxFillPercent;
         }
-
-        const threshold = @as(usize, @intCast(@as(f64, @floatCast(pageSize)) * fillPercent));
+        const fPageSize: f64 = @floatFromInt(pageSize);
+        const threshold = @as(usize, @intFromFloat(fPageSize * fillPercent));
 
         // Determin split position and sizes of the two pages.
         const _splitIndex, _ = self.splitIndex(threshold);
@@ -322,7 +322,7 @@ pub const Node = struct {
         if (self.parent == null) {
             self.parent = Node.init(self.allocator);
             self.parent.?.bucket = self.bucket;
-            self.children.append(self); // children also is you!
+            self.children.append(self) catch unreachable; // children also is you!
         }
 
         // Create a new node and add it to the parent.
@@ -333,12 +333,12 @@ pub const Node = struct {
 
         // Split inodes across two nodes.
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
-        self.inodes.resize(_splitIndex);
+        self.inodes.resize(_splitIndex) catch unreachable;
 
         // Update the statistics.
         self.bucket.?.tx.?.stats.split += 1;
 
-        return [2]*Node{ self, next };
+        return [2]?*Node{ self, next };
     }
 
     /// Finds the position where a page will fill a given threshold.
@@ -368,7 +368,7 @@ pub const Node = struct {
             sz += elsize;
         }
 
-        return [2]usize{inodeIndex};
+        return [2]usize{inodeIndex, sz};
     }
 
     /// Writes the nodes to dirty pages and splits nodes as it goes.
@@ -384,7 +384,7 @@ pub const Node = struct {
         // the children size on every loop iteration.
         const lessThan = struct {
             fn func(_: void, lhs: *Node, rhs: *Node) bool {
-                return std.mem.order([]u8, lhs.key.?, rhs.key.?) == .lt;
+                return std.mem.order( u8, lhs.key.?, rhs.key.?) == .lt;
             }
         };
         std.mem.sort(
@@ -409,7 +409,7 @@ pub const Node = struct {
             }
 
             // Allocate contiguous space for the node.
-            _ = _tx.allocate();
+            // _ = _tx.allocate();
             // TODO
         }
     }

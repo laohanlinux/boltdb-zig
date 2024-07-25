@@ -220,15 +220,15 @@ pub const FreeList = struct {
         // Combine the old free pgids and pgids waiting on an open transaction.
         //
         // Update the header flag.
-        p.flags != consts.intFromFlags(consts.PageFlag.free_list);
+        p.flags |= consts.intFromFlags(consts.PageFlag.free_list);
 
         // The page.Count can only hold up to 64k elements so if we overflow that
         // number then we handle it by putting the size in the first element.
         const lenids = self.count();
         if (lenids == 0) {
-            p.count = @as(u16, lenids);
+            p.count = @as(u16, @intCast(lenids));
         } else if (lenids < 0xFFFF) {
-            p.count = @as(u16, lenids);
+            p.count = @as(u16, @intCast(lenids));
             self.copyAll(p.freelistPageElements().?);
         } else {
             p.count = @as(u16, 0xFFFF);

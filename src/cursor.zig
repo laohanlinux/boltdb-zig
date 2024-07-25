@@ -10,7 +10,7 @@ const assert = util.assert;
 const consts = @import("./consts.zig");
 const Tuple = consts.Tuple;
 const KeyPair = consts.KeyPair;
-const KeyValueRet = consts.Tuple.t3(?[]u8, ?[]u8, u32);
+const KeyValueRet = consts.Tuple.t3(?[]const u8, ?[]u8, u32);
 const Error = @import("./error.zig").Error;
 
 /// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
@@ -182,7 +182,7 @@ pub const Cursor = struct {
         var ref = &self.stack.getLast();
         // If the cursor is pointing to the end of page/node then return nil.
         if (ref.index >= ref.count()) {
-            KeyValueRet{ .first = null, .second = null, .third = 0 };
+            return KeyValueRet{ .first = null, .second = null, .third = 0 };
         }
         // If this is a bucket then return a nil value.
         return self.keyValue();
@@ -289,7 +289,7 @@ pub const Cursor = struct {
             return;
         }
 
-        self.searchPage(key, p);
+        self.searchPage(key, p.?);
     }
 
     /// Returns the node that then cursor is currently positioned on.
@@ -314,19 +314,20 @@ pub const Cursor = struct {
     }
 
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
-        const index = std.sort.binarySearch(*INode, INode.init(0, 0, key, null), n.inodes.items, {}, findINodeFn);
+        const index = std.sort.binarySearch(INode, INode.init(0, 0, key, null), n.inodes.items, {}, findINodeFn) orelse (self.stack.items.len - 1);
         // Recursively search to the next node.
-        self.stack.getLast().index = index orelse (self.stack.items.len - 1);
+        var lastEntry = self.stack.getLast();
+        lastEntry.index = index;
         self.search(key, self.stack.items[index].p.?.id);
     }
 
-    fn searchPage(self: *Self, key: []u8, p: *page.Page) void {
+    fn searchPage(self: *Self, key: []const u8, p: *page.Page) void {
         // Binary search for the correct range.
         const inodes = p.branchPageElements().?;
         var keyEl: page.BranchPageElement = undefined;
         keyEl.pos = 0;
-        const index = std.sort.binarySearch(page.BranchPageElement, keyEl, inodes, key, findEqualBranchElementFn);
-        self.stack.getLast().index = index orelse (self.stack.items.len - 1);
+        const index = std.sort.binarySearch(page.BranchPageElement, keyEl, inodes, key, cmpBranchElementFn) orelse self.stack.items.len - 1;
+        self.getLastElementRef().?.index = index;
         // Recursively search to the next page.
         self.search(key, inodes[index].pgid);
     }
@@ -352,7 +353,7 @@ pub const Cursor = struct {
         e.index = index;
     }
 
-    fn keyValue(self: *Self) KeyValueRet(?[]u8, ?[]u8, u32) {
+    fn keyValue(self: *Self) KeyValueRet {
         const ref = self.stack.getLast();
         if (ref.count() == 0 or ref.index >= ref.count()) {
             // 1: all key remove of tx, the page's keys are 0,
@@ -395,6 +396,13 @@ pub const Cursor = struct {
         assert(n.?.isLeaf, "expect leaf node", .{});
         return n;
     }
+
+    fn getLastElementRef(self: *Self) ?*ElementRef {
+        if (self.stack.items.len == 0) {
+            return null;
+        }
+        return &self.stack.items[self.stack.items.len - 1];
+    }
 };
 
 // Represents a reference to an element on a given page/node.
@@ -402,6 +410,16 @@ const ElementRef = struct {
     p: ?*page.Page = null,
     node: ?*Node = null,
     index: usize = 0,
+
+    fn init(allocator: std.mem.Allocator, index: usize, p: ?*page.Page, node: ?*Node) *ElementRef {
+        const self = allocator.create(ElementRef) catch unreachable;
+        self.* = .{
+            .p = p,
+            .node = node,
+            .index = index,
+        };
+        return self;
+    }
 
     fn isLeaf(self: *const ElementRef) bool {
         if (self.node) |node| {
@@ -419,31 +437,36 @@ const ElementRef = struct {
     }
 };
 
-pub fn findEqualBranchElementFn(findKey: []u8, a: page.BranchPageElement, b: page.BranchPageElement) bool {
-    var aKey: []u8 = undefined;
+pub fn findEqualBranchElementFn(findKey: []const u8, a: page.BranchPageElement, b: page.BranchPageElement) bool {
+    const order = cmpBranchElementFn(findKey, a, b);
+    return order == std.math.Order.eq;
+}
+
+fn cmpBranchElementFn(findKey: []const u8, a: page.BranchPageElement, b: page.BranchPageElement) std.math.Order {
+    var aKey: []const u8 = undefined;
     if (a.pos == 0) {
         aKey = findKey;
     } else {
-        aKey = a.key();
+        aKey = a.key()[0..];
     }
-    var bKey: []u8 = undefined;
+    var bKey: []const u8 = undefined;
     if (b.pos == 0) {
         bKey = findKey;
     } else {
         bKey = b.key();
     }
     const order = util.cmpBytes(aKey, bKey);
-    return order == std.math.Order.eq;
+    return order;
 }
 
 pub fn lessThanLeafElementFn(findKey: []const u8, a: page.LeafPageElement, b: page.LeafPageElement) bool {
-    var aKey: []u8 = undefined;
+    var aKey: []const u8 = undefined;
     if (a.pos == 0) {
         aKey = findKey;
     } else {
         aKey = a.key();
     }
-    var bKey: []u8 = undefined;
+    var bKey: []const u8 = undefined;
     if (b.pos == 0) {
         bKey = findKey;
     } else {

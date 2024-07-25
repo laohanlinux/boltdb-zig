@@ -443,7 +443,7 @@ pub const Bucket = struct {
 
     /// Iterators over every page （or node) in a bucket.
     /// This also include inline pages.
-    pub fn forEachPageNode(self: *Self, comptime CTX: type, c: CTX, travel: fn (c: CTX, p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
+    pub fn forEachPageNode(self: *Self, comptime CTX: type, c: CTX, travel: fn (c: CTX, p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
         // If we have an inline page or root node then just user that.
         if (self.page) |p| {
             travel(c, p, null, 0);
@@ -453,7 +453,7 @@ pub const Bucket = struct {
         self._forEachPageNode(CTX, c, self._b.?.root, 0, travel);
     }
 
-    fn _forEachPageNode(self: *Self, comptime CTX: type, c: CTX, pgid: page.PgidType, depth: usize, travel: fn (c: CTX, p: ?*const page.Page, n: ?*const Node, depth: usize) void) void {
+    fn _forEachPageNode(self: *Self, comptime CTX: type, c: CTX, pgid: page.PgidType, depth: usize, travel: fn (c: CTX, p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
         const pNode = self.pageNode(pgid);
 
         // Execute function.
@@ -474,7 +474,7 @@ pub const Bucket = struct {
     }
 
     /// Writes all the nodes for this bucket to dirty pages.
-    pub fn spill(self: *Self) !void {
+    pub fn spill(self: *Self) Error!void {
         // Spill all child buckets first.
         var itr = self.buckets.iterator();
         while (itr.next()) |entry| {
@@ -487,7 +487,7 @@ pub const Bucket = struct {
             } else {
                 try entry.value_ptr.*.spill();
                 // Update the child bucket header in this bucket.
-                try value.appendNTimes(0, _Bucket.size());
+                value.appendNTimes(0, _Bucket.size()) catch unreachable;
                 _ = _Bucket.init(value.items);
             }
 
@@ -511,7 +511,7 @@ pub const Bucket = struct {
         }
 
         // Spill nodes.
-        try self.rootNode.?.spill();
+        self.rootNode.?.spill() catch unreachable;
         self.rootNode = self.rootNode.?.root();
         // Update the root node for this bucket.
         assert(self.rootNode.?.pgid >= self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
@@ -588,7 +588,7 @@ pub const Bucket = struct {
         self._b.?.root = 0;
     }
 
-    fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*const Node, _: usize) void {
+    fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*Node, _: usize) void {
         if (p) |_p| {
             trx.db.?.freelist.free(trx.meta.txid, _p) catch unreachable;
         } else {

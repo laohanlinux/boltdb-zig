@@ -403,7 +403,7 @@ pub const DB = struct {
         // TODO Allocate a tempory buffer for the page.
         const buf = try self.allocator.alloc(u8, count * self.pageSize);
         const p = Page.init(buf);
-        p.overflow = count - 1;
+        p.overflow = @as(u32, @intCast(count)) - 1;
 
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
@@ -425,7 +425,8 @@ pub const DB = struct {
     }
 
     /// Grows the size of the database to the given sz.
-    pub fn grow(self: *Self, sz: usize) !void {
+    pub fn grow(self: *Self, _sz: usize) !void {
+        var sz = _sz;
         // Ignore if the new size is less than valiable file size.
         if (sz <= self.filesz) {
             return;
