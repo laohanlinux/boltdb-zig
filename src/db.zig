@@ -89,7 +89,7 @@ pub const DB = struct {
 
     // Read only mode.
     // When true, Update() and Begin(true) return Error.DatabaseReadOnly.
-    readOnly: bool,
+    readOnly: bool = false,
 
     meta0: *Meta,
     meta1: *Meta,
@@ -152,11 +152,11 @@ pub const DB = struct {
         db.pageSize = 0;
         db.txs = std.ArrayList(*TX).init(allocator);
         db.stats = Stats{};
+        db.readOnly = options.read_only;
 
         // Open data file and separate sync handler for metadata writes.
         db._path = util.cloneBytes(db.allocator, filePath);
         if (options.read_only) {
-            db.readOnly = true;
             db.file = try std.fs.cwd().openFile(db._path, std.fs.File.OpenFlags{
                 .lock = .shared,
                 .mode = .read_only,
@@ -583,7 +583,7 @@ pub const DB = struct {
 
         // If an errors is returned from the function then rollback and return error.
         try func(ctx, trx);
-        defer trx.managed = false;
+        trx.managed = false;
         try trx.commit();
     }
 
@@ -799,78 +799,78 @@ fn opfn(p: []u8, n: i64) void {
     std.debug.print("excute me: {any}, {}\n", .{ p, n });
 }
 
-// test "DB-Read" {
-//     var options = defaultOptions;
-//     options.read_only = false;
-//     options.initialMmapSize = 10 * consts.PageSize;
-//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
-//     defer std.testing.allocator.free(filePath);
-//     {
-//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-//         try kvDB.close();
-//     }
-//     {
-//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-//         const dbStr = kvDB.string(std.testing.allocator);
-//         defer std.testing.allocator.free(dbStr);
-//         std.debug.print("String: {s}\n", .{dbStr});
+test "DB-Read" {
+    var options = defaultOptions;
+    options.read_only = false;
+    options.initialMmapSize = 10 * consts.PageSize;
+    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
+    defer std.testing.allocator.free(filePath);
+    {
+        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+        try kvDB.close();
+    }
+    {
+        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+        const dbStr = kvDB.string(std.testing.allocator);
+        defer std.testing.allocator.free(dbStr);
+        std.debug.print("String: {s}\n", .{dbStr});
 
-//         const pageStr = kvDB.pageString(std.testing.allocator);
-//         defer std.testing.allocator.free(pageStr);
-//         std.debug.print("{s}\n", .{pageStr});
-//         defer kvDB.close() catch unreachable;
-//         {
-//             const viewFn = struct {
-//                 fn view(_kvDB: ?*DB, _: *TX) Error!void {
-//                     if (_kvDB == null) {
-//                         return Error.DatabaseNotOpen;
-//                     }
-//                     std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
-//                 }
-//             };
-//             for (0..10) |i| {
-//                 try kvDB.view(?*DB, kvDB, viewFn.view);
-//                 std.debug.assert(kvDB.stats.tx_n == (i + 1));
-//                 if (i == 9) {
-//                     const err = kvDB.view(?*DB, null, viewFn.view);
-//                     std.debug.assert(err == Error.DatabaseNotOpen);
-//                 }
-//             }
-//         }
+        const pageStr = kvDB.pageString(std.testing.allocator);
+        defer std.testing.allocator.free(pageStr);
+        std.debug.print("{s}\n", .{pageStr});
+        defer kvDB.close() catch unreachable;
+        {
+            const viewFn = struct {
+                fn view(_kvDB: ?*DB, _: *TX) Error!void {
+                    if (_kvDB == null) {
+                        return Error.DatabaseNotOpen;
+                    }
+                    std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
+                }
+            };
+            for (0..10) |i| {
+                try kvDB.view(?*DB, kvDB, viewFn.view);
+                std.debug.assert(kvDB.stats.tx_n == (i + 1));
+                if (i == 9) {
+                    const err = kvDB.view(?*DB, null, viewFn.view);
+                    std.debug.assert(err == Error.DatabaseNotOpen);
+                }
+            }
+        }
 
-//         // parallel read
-//         {
-//             var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
-//             defer joins.deinit();
-//             const parallelViewFn = struct {
-//                 fn view(_kdb: *DB) void {
-//                     const viewFn = struct {
-//                         fn view(_kvDB: ?*DB, _: *TX) Error!void {
-//                             if (_kvDB == null) {
-//                                 return Error.DatabaseNotOpen;
-//                             }
-//                             std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
-//                         }
-//                     };
-//                     _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
-//                 }
-//             };
-//             for (0..10) |_| {
-//                 const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
-//                 try joins.append(sp);
-//             }
+        // parallel read
+        {
+            var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
+            defer joins.deinit();
+            const parallelViewFn = struct {
+                fn view(_kdb: *DB) void {
+                    const viewFn = struct {
+                        fn view(_kvDB: ?*DB, _: *TX) Error!void {
+                            if (_kvDB == null) {
+                                return Error.DatabaseNotOpen;
+                            }
+                            std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
+                        }
+                    };
+                    _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
+                }
+            };
+            for (0..10) |_| {
+                const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
+                try joins.append(sp);
+            }
 
-//             for (joins.items) |join| {
-//                 join.join();
-//             }
+            for (joins.items) |join| {
+                join.join();
+            }
 
-//             std.debug.print("after stats count: {}\n", .{kvDB.stats.tx_n});
-//             std.debug.assert(kvDB.stats.tx_n == 21);
-//         }
+            std.debug.print("after stats count: {}\n", .{kvDB.readOnly});
+            std.debug.assert(kvDB.stats.tx_n == 21);
+        }
 
-//         // update
-//     }
-// }
+        // update
+    }
+}
 
 test "DB-Write" {
     var options = defaultOptions;
@@ -880,13 +880,13 @@ test "DB-Write" {
     defer std.testing.allocator.free(filePath);
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-    try kvDB.close();
+    defer kvDB.close() catch unreachable;
     const updateFn = struct {
         fn update(_kvDB: ?*DB, _: *TX) Error!void {
-            if (_kvDB == null) {
-                return Error.DatabaseNotOpen;
-            }
-            std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
+            // if (_kvDB == null) {
+            //     return Error.DatabaseNotOpen;
+            // }
+            std.debug.print("execute transaction: {}\n", .{_kvDB.?.pageSize});
         }
     };
 

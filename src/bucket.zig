@@ -500,8 +500,8 @@ pub const Bucket = struct {
             // Update parent node.
             const c = self.cursor();
             const keyPairRef = c._seek(entry.key_ptr.*);
-            assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {:0x} -> {:0x}", .{ entry.key_ptr.*, keyPairRef.first.? });
-            assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: {:0x}", .{keyPairRef.third});
+            assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.first.?) });
+            assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});
             c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.items, 0, consts.BucketLeafFlag);
         }
 

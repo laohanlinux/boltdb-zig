@@ -168,24 +168,24 @@ pub const TX = struct {
         startTime = std.time.Timer.start() catch unreachable;
         try self.write();
 
-        // If strict mode is enabled then perform a consistency check.
-        // Only the first consistency error is reported in the panic.
-        if (self.db.?.strict_mode) {
-            // TODO
-        }
-
-        // Write meta to disk.
-        try self.writeMeta();
-
-        self.stats.write_time += startTime.lap();
-
-        // Finalize the transaction.
-        self.close();
-
-        // Execute commit handlers now that the locks have been removed.
-        for (self._commitHandlers.items) |h| {
-            h();
-        }
+        // // If strict mode is enabled then perform a consistency check.
+        // // Only the first consistency error is reported in the panic.
+        // if (self.db.?.strict_mode) {
+        //     // TODO
+        // }
+        //
+        // // Write meta to disk.
+        // try self.writeMeta();
+        //
+        // self.stats.write_time += startTime.lap();
+        //
+        // // Finalize the transaction.
+        // self.close();
+        //
+        // // Execute commit handlers now that the locks have been removed.
+        // for (self._commitHandlers.items) |h| {
+        //     h();
+        // }
 
         // ok
     }
