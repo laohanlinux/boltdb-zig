@@ -24,6 +24,7 @@ pub const Node = struct {
 
     const Self = @This();
 
+    //
     pub fn init(allocator: std.mem.Allocator) *Self {
         const self = allocator.create(Self) catch unreachable;
         self.allocator = allocator;
@@ -153,7 +154,7 @@ pub const Node = struct {
     }
 
     // Inserts a key/value.
-    pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: []u8, pgid: page.PgidType, flags: u32) void {
+    pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: page.PgidType, flags: u32) void {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
         } else if (oldKey.len <= 0) {
@@ -220,9 +221,9 @@ pub const Node = struct {
     pub fn write(self: *Self, p: *page.Page) void {
         // Initialize page.
         if (self.pgid == 0) {
-            p.flags |= page.intFromFlags(page.PageFlage.leaf);
+            p.flags |= consts.intFromFlags(.leaf);
         } else {
-            p.flags |= page.intFromFlags(page.PageFlage.branch);
+            p.flags |= consts.intFromFlags(.branch);
         }
 
         assert(self.inodes.items.len < 0xFFFF, "inode overflow: {} (pgid={})", .{ self.inodes.items.len, p.id });
@@ -312,6 +313,7 @@ pub const Node = struct {
         } else if (fillPercent > consts.maxFillPercent) {
             fillPercent = consts.maxFillPercent;
         }
+
         const fPageSize: f64 = @floatFromInt(pageSize);
         const threshold = @as(usize, @intFromFloat(fPageSize * fillPercent));
 
@@ -368,49 +370,76 @@ pub const Node = struct {
             sz += elsize;
         }
 
-        return [2]usize{inodeIndex, sz};
+        return [2]usize{ inodeIndex, sz };
     }
 
     /// Writes the nodes to dirty pages and splits nodes as it goes.
     /// Returns and error if dirty pages cannot be allocated
     pub fn spill(self: *Self) !void {
-        const _tx = self.bucket.?.tx.?;
         if (self.spilled) {
             return;
         }
+        const _tx = self.bucket.?.tx.?;
+        const _db = _tx.getDB();
 
         // Spill child nodes first. Child nodes can materialize sibling nodes in
         // the case of split-merge so we cannot use a range loop. We have to check
         // the children size on every loop iteration.
-        const lessThan = struct {
-            fn func(_: void, lhs: *Node, rhs: *Node) bool {
-                return std.mem.order( u8, lhs.key.?, rhs.key.?) == .lt;
+        const lessFn = struct {
+            fn less(_: void, a: *Node, b: *Node) bool {
+                return util.cmpBytes(a.key.?, b.key.?) == .lt;
             }
         };
         std.mem.sort(
             *Node,
             self.children.items,
             {},
-            lessThan.func,
+            lessFn.less,
         );
-
-        // We no longer need the child list because it's only used for spill tracking.
+        for (self.children.items) |child| {
+            try child.spill();
+        }
+        // We no longer need the children list because it's only used for spilling tracking.
         self.children.clearAndFree();
 
         // Split nodes into approprivate sizes, The first node will always be n.
-        const nodes = self.split(_tx.db.?.pageSize);
+        const nodes = self.split(_db.pageSize);
         defer self.allocator.free(nodes);
 
         for (nodes) |node| {
             // Add node's page to the freelist if it's not new.
+            // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
-                try _tx.db.?.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
+                try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 node.pgid = 0;
             }
 
-            // Allocate contiguous space for the node.
-            // _ = _tx.allocate();
-            // TODO
+            // Allocate contiguous space for the node.(COW: Copy on Write)
+            const allocateSize: usize =  node.size() / _db.pageSize + 1;
+            const p = try _tx.allocate(allocateSize);
+            assert(p.id < _tx.meta.pgid, "pgid ({}) above high water mark ({})", .{p.id, _tx.meta.pgid});
+            node.pgid = p.id;
+            node.write(p);
+            node.spilled = true;
+
+            // Insert into parent inodes.
+            if (node.parent) |parent| {
+                const key = node.key orelse node.inodes.items[0].key.?;
+                parent.put(key, node.inodes.items[0].key.?, null, node.pgid, 0);
+                node.key = node.inodes.items[0].key;
+                assert(node.key.?.len > 0 , "spill: zero-length node key", .{});
+            }
+
+            // Update the statistics.
+            _tx.stats.spill += 1;
+        }
+
+
+        // If the root node split and created a new root then we need to spill that
+        // as well. We'll clear out the children to make sure it doesn't try to respill.
+        if (self.parent != null and self.parent.?.pgid == 0) {
+            self.children.clearAndFree();
+            return self.parent.?.spill();
         }
     }
 

@@ -17,7 +17,7 @@ pub const Bucket = struct {
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
-    rootNode: ?*Node = null, // materialized node for the root page.
+    rootNode: ?*Node = null, // materialized node for the root page. (if is the top bucket? it is null.)
     page: ?*page.Page = null, // inline page reference
 
     // Sets the thredshold for filling nodes when they split. By default,
@@ -509,7 +509,7 @@ pub const Bucket = struct {
         if (self.rootNode == null) {
             return;
         }
-
+        std.debug.print("the rootNode is : {}\n", .{self.rootNode.?});
         // Spill nodes.
         self.rootNode.?.spill() catch unreachable;
         self.rootNode = self.rootNode.?.root();

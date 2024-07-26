@@ -534,6 +534,7 @@ pub const DB = struct {
         // Obtain writer lock. This released by the transaction when it closes.
         // This is enforces only one writer transaction at a time.
         self.rwlock.lock();
+        std.debug.print("lock rwlock!\n", .{});
 
         // Once we have the writer lock then we can lock the meta pages so that
         // we can set up the transaction.
@@ -548,6 +549,7 @@ pub const DB = struct {
 
         // Create a transaction associated with the database.
         const trx = TX.init(self);
+        trx.writable = true;
         self.rwtx = trx;
 
         // Free any pages associated with closed read-only transactions.
@@ -648,6 +650,11 @@ pub const DB = struct {
 
         self.freelist.deinit();
         self.txs.deinit();
+    }
+
+    fn opsWriteAt(self: *Self, bytes: []const u8, offset: u64) !usize {
+        const writeN = try self.file.pwrite(bytes, offset);
+        return writeN;
     }
 };
 
@@ -777,7 +784,7 @@ pub const Meta = packed struct {
         }
         // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
         p.id = @as(page.PgidType, self.txid % 2);
-        p.flags |= page.PageFlage.meta;
+        p.flags |= consts.intFromFlags(consts.PageFlag.meta);
 
         // Calculate the checksum.
         self.check_sum = self.sum64();
@@ -881,16 +888,37 @@ test "DB-Write" {
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
-    const updateFn = struct {
-        fn update(_kvDB: ?*DB, _: *TX) Error!void {
-            // if (_kvDB == null) {
-            //     return Error.DatabaseNotOpen;
-            // }
-            std.debug.print("execute transaction: {}\n", .{_kvDB.?.pageSize});
-        }
-    };
+    // const updateFn = struct {
+    //     fn update(_kvDB: ?*DB, _: *TX) Error!void {
+    //         // if (_kvDB == null) {
+    //         //     return Error.DatabaseNotOpen;
+    //         // }
+    //         std.debug.print("execute transaction: {}\n", .{_kvDB.?.pageSize});
+    //     }
+    // };
 
     {
-        try kvDB.update(?*DB, kvDB, updateFn.update);
+        const checkVar: usize = 10;
+        const onCommitFn = struct {
+            const Self = @This();
+            fn onCommit() void {
+                const captureVarLocal: *usize = @field(Self, "captureVar");
+                captureVarLocal.* += 1;
+                std.debug.print("onCommit: {}\n", .{captureVarLocal.*});
+            }
+            pub const captureVar = &checkVar;
+        };
+
+        var onCommitFns = std.ArrayList(*const fn () void).init(std.testing.allocator);
+        defer onCommitFns.deinit();
+        onCommitFns.append(onCommitFn.onCommit) catch unreachable;
+        onCommitFns.append(onCommitFn.onCommit) catch unreachable;
+        for (onCommitFns.items) |f| {
+            f();
+        }
+        // const trx = try kvDB.begin(true);
+        // trx.onCommit(onCommitFn.onCommit);
+        // defer trx.rollback() catch unreachable;
+        // try kvDB.update(?*DB, kvDB, updateFn.update);
     }
 }

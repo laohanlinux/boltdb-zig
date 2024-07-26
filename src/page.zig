@@ -1,17 +1,11 @@
 const std = @import("std");
 const db = @import("./db.zig");
+const consts = @import("./consts.zig");
 
 pub const min_keys_page: usize = 2;
 
 pub const branchPageElementSize = BranchPageElement.headerSize();
 pub const leafPageElementSize = LeafPageElement.headerSize();
-
-pub const PageFlage = enum(u8) {
-    branch = 0x01,
-    leaf = 0x02,
-    meta = 0x04,
-    free_list = 0x10,
-};
 
 pub const bucket_leaf_flag: u32 = 0x01;
 
@@ -20,11 +14,6 @@ pub const PgidType = u64;
 pub const PgIds = []PgidType;
 
 pub const page_size: usize = std.mem.page_size;
-
-/// Returns the size of a page given the page size and branching factor.
-pub fn intFromFlags(pageFlage: PageFlage) u16 {
-    return @as(u16, @intFromEnum(pageFlage));
-}
 
 pub const Page = struct {
     id: PgidType,
@@ -45,13 +34,13 @@ pub const Page = struct {
     }
 
     pub fn typ(self: *const Self) []const u8 {
-        if (self.flags & intFromFlags(PageFlage.branch) != 0) {
+        if (self.flags & consts.intFromFlags(.branch) != 0) {
             return "branch";
-        } else if (self.flags & intFromFlags(PageFlage.leaf) != 0) {
+        } else if (self.flags & consts.intFromFlags(.leaf) != 0) {
             return "leaf";
-        } else if (self.flags & intFromFlags(PageFlage.meta) != 0) {
+        } else if (self.flags & consts.intFromFlags(.meta) != 0) {
             return "meta";
-        } else if (self.flags & intFromFlags(PageFlage.free_list) != 0) {
+        } else if (self.flags & consts.intFromFlags(.free_list) != 0) {
             return "freelist";
         } else {
             return "unkown";
@@ -59,7 +48,7 @@ pub const Page = struct {
     }
 
     pub fn isLeaf(self: *const Self) bool {
-        return self.flags & intFromFlags(PageFlage.leaf) != 0;
+        return self.flags & consts.intFromFlags(.leaf) != 0;
     }
 
     // Returns a pointer to the metadata section of the page.
@@ -194,7 +183,7 @@ pub const BranchPageElement = packed struct {
     // }
     pub fn key(self: *const Self) []const u8 {
         const ptr = @as([*]u8, @ptrCast(@constCast(self)));
-        return ptr[self.pos..self.pos + self.kSize];
+        return ptr[self.pos .. self.pos + self.kSize];
     }
 };
 
@@ -398,5 +387,5 @@ fn sortPgIds(ids: PgIds) void {
 // }
 
 pub fn main() !void {
-    std.testing.run();
+    // std.testing.run();
 }

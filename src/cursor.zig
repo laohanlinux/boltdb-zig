@@ -272,7 +272,7 @@ pub const Cursor = struct {
         const pNode = self._bucket.pageNode(pgid);
         const p = pNode.first;
         const n = pNode.second;
-        const condition = p == null or p.?.flags & (page.intFromFlags(page.PageFlage.branch) | page.intFromFlags(page.PageFlage.leaf)) != 0;
+        const condition = p == null or p.?.flags & (consts.intFromFlags(.branch) | consts.intFromFlags(.leaf)) != 0;
         assert(condition, "invalid page type: {d}: {x}", .{ p.?.id, p.?.flags });
         const e = ElementRef{ .p = p, .node = n };
         self.stack.append(e) catch unreachable;
@@ -425,7 +425,7 @@ const ElementRef = struct {
         if (self.node) |node| {
             return node.isLeaf;
         }
-        return self.p.?.flags & page.intFromFlags(page.PageFlage.leaf) != 0;
+        return self.p.?.flags & consts.intFromFlags(.leaf) != 0;
     }
 
     // returns the number of inodes or page elements.

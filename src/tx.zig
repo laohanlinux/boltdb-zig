@@ -53,7 +53,7 @@ pub const TX = struct {
         // Copy over the root bucket.
         self.root = bucket.Bucket.init(self);
         self.root._b.? = self.meta.root;
-        std.log.info("tx's root bucket {any}", .{self.root._b.?});
+        self.root.rootNode = null;
 
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
@@ -62,6 +62,8 @@ pub const TX = struct {
         }
 
         self._commitHandlers = std.ArrayList(*const fn () void).init(_db.allocator);
+        std.debug.print("tx's root bucket {any}\n", .{self.root._b.?});
+        std.debug.print("onCommit init: {}\n", .{self._commitHandlers.capacity});
         return self;
     }
 
@@ -143,7 +145,7 @@ pub const TX = struct {
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;
-        errdefer self.rollback() catch unreachable;
+        errdefer self._rollback();
         try self.root.spill();
         self.stats.spill_time += startTime.lap();
 
@@ -174,18 +176,20 @@ pub const TX = struct {
         //     // TODO
         // }
         //
-        // // Write meta to disk.
-        // try self.writeMeta();
-        //
-        // self.stats.write_time += startTime.lap();
-        //
-        // // Finalize the transaction.
-        // self.close();
-        //
-        // // Execute commit handlers now that the locks have been removed.
-        // for (self._commitHandlers.items) |h| {
-        //     h();
-        // }
+        // Write meta to disk.
+        try self.writeMeta();
+
+        self.stats.writeTime += startTime.lap();
+        std.debug.print("write cost time: {}ms\n", .{self.stats.writeTime / std.time.ns_per_ms});
+
+        // Finalize the transaction.
+        self.close();
+
+        // Execute commit handlers now that the locks have been removed.
+        std.debug.print("execute commit handlers {}\n", .{self._commitHandlers.capacity});
+        for (self._commitHandlers.items) |_| {
+            // h();
+        }
 
         // ok
     }
@@ -201,11 +205,18 @@ pub const TX = struct {
         self._rollback();
     }
 
-    pub fn write(_: *Self) Error!void {
+    pub fn write(_: *Self) Error!void {}
 
+    // Writes the meta to the disk.
+    fn writeMeta(self: *Self) Error!void {
+        // Create a tempory buffer for the meta page.
+        var buf = std.ArrayList(u8).initCapacity(self.getDB().allocator, self.getDB().pageSize) catch unreachable;
+        buf.appendNTimes(0, self.getDB().pageSize) catch unreachable;
+        const p = self.getDB().pageInBuffer(buf.items, 0);
+        self.meta.write(p);
+        // Write the meta page to file.
+        // TODO
     }
-
-    pub fn writeMeta(_: *Self) Error!void {}
 
     // Internal rollback function.
     pub fn _rollback(self: *Self) void {
@@ -314,7 +325,7 @@ pub const TxStats = packed struct {
 
     // Write statistics
     write: usize = 0, // number of writes performed
-    write_time: u64 = 0, // total time spent writing to disk
+    writeTime: u64 = 0, // total time spent writing to disk
 
     const Self = @This();
     pub fn add(self: *Self, other: *TxStats) void {
@@ -329,7 +340,7 @@ pub const TxStats = packed struct {
         self.spill += other.spill;
         self.spill_time += other.spill_time;
         self.write += other.write;
-        self.write_time += other.write_time;
+        self.writeTime += other.writeTime;
     }
 
     // Calculates and returns the difference between two sets of transaction stats.
@@ -348,7 +359,7 @@ pub const TxStats = packed struct {
             .spill = self.spill - other.spill,
             .spill_time = self.spill_time - other.spill_time,
             .write = self.write - other.write,
-            .write_time = self.write_time - other.write_time,
+            .writeTime = self.writeTime - other.writeTime,
         };
     }
 };

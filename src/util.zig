@@ -94,6 +94,14 @@ pub fn munmap(ptr: []u8) void {
     }
 }
 
+pub const closure = struct {
+    var captured_var: i32 = undefined;
+    const Self = @This();
+    pub fn create(comptime T: type, comptime f: fn (T) void) fn (T) void {
+       return f;
+    }
+};
+
 test "arm" {
     // const arch = @import("builtin").cpu.arch;
 

@@ -6,7 +6,3 @@ pub inline fn assert(expect: bool, comptime fmt: []const u8, args: anytype) void
         std.debug.assert(expect);
     }
 }
-
-// test "assert" {
-//     assert(std.time.milliTimestamp() < 0, "it should be happen, {d}\n", .{std.time.milliTimestamp()});
-// }
