@@ -94,15 +94,50 @@ pub fn munmap(ptr: []u8) void {
     }
 }
 
-pub const closure = struct {
-    var captured_var: i32 = undefined;
-    const Self = @This();
-    pub fn create(comptime T: type, comptime f: fn (T) void) fn (T) void {
-       return f;
-    }
-};
+pub fn closure(comptime T: type) type {
+    return struct {
+        captureVar: *T,
+        _callback: *const fn (t: *T) void,
+        const Self = @This();
+        pub fn init(capture: *T, callback: fn (_: *T) void) Self {
+            return Self{
+                .captureVar = capture,
+                ._callback = callback,
+            };
+        }
+        pub fn getCallBack(self: *const Self) *const fn (_: *T) void {
+            return self._callback;
+        }
+        pub fn onCommit(self: *const Self) void {
+            self._callback(self.captureVar);
+        }
+
+        pub fn execute(self: *const Self) void {
+            self._callback(self.captureVar);
+        }
+    };
+}
+
+fn onCmt(n: *usize) void {
+    n.* += 1;
+}
+
+fn onCmt2(n: *usize) void {
+    n.* -= 1;
+}
 
 test "arm" {
+    var n: usize = 2000;
+    const c = closure(usize).init(&n, onCmt);
+    var closures = std.ArrayList(closure(usize)).init(std.testing.allocator);
+    defer closures.deinit();
+    try closures.append(c);
+    try closures.append(c);
+    for (closures.items) |cFn| {
+        cFn.execute();
+        std.debug.print("{}\n", .{c.captureVar.*});
+    }
+
     // const arch = @import("builtin").cpu.arch;
 
     // if (target == .arm or target == .aarch64) {

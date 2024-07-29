@@ -4,12 +4,14 @@ const bucket = @import("./bucket.zig");
 const page = @import("./page.zig");
 const Cursor = @import("./cursor.zig").Cursor;
 const consts = @import("./consts.zig");
+const util = @import("./util.zig");
 const TxId = consts.TxId;
 const Error = @import("./error.zig").Error;
 const DB = db.DB;
 const Meta = db.Meta;
 const Page = page.Page;
 const Bucket = bucket.Bucket;
+const onCommitFn = util.closure(usize);
 
 // Represent a read-only or read/write transaction on the database.
 // Read-only transactions can be used for retriving values for keys and creating cursors.
@@ -28,7 +30,7 @@ pub const TX = struct {
     pages: std.AutoHashMap(page.PgidType, *Page),
     stats: TxStats,
 
-    _commitHandlers: std.ArrayList(*const fn () void),
+    _commitHandlers: std.ArrayList(onCommitFn),
     // WriteFlag specifies the flag for write-related methods like WriteTo().
     // Tx opens the database file with the specified flag to copy the data.
     //
@@ -60,8 +62,7 @@ pub const TX = struct {
             self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.db.?.allocator);
             self.meta.txid += 1;
         }
-
-        self._commitHandlers = std.ArrayList(*const fn () void).init(_db.allocator);
+        self._commitHandlers = std.ArrayList(onCommitFn).init(_db.allocator);
         std.debug.print("tx's root bucket {any}\n", .{self.root._b.?});
         std.debug.print("onCommit init: {}\n", .{self._commitHandlers.capacity});
         return self;
@@ -126,8 +127,8 @@ pub const TX = struct {
     }
 
     /// Adds a handler function to be executed after the transaction successfully commits.
-    pub fn onCommit(self: *Self, f: fn () void) void {
-        self._commitHandlers.append(f) catch unreachable;
+    pub fn onCommit(self: *Self, func: onCommitFn) void {
+        self._commitHandlers.append(func) catch unreachable;
     }
 
     /// Writes all changes to disk and updates the meta page.
@@ -145,8 +146,18 @@ pub const TX = struct {
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;
-        errdefer self._rollback();
-        try self.root.spill();
+        self.root.rebalance();
+        if (self.stats.rebalance > 0) {
+            self.stats.spill_time += startTime.lap();
+        }
+
+        // spill data onto dirty pages.
+        startTime = std.time.Timer.start() catch unreachable;
+        // 在分裂（比如合并两个节点90%，以及30%，合并后就变成120%，所以先合并，再分裂没问题）
+        self.root.spill() catch |err| {
+            self._rollback();
+            return err;
+        };
         self.stats.spill_time += startTime.lap();
 
         // Free the old root bucket.
@@ -155,20 +166,32 @@ pub const TX = struct {
 
         // Free the freelist and allocate new pages for it. This will overestimate
         // the size of the freelist but not underestimate the size (wich would be bad).
-        self.db.?.freelist.free(self.meta.txid, self.getPage(self.meta.free_list)) catch unreachable;
-        const p = self.allocate((self.db.?.freelist.size() / self.db.?.pageSize) + 1) catch unreachable;
-        try self.db.?.freelist.write(p);
-        self.meta.free_list = p.id;
+        self.db.?.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
+        const p = self.allocate((self.db.?.freelist.size() / self.db.?.pageSize) + 1) catch |err| {
+            self._rollback();
+            return err;
+        };
+        self.db.?.freelist.write(p) catch |err| {
+            self._rollback();
+            return err;
+        };
+        self.meta.freelist = p.id;
 
         // If the high water mark has moved up then attempt to grow the database.
         if (self.meta.pgid > opgid) {
             const growSize = @as(usize, (self.meta.pgid + 1)) * self.db.?.pageSize;
-            try self.db.?.grow(growSize);
+            self.db.?.grow(growSize) catch |err| {
+                self._rollback();
+                return err;
+            };
         }
 
         // Write dirty pages to disk.
         startTime = std.time.Timer.start() catch unreachable;
-        try self.write();
+        self.write() catch |err| {
+            self._rollback();
+            return err;
+        };
 
         // // If strict mode is enabled then perform a consistency check.
         // // Only the first consistency error is reported in the panic.
@@ -177,8 +200,10 @@ pub const TX = struct {
         // }
         //
         // Write meta to disk.
-        try self.writeMeta();
-
+        self.writeMeta() catch |err| {
+            self._rollback();
+            return err;
+        };
         self.stats.writeTime += startTime.lap();
         std.debug.print("write cost time: {}ms\n", .{self.stats.writeTime / std.time.ns_per_ms});
 
@@ -187,10 +212,9 @@ pub const TX = struct {
 
         // Execute commit handlers now that the locks have been removed.
         std.debug.print("execute commit handlers {}\n", .{self._commitHandlers.capacity});
-        for (self._commitHandlers.items) |_| {
-            // h();
+        for (self._commitHandlers.items) |func| {
+            func.execute();
         }
-
         // ok
     }
 
@@ -226,7 +250,7 @@ pub const TX = struct {
         }
         if (self.writable) {
             self.db.?.freelist.rollback(self.meta.txid);
-            self.db.?.freelist.reload(self.db.?.pageById(self.db.?.getMeta().free_list));
+            self.db.?.freelist.reload(self.db.?.pageById(self.db.?.getMeta().freelist));
         }
 
         self.close();
@@ -244,12 +268,12 @@ pub const TX = struct {
         }
 
         // clear all reference.
-        const allocator = self.db.?.allocator;
+        // const allocator = self.db.?.allocator;
         self.db.?.allocator.destroy(self.meta);
         self.db = null;
         self.pages.deinit();
         self.root.deinit();
-        allocator.destroy(self);
+        // allocator.destroy(self);
     }
 
     /// Iterates over every page within a given page and executes a function.
@@ -279,7 +303,7 @@ pub const TX = struct {
     }
 
     pub fn getID(self: *const Self) u64 {
-        self.meta.txid;
+        return self.meta.txid;
     }
 
     pub fn getDB(self: *Self) *db.DB {

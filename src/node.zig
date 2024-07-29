@@ -171,7 +171,7 @@ pub const Node = struct {
     }
 
     // Removes a key from the node.
-    pub fn del(self: *Self, key: []u8) void {
+    pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
         const keyINode = INode.init(0, 0, key, null);
         const index = std.sort.binarySearch(INode, keyINode, self.inodes.items, {}, findFn) orelse return;
@@ -415,9 +415,9 @@ pub const Node = struct {
             }
 
             // Allocate contiguous space for the node.(COW: Copy on Write)
-            const allocateSize: usize =  node.size() / _db.pageSize + 1;
+            const allocateSize: usize = node.size() / _db.pageSize + 1;
             const p = try _tx.allocate(allocateSize);
-            assert(p.id < _tx.meta.pgid, "pgid ({}) above high water mark ({})", .{p.id, _tx.meta.pgid});
+            assert(p.id < _tx.meta.pgid, "pgid ({}) above high water mark ({})", .{ p.id, _tx.meta.pgid });
             node.pgid = p.id;
             node.write(p);
             node.spilled = true;
@@ -427,13 +427,12 @@ pub const Node = struct {
                 const key = node.key orelse node.inodes.items[0].key.?;
                 parent.put(key, node.inodes.items[0].key.?, null, node.pgid, 0);
                 node.key = node.inodes.items[0].key;
-                assert(node.key.?.len > 0 , "spill: zero-length node key", .{});
+                assert(node.key.?.len > 0, "spill: zero-length node key", .{});
             }
 
             // Update the statistics.
             _tx.stats.spill += 1;
         }
-
 
         // If the root node split and created a new root then we need to spill that
         // as well. We'll clear out the children to make sure it doesn't try to respill.
@@ -445,7 +444,7 @@ pub const Node = struct {
 
     /// Attempts to combine the node with sibling nodes if the node fill
     /// size is below a threshold or if there are not enough keys.
-    fn rebalance(self: *Self) void {
+    pub fn rebalance(self: *Self) void {
         if (!self.unbalance) {
             return;
         }
@@ -455,24 +454,24 @@ pub const Node = struct {
         self.bucket.?.tx.?.stats.rebalance += 1;
 
         // Ignore if node is above threshold (25%) and has enough keys.
-        const threshold = self.bucket.?.tx.?.db.pageSize / 4;
-        if (self.size() > threshold and self.count >= self.minKeys()) {
+        const threshold = self.bucket.?.tx.?.db.?.pageSize / 4;
+        if (self.size() > threshold and self.inodes.items.len > self.minKeys()) {
             return;
         }
 
         // Root node has special handling.
         if (self.parent == null) {
             // If root node is a branch and only has one node then collapse it.
-            if (!self.isLeaf and self.inodes.?.len == 1) {
+            if (!self.isLeaf and self.inodes.items.len == 1) {
                 // Move root's child up.
-                const child: *Self = self.bucket.?.node(self.inodes.?[0].pgid, self);
+                const child: *Self = self.bucket.?.node(self.inodes.items[0].pgid, self);
                 self.isLeaf = child.isLeaf;
                 self.inodes = child.inodes;
                 self.children = child.children;
 
                 // Reparent all child nodes being moved.
                 // TODO why not skip the first key
-                for (self.inodes.?) |inode| {
+                for (self.inodes.items) |inode| {
                     if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
                         _child.parent = self;
                     }
@@ -491,7 +490,7 @@ pub const Node = struct {
 
         // If node has no keys then just remove it.
         if (self.numChildren() == 0) {
-            self.parent.?.del(self.key);
+            self.parent.?.del(self.key.?);
             self.parent.?.removeChild(self);
             const exists = self.bucket.?.nodes.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});

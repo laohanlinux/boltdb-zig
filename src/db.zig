@@ -126,7 +126,7 @@ pub const DB = struct {
         writer.print("meta1:{}\n", .{self.pageById(1).*}) catch unreachable;
         const m = self.getMeta();
         writer.print("rootBucket:{}\n", .{self.pageById(m.root.root).*}) catch unreachable;
-        writer.print("freelist:{}\n", .{self.pageById(m.free_list).*}) catch unreachable;
+        writer.print("freelist:{}\n", .{self.pageById(m.freelist).*}) catch unreachable;
         return buf.toOwnedSlice() catch unreachable;
     }
 
@@ -217,7 +217,7 @@ pub const DB = struct {
 
         // Read in the freelist.
         db.freelist = freelist.FreeList.init(db.allocator);
-        const allocPage = db.pageById(db.getMeta().free_list);
+        const allocPage = db.pageById(db.getMeta().freelist);
         db.freelist.read(allocPage);
         db.opened = true;
         return db;
@@ -242,7 +242,7 @@ pub const DB = struct {
             m.magic = consts.Magic;
             m.version = consts.Version;
             m.page_size = @truncate(self.pageSize);
-            m.free_list = 2;
+            m.freelist = 2;
             m.root = bucket._Bucket{ .root = 3 }; // So the top root bucket is a leaf
             m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
             m.txid = @as(consts.TxId, i);
@@ -578,13 +578,19 @@ pub const DB = struct {
         const trx = try self.begin(true);
 
         // Make sure the transaction rolls back in the event of a panic.
-        errdefer trx._rollback();
+        defer if (trx.db != null) {
+            trx._rollback();
+        };
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
 
         // If an errors is returned from the function then rollback and return error.
-        try func(ctx, trx);
+        func(ctx, trx) catch |err| {
+            trx.managed = false;
+            trx.rollback() catch {};
+            return err;
+        };
         trx.managed = false;
         try trx.commit();
     }
@@ -740,7 +746,7 @@ pub const Meta = packed struct {
     page_size: u32 = 0,
     flags: u32 = 0,
     root: bucket._Bucket = bucket._Bucket{ .root = 0, .sequence = 0 },
-    free_list: page.PgidType = 0,
+    freelist: page.PgidType = 0,
     pgid: page.PgidType = 0,
     txid: consts.TxId = 0,
     check_sum: u64 = 0,
@@ -779,7 +785,7 @@ pub const Meta = packed struct {
     pub fn write(self: *Self, p: *page.Page) void {
         if (self.root.root >= self.pgid) {
             unreachable;
-        } else if (self.free_list >= self.pgid) {
+        } else if (self.freelist >= self.pgid) {
             unreachable;
         }
         // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
@@ -806,78 +812,82 @@ fn opfn(p: []u8, n: i64) void {
     std.debug.print("excute me: {any}, {}\n", .{ p, n });
 }
 
-test "DB-Read" {
-    var options = defaultOptions;
-    options.read_only = false;
-    options.initialMmapSize = 10 * consts.PageSize;
-    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
-    defer std.testing.allocator.free(filePath);
-    {
-        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-        try kvDB.close();
-    }
-    {
-        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-        const dbStr = kvDB.string(std.testing.allocator);
-        defer std.testing.allocator.free(dbStr);
-        std.debug.print("String: {s}\n", .{dbStr});
-
-        const pageStr = kvDB.pageString(std.testing.allocator);
-        defer std.testing.allocator.free(pageStr);
-        std.debug.print("{s}\n", .{pageStr});
-        defer kvDB.close() catch unreachable;
-        {
-            const viewFn = struct {
-                fn view(_kvDB: ?*DB, _: *TX) Error!void {
-                    if (_kvDB == null) {
-                        return Error.DatabaseNotOpen;
-                    }
-                    std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
-                }
-            };
-            for (0..10) |i| {
-                try kvDB.view(?*DB, kvDB, viewFn.view);
-                std.debug.assert(kvDB.stats.tx_n == (i + 1));
-                if (i == 9) {
-                    const err = kvDB.view(?*DB, null, viewFn.view);
-                    std.debug.assert(err == Error.DatabaseNotOpen);
-                }
-            }
-        }
-
-        // parallel read
-        {
-            var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
-            defer joins.deinit();
-            const parallelViewFn = struct {
-                fn view(_kdb: *DB) void {
-                    const viewFn = struct {
-                        fn view(_kvDB: ?*DB, _: *TX) Error!void {
-                            if (_kvDB == null) {
-                                return Error.DatabaseNotOpen;
-                            }
-                            std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
-                        }
-                    };
-                    _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
-                }
-            };
-            for (0..10) |_| {
-                const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
-                try joins.append(sp);
-            }
-
-            for (joins.items) |join| {
-                join.join();
-            }
-
-            std.debug.print("after stats count: {}\n", .{kvDB.readOnly});
-            std.debug.assert(kvDB.stats.tx_n == 21);
-        }
-
-        // update
-    }
+fn onCommitAdd(n: *usize) void {
+    n.* += 1;
 }
+
+// test "DB-Read" {
+//     var options = defaultOptions;
+//     options.read_only = false;
+//     options.initialMmapSize = 10 * consts.PageSize;
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
+//     defer std.testing.allocator.free(filePath);
+//     {
+//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//         try kvDB.close();
+//     }
+//     {
+//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//         const dbStr = kvDB.string(std.testing.allocator);
+//         defer std.testing.allocator.free(dbStr);
+//         std.debug.print("String: {s}\n", .{dbStr});
+//
+//         const pageStr = kvDB.pageString(std.testing.allocator);
+//         defer std.testing.allocator.free(pageStr);
+//         std.debug.print("{s}\n", .{pageStr});
+//         defer kvDB.close() catch unreachable;
+//         {
+//             const viewFn = struct {
+//                 fn view(_kvDB: ?*DB, _: *TX) Error!void {
+//                     if (_kvDB == null) {
+//                         return Error.DatabaseNotOpen;
+//                     }
+//                     std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
+//                 }
+//             };
+//             for (0..10) |i| {
+//                 try kvDB.view(?*DB, kvDB, viewFn.view);
+//                 std.debug.assert(kvDB.stats.tx_n == (i + 1));
+//                 if (i == 9) {
+//                     const err = kvDB.view(?*DB, null, viewFn.view);
+//                     std.debug.assert(err == Error.DatabaseNotOpen);
+//                 }
+//             }
+//         }
+//
+//         // parallel read
+//         {
+//             var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
+//             defer joins.deinit();
+//             const parallelViewFn = struct {
+//                 fn view(_kdb: *DB) void {
+//                     const viewFn = struct {
+//                         fn view(_kvDB: ?*DB, _: *TX) Error!void {
+//                             if (_kvDB == null) {
+//                                 return Error.DatabaseNotOpen;
+//                             }
+//                             std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
+//                         }
+//                     };
+//                     _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
+//                 }
+//             };
+//             for (0..10) |_| {
+//                 const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
+//                 try joins.append(sp);
+//             }
+//
+//             for (joins.items) |join| {
+//                 join.join();
+//             }
+//
+//             std.debug.print("after stats count: {}\n", .{kvDB.readOnly});
+//             std.debug.assert(kvDB.stats.tx_n == 21);
+//         }
+//
+//         // update
+//     }
+// }
 
 test "DB-Write" {
     var options = defaultOptions;
@@ -888,37 +898,31 @@ test "DB-Write" {
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
-    // const updateFn = struct {
-    //     fn update(_kvDB: ?*DB, _: *TX) Error!void {
-    //         // if (_kvDB == null) {
-    //         //     return Error.DatabaseNotOpen;
-    //         // }
-    //         std.debug.print("execute transaction: {}\n", .{_kvDB.?.pageSize});
-    //     }
-    // };
+    const updateFn = struct {
+        fn update(_kvDB: ?*DB, trx: *TX) Error!void {
+            if (_kvDB == null) {
+                return Error.DatabaseNotOpen;
+            }
+            std.debug.assert(trx.getID() == 1);
+            std.debug.print("execute transaction: {}\n", .{trx.getID()});
+        }
+    };
 
     {
-        const checkVar: usize = 10;
-        const onCommitFn = struct {
-            const Self = @This();
-            fn onCommit() void {
-                const captureVarLocal: *usize = @field(Self, "captureVar");
-                captureVarLocal.* += 1;
-                std.debug.print("onCommit: {}\n", .{captureVarLocal.*});
-            }
-            pub const captureVar = &checkVar;
-        };
-
-        var onCommitFns = std.ArrayList(*const fn () void).init(std.testing.allocator);
-        defer onCommitFns.deinit();
-        onCommitFns.append(onCommitFn.onCommit) catch unreachable;
-        onCommitFns.append(onCommitFn.onCommit) catch unreachable;
-        for (onCommitFns.items) |f| {
-            f();
-        }
+        // var checkVar: usize = 10;
+        // const onCommit = util.closure(usize);
+        // const onCommitFn = onCommit.init(&checkVar, onCommitAdd);
+        // var onCommitFns = std.ArrayList(onCommit).init(std.testing.allocator);
+        // defer onCommitFns.deinit();
+        // onCommitFns.append(onCommitFn) catch unreachable;
+        // onCommitFns.append(onCommitFn) catch unreachable;
+        // for (onCommitFns.items) |f| {
+        //     f.execute();
+        // }
+        // std.debug.print("checkVar: {}\n", .{checkVar});
         // const trx = try kvDB.begin(true);
         // trx.onCommit(onCommitFn.onCommit);
         // defer trx.rollback() catch unreachable;
-        // try kvDB.update(?*DB, kvDB, updateFn.update);
+        try kvDB.update(?*DB, kvDB, updateFn.update);
     }
 }

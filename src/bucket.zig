@@ -564,12 +564,14 @@ pub const Bucket = struct {
     }
 
     // Attemps to balance all nodes
-    fn rebalance(self: *Self) void {
-        for (self.nodes.valueIterator().items) |n| {
-            n.rebalance();
+    pub fn rebalance(self: *Self) void {
+        var valueItr = self.nodes.valueIterator();
+        while (valueItr.next()) |n| {
+            n.*.rebalance();
         }
-        for (self.buckets.valueIterator().items) |child| {
-            child.rebalance();
+        var itr = self.buckets.valueIterator();
+        while (itr.next()) |child| {
+            child.*.rebalance();
         }
     }
 
