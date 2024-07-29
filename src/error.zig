@@ -24,4 +24,7 @@ pub const Error = error{
 
     // Below are the mmap errors
     MMapTooLarge,
+
+    //
+    OutOfMemory,
 };

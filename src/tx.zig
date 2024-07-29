@@ -168,8 +168,9 @@ pub const TX = struct {
         // the size of the freelist but not underestimate the size (wich would be bad).
         self.db.?.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
         const p = self.allocate((self.db.?.freelist.size() / self.db.?.pageSize) + 1) catch |err| {
+            std.log.err("failed to allocate memory: {}", .{err});
             self._rollback();
-            return err;
+            return Error.OutOfMemory;
         };
         self.db.?.freelist.write(p) catch |err| {
             self._rollback();

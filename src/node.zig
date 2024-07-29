@@ -495,15 +495,15 @@ pub const Node = struct {
             const exists = self.bucket.?.nodes.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
             self.free();
-            self.parent.rebalance();
+            self.parent.?.rebalance();
             return;
         }
 
         assert(self.parent.?.numChildren() > 1, "parent must have at least 2 children", .{});
 
         // Destination node is right sibling if idx == 0, otherwise left sibling.
-        var target: *Node = undefined;
-        const useNextSlibling = (self.parent.?.children(self) == 0);
+        var target: ?*Node = null;
+        const useNextSlibling = (self.parent.?.childIndex(self) == 0);
         if (useNextSlibling) {
             target = self.nextSlibling();
         } else {
@@ -513,25 +513,52 @@ pub const Node = struct {
         // If both this node and the target node are too small then merge them.
         if (useNextSlibling) {
             // Reparent all child nodes being moved.
-            for (self.inodes.?) |inode| {
+            for (self.inodes.items) |inode| {
                 // 难道有些数据没在bucket.nodes里面？
                 if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
-                    _child.parent.removeChild(_child);
+                    _child.parent.?.removeChild(_child);
                     _child.parent = self;
-                    //_child.parent.?.children = append(_child.parent.?.children, _child);
+                    _child.parent.?.children.append(_child) catch unreachable;
                 }
             }
-        } else {}
+
+            // Copy over inodes from target and remove target.
+            self.inodes.appendSlice(target.?.inodes.items) catch unreachable;
+            self.parent.?.del(target.?.key.?);
+            _ = self.bucket.?.nodes.remove(target.?.pgid);
+            target.?.free();
+        } else {
+            // Reparent all child nodes being moved.
+            for (self.inodes.items) |inode| {
+                if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                    _child.parent.?.removeChild(_child);
+                    _child.parent = target;
+                    _child.parent.?.children.append(_child) catch unreachable;
+                }
+            }
+
+            // Copy over inodes to target and remove node.
+            target.?.inodes.appendSlice(self.inodes.items) catch unreachable;
+            self.parent.?.del(self.key);
+            self.parent.?.removeChild(self);
+            _ = self.bucket.?.nodes.remove(self.pgid);
+            self.free();
+        }
+
+        // Either this node or the target node was deleted from the parent so rebalance it.
+        self.parent.?.rebalance();
     }
 
-    // fn removeChild(self: *Self, target: *Node) void {
-    //     for (self.children.?, 0..) |child, i| {
-    //         if (child == target) {
-    //             self.children.?[i] = null;
-    //             return;
-    //         }
-    //     }
-    // }
+    /// Removes a node from the list of in-memory children.
+    /// This does not affect the inodes.
+    fn removeChild(self: *Self, target: *Node) void {
+        for (self.children.items, 0..) |child, i| {
+            if (child == target) {
+                _ = self.children.orderedRemove(i);
+                return;
+            }
+        }
+    }
 
     // Causes the node to copy all its inode key/value references to heap memory.
     // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
