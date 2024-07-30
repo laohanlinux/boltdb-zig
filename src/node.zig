@@ -539,7 +539,7 @@ pub const Node = struct {
 
             // Copy over inodes to target and remove node.
             target.?.inodes.appendSlice(self.inodes.items) catch unreachable;
-            self.parent.?.del(self.key);
+            self.parent.?.del(self.key.?);
             self.parent.?.removeChild(self);
             _ = self.bucket.?.nodes.remove(self.pgid);
             self.free();
