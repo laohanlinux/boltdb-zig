@@ -576,6 +576,7 @@ pub const DB = struct {
     /// Attempting to manually commit or rollback within the function will cause a panic.
     pub fn update(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
+        defer trx.destroy();
 
         // Make sure the transaction rolls back in the event of a panic.
         defer if (trx.db != null) {
@@ -589,6 +590,7 @@ pub const DB = struct {
         func(ctx, trx) catch |err| {
             trx.managed = false;
             trx.rollback() catch {};
+            std.debug.print("after execute transaction commit handle\n", .{});
             return err;
         };
         trx.managed = false;

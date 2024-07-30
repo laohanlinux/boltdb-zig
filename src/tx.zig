@@ -135,6 +135,7 @@ pub const TX = struct {
     /// Returns an error if a disk write error occurs, or if commit is
     /// called on a ready-only transaction.
     pub fn commit(self: *Self) Error!void {
+        defer std.debug.print("finish commit.\n", .{});
         const assert = @import("./assert.zig").assert;
         assert(!self.managed, "mananged tx commit not allowed", .{});
         if (self.db == null) {
@@ -208,14 +209,11 @@ pub const TX = struct {
         self.stats.writeTime += startTime.lap();
         std.debug.print("write cost time: {}ms\n", .{self.stats.writeTime / std.time.ns_per_ms});
 
+
         // Finalize the transaction.
         self.close();
 
-        // Execute commit handlers now that the locks have been removed.
-        std.debug.print("execute commit handlers {}\n", .{self._commitHandlers.capacity});
-        for (self._commitHandlers.items) |func| {
-            func.execute();
-        }
+
         // ok
     }
 
@@ -263,18 +261,39 @@ pub const TX = struct {
         }
         if (self.writable) {
             // Grab freelist stats.
+            const freelistFreeN = self.getDB().freelist.freeCount();
+            const freelistPendingN = self.getDB().freelist.pendingCount();
+            const freelistAlloc = self.getDB().freelist.size();
+
+            // Remove transaction ref & writer lock.
+            self.getDB().rwtx = null;
+            self.getDB().rwlock.unlock();
+
+            // Merge statistics.
+            self.getDB().statlock.lock();
+            self.getDB().stats.free_page_n = freelistFreeN;
+            self.getDB().stats.pending_page_n = freelistPendingN;
+            self.getDB().stats.free_alloc = (freelistFreeN + freelistPendingN) + self.getDB().pageSize;
+            self.getDB().stats.free_list_inuse = freelistAlloc;
+            self.getDB().stats.tx_stats.add(&self.stats);
+            self.getDB().statlock.unlock();
         } else {
             self.db.?.removeTx(self);
             std.debug.print("remove tx({}) from db\n", .{self.meta.txid});
         }
 
         // clear all reference.
-        // const allocator = self.db.?.allocator;
+        const allocator = self.db.?.allocator;
         self.db.?.allocator.destroy(self.meta);
         self.db = null;
         self.pages.deinit();
         self.root.deinit();
-        // allocator.destroy(self);
+        // Execute commit handlers now that the locks have been removed.
+        std.debug.print("execute commit handlers {}\n", .{self._commitHandlers.capacity});
+        for (self._commitHandlers.items) |func| {
+            func.execute();
+        }
+        allocator.destroy(self);
     }
 
     /// Iterates over every page within a given page and executes a function.
