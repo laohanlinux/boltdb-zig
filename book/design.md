@@ -71,9 +71,29 @@ flowchart TD
 
 ## Insert
 
-	### Insert 4
+如何找到適合的插入位置：
 
-- 检索到N4
+- 检索对应的叶子节点
+
+  ```go
+  index := sort.Search(len(n.inodes), func(i int) bool {
+      return bytes.Compare(n.inodes[i].key, key) != -1
+  })
+  ```
+
+- 从叶子中找出对应的位置
+
+  ```go
+  index := sort.Search(len(n.inodes), func(i int) bool {return bytes.Compare(n.inodes[i].key, oldKey) != 1})
+  ```
+
+  即找出一個  inodes[i].key >= key的位置
+
+  
+
+### Insert 4
+
+- 检索到N4-5-i0 >= 4
 - N4=》4-i0，5-i1，8-i2，9-i3
 
 ### Insert 100
