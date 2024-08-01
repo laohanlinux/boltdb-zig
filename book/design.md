@@ -53,27 +53,37 @@ flowchart TD
 
 ### Find
 
-```mermaid
-flowchart TD
-    nh["5，13"] --> n0["2，4<br>K&lt;5"] & nm("7，11<br>5&lt;K&lt;13") & nl["18，23<br>"]
-    nl --> nc["15，17<br>13&lt;K&lt;18"] & no["20<br>18&lt;K&lt;23"] & nz["25<br>23&lt;K"]
-    style nh fill:#FFD600,stroke-width:2px,stroke-dasharray: 2,color:#2962FF
-    style n0 stroke-width:2px,stroke-dasharray: 0,fill:none,stroke:#424242
-
-```
+![image-20240801130246037](1.png)
 
 #### Find 20
 
- - 检索【5，13】，中间节点，fIndex=2（大于13，到了边界）
- - 检索【18，23】，中间节点，fIndex=1
- - 检索【20】，等于20，返回
+ - 检索N0，中间节点，fIndex=0，即c0
+ - 检索N1，中间节点，找到key=20，fIndex=2，即c2
+ - 检索N5，叶子节点，且检索到20，即找到目标值
 
-#### Find 18
+#### Find 53
 
- - 检索【5，13】，中间节点，fIndex=2
- - 检索【18，23】，找到目标节点，返回
+ - 检索N0，中间节点，fIndex=1，即c1
+ - 检索N2，中间节点，fIndex=1，即c1
+ - 检索N6，叶子点，且未找到53，即未找到目标值
 
 检索到的节点为branch，需要二级跳转，
+
+## Insert
+
+	### Insert 4
+
+- 检索到N4
+- N4=》4-i0，5-i1，8-i2，9-i3
+
+### Insert 100
+
+- 检索到N8
+- N8=〉 90-i0，96-i1，99-i2，100-i3
+
+### Insert 37
+
+- 检索到N7
 
 ### Rebalance
 
