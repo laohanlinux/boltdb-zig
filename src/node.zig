@@ -165,9 +165,17 @@ pub const Node = struct {
         // Find insertion index.
         const keyINode = INode.init(0, 0, oldKey, null);
         const index = std.sort.lowerBound(INode, keyINode, self.inodes.items, {}, lessThanFn);
-        const insertINode = INode.init(flags, pgid, newKey, value);
-        self.inodes.insert(index, insertINode) catch unreachable;
-        assert(insertINode.key.?.len > 0, "put: zero-length inode key", .{});
+        const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?));
+        if (!exact) {
+            const insertINode = INode.init(0, 0, null, null);
+            self.inodes.insert(index, insertINode) catch unreachable;
+        }
+        const inodeRef = &self.inodes.items[index];
+        inodeRef.*.flags = flags;
+        inodeRef.*.pgid = pgid;
+        inodeRef.key = newKey;
+        inodeRef.value = value;
+        assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
     }
 
     // Removes a key from the node.
