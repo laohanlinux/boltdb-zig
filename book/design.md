@@ -31,7 +31,7 @@ rootBucket:page.Page{ .id = 3, .flags = 2, .count = 0, .overflow = 0 }
 freelist:page.Page{ .id = 2, .flags = 16, .count = 0, .overflow = 0 }
 ````
 
-​	![](3.svg)
+![](3.svg)
 
 创建一个Bucket：*widgets*
 
@@ -41,19 +41,17 @@ freelist:page.Page{ .id = 2, .flags = 16, .count = 0, .overflow = 0 }
   txid = 2, 
   type Tx struct {
   	meta           *meta = meta1
-    root           Bucket = struct {
-      										tx: self, 
-      										rootNode:	
-     				 							bucket = {
-                            	root = 3,
+    	root           Bucket = struct {
+      					tx: self, 
+      					rootNode:bucket = {
+                           	root = 3,
                             	seq = 0,
                           }
-    								}         
-  }
-  
+  				}         
+  }  
   ```
-
   
+
 
 ## B+ Tree
 
@@ -164,7 +162,31 @@ func (c *Cursor) node() *node {
 }
 ```
 
+具体以一个简单的例子来展示整个过程。
 
+- 数据初始化，其数据布局
+
+![](3.svg)
+
+- 启动一个writable事务，比如db.Update
+
+  对应的交易对象如下：
+
+  ```go
+  txid = 2, 
+  type Tx struct {
+  	meta           *meta = meta1
+    	root           Bucket = struct {
+      					tx: self, 
+      					rootNode:bucket = {
+                           	root = 3,
+                            	seq = 0,
+                          }
+  				}         
+  } 
+  ```
+
+- 创建一个游标: b.Cursor
 
 #### Buckets平衡
 
