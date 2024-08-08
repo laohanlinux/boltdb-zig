@@ -110,7 +110,7 @@ pub const Bucket = struct {
         }
 
         // Save a reference to the inline page if the bucket is inline.
-        if (self._b.root == 0) {
+        if (self._b.?.root == 0) {
             child.page = page.Page.init(value); // TODO
             std.log.info("Save a reference to the inline page if the bucket is inline, the page is {}", .{child.page.?.id});
         }
