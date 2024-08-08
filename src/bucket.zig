@@ -1,14 +1,14 @@
-const page = @import("./page.zig");
-const tx = @import("./tx.zig");
+const page = @import("page.zig");
+const tx = @import("tx.zig");
 const std = @import("std");
-const Node = @import("./node.zig").Node;
+const Node = @import("node.zig").Node;
 const assert = @import("util.zig").assert;
-const Tuple = @import("./consts.zig").Tuple;
+const Tuple = @import("consts.zig").Tuple;
 const Tuple2 = Tuple.t2(?*page.Page, *Node);
-const Cursor = @import("./cursor.zig").Cursor;
-const consts = @import("./consts.zig");
-const util = @import("./util.zig");
-const Error = @import("./error.zig").Error;
+const Cursor = @import("cursor.zig").Cursor;
+const consts = @import("consts.zig");
+const util = @import("util.zig");
+const Error = @import("error.zig").Error;
 const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 
 // Represents a collection of key/value pairs inside the database.
@@ -49,6 +49,10 @@ pub const Bucket = struct {
         if (self.tx.?.writable) {
             // self.tx.?.getDB().allocator.destroy(self._b.?);
         }
+        self.allocator.destroy(self);
+    }
+
+    fn destroy(self: *Self) void {
         self.allocator.destroy(self);
     }
 
@@ -553,12 +557,12 @@ pub const Bucket = struct {
     // Allocates and writes a bucket to a byte slice.
     fn write(self: *Self) []u8 {
         // Allocate the approprivate size.
-        const n = self.rootNode;
+        const n = self.rootNode.?;
         const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize()) catch unreachable;
         const _bt = _Bucket.init(value);
         _bt.* = self._b.?.*;
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
-        n.?.write(p);
+        n.write(p);
 
         return value;
     }
@@ -632,7 +636,7 @@ pub const Bucket = struct {
         return PageOrNode{ .first = self.tx.?.getPage(id), .second = null };
     }
 
-    // Creates a node from a page and associates it with a given parent.
+    /// Creates a node from a page and associates it with a given parent.
     pub fn node(self: *Self, pgid: page.PgidType, parentNode: ?*Node) *Node {
         assert(self.nodes.count() > 0, "nodes map expected!", .{});
 

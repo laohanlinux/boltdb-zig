@@ -176,17 +176,55 @@ func (c *Cursor) node() *node {
   txid = 2, 
   type Tx struct {
   	meta           *meta = meta1
-    	root           Bucket = struct {
-      					tx: self, 
-      					rootNode:bucket = {
-                           	root = 3,
-                            	seq = 0,
-                          }
-  				}         
+    Bucket = struct {
+      	tx: self, 
+      	rootNode:bucket = {
+           root = 3,
+           seq = 0,
+        }
+  	}         
   } 
   ```
 
-- 创建一个游标: b.Cursor
+- CreateNewBucket：创建新bucket
+
+  - b.Cursor() 创建游标
+
+  - 如图所示，从root（top bucket），开始检索
+
+  - 未检索到对应的key，即可以新建一个子bucket
+
+    ```go
+    	var bucket = Bucket{
+    		bucket:      &bucket{},
+    		rootNode:    &node{isLeaf: true},
+    		FillPercent: DefaultFillPercent,
+    	}
+    ```
+
+    > 1.可以看到新建的bucket是inline bucket，其对应的底层存储也是一个叶子节点。
+    >
+    > 2.和其他节点一样，新建的节点使用的是node，而不是page，这里的rootNode也是一样的道理
+    >
+    > 3.游标什么时候用node，什么时候用page？如果是“读”操作，只用page即可，如果是“写”操作，用node来替换。因为涉及到内存的变动，比如增加，删除，平衡等。
+
+  - 将bucket写入一块内存中： var value = bucket.write()
+
+    请参考[这个段落](#Write a bucket Into slice)。
+
+  - 将对应的节点node写入到cursor的合适位置上，就是一个B+叔正常的插入过程
+
+    > 注意这里会把检索路径节点都转为node，而不是page
+
+  - 此时这个b+树如何？
+
+    ```mermaid
+    flowchart TD
+      n7("i0-widgets(NewBucketName, Leaf Node)")
+    ```
+
+
+​		
 
 #### Buckets平衡
 
@@ -195,4 +233,33 @@ func (c *Cursor) node() *node {
 ### Merge
 
 ### Delete
+
+## Write a bucket Into slice
+
+<a name="Write a bucket Into slice"></a>
+
+```go
+// write allocates and writes a bucket to a byte slice.
+func (b *Bucket) write() []byte {
+	// Allocate the appropriate size.
+	var n = b.rootNode
+	var value = make([]byte, bucketHeaderSize+n.size())
+
+	// Write a bucket header.
+	var bucket = (*bucket)(unsafe.Pointer(&value[0]))
+	*bucket = *b.bucket
+
+	// Convert byte slice to a fake page and write the root node.
+	var p = (*page)(unsafe.Pointer(&value[bucketHeaderSize]))
+	n.write(p)
+
+	return value
+}
+```
+
+底层结构
+
+```
+|bucketHeader|page|
+```
 

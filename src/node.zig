@@ -1,10 +1,10 @@
 const std = @import("std");
-const page = @import("./page.zig");
-const bucket = @import("./bucket.zig");
-const tx = @import("./tx.zig");
-const util = @import("./util.zig");
-const consts = @import("./consts.zig");
-const assert = @import("./assert.zig").assert;
+const page = @import("page.zig");
+const bucket = @import("bucket.zig");
+const tx = @import("tx.zig");
+const util = @import("util.zig");
+const consts = @import("consts.zig");
+const assert = @import("assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
@@ -24,7 +24,7 @@ pub const Node = struct {
 
     const Self = @This();
 
-    //
+    /// init a node with allocator.
     pub fn init(allocator: std.mem.Allocator) *Self {
         const self = allocator.create(Self) catch unreachable;
         self.allocator = allocator;
@@ -40,7 +40,7 @@ pub const Node = struct {
         return self;
     }
 
-    // free the node memory
+    /// free the node memory
     pub fn deinit(self: *Self) void {
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         self.inodes.deinit();
@@ -48,7 +48,7 @@ pub const Node = struct {
         self.allocator.destroy(self);
     }
 
-    // Returns the top-level node this node is attached to.
+    /// Returns the top-level node this node is attached to.
     pub fn root(self: *Self) ?*Node {
         if (self.parent) |parent| {
             return parent.*.root();
@@ -57,7 +57,7 @@ pub const Node = struct {
         }
     }
 
-    // Returns the minimum number of inodes this node should have.
+    /// Returns the minimum number of inodes this node should have.
     fn minKeys(self: *const Self) usize {
         if (self.isLeaf) {
             return 1;
@@ -65,7 +65,7 @@ pub const Node = struct {
         return 2;
     }
 
-    // Returns the size of the node after serialization.
+    /// Returns the size of the node after serialization.
     fn size(self: *const Self) usize {
         var sz = page.Page.headerSize();
         const elsz = self.pageElementSize();
@@ -106,9 +106,7 @@ pub const Node = struct {
 
     /// Returns the child node at a given index.
     pub fn childAt(self: *Self, index: usize) ?*Node {
-        if (self.isLeaf) {
-            @panic("invalid childAt call on a leaf node");
-        }
+        assert(!self.isLeaf, "invalid childAt call on a leaf", .{});
         return self.bucket.?.node(self.inodes.items[index].pgid, self);
     }
 
@@ -120,12 +118,11 @@ pub const Node = struct {
     }
 
     // Returns the number of children.
-    // TODO ?
     fn numChildren(self: *Self) usize {
         return self.inodes.items.len;
     }
 
-    /// Returns the next node with the same parent.
+    // Returns the next node with the same parent.
     fn nextSlibling(self: *Self) ?*Self {
         if (self.parent == null) {
             return null;
@@ -139,7 +136,7 @@ pub const Node = struct {
         return self.parent.?.childAt(index + 1);
     }
 
-    /// Returns the previous node with the same parent.
+    // Returns the previous node with the same parent.
     fn preSlibling(self: *Self) ?*Self {
         if (self.parent == null) {
             return null;
@@ -153,7 +150,7 @@ pub const Node = struct {
         return self.parent.?.childAt(index - 1);
     }
 
-    // Inserts a key/value.
+    /// Inserts a key/value.
     pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: page.PgidType, flags: u32) void {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
@@ -178,7 +175,7 @@ pub const Node = struct {
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
     }
 
-    // Removes a key from the node.
+    /// Removes a key from the node.
     pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
         const keyINode = INode.init(0, 0, key, null);
@@ -190,7 +187,7 @@ pub const Node = struct {
 
     // For binary search
     fn createKeyINode(self: *const Self) INode {
-        return INode.init(0, 0, self.key.?, null);
+        return INode.init(0, 0, self.key, null);
     }
 
     /// Read initializes the node from a page.
