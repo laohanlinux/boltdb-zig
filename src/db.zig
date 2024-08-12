@@ -1,12 +1,12 @@
 const std = @import("std");
-const page = @import("./page.zig");
-const tx = @import("./tx.zig");
-const errors = @import("./error.zig");
-const bucket = @import("./bucket.zig");
-const freelist = @import("./freelist.zig");
-const util = @import("./util.zig");
-const consts = @import("./consts.zig");
-const Error = @import("./error.zig").Error;
+const page = @import("page.zig");
+const tx = @import("tx.zig");
+const errors = @import("error.zig");
+const bucket = @import("bucket.zig");
+const freelist = @import("freelist.zig");
+const util = @import("util.zig");
+const consts = @import("consts.zig");
+const Error = @import("error.zig").Error;
 const TX = tx.TX;
 const PageFlag = consts.PageFlag;
 
@@ -94,7 +94,7 @@ pub const DB = struct {
     meta0: *Meta,
     meta1: *Meta,
 
-    opts: ?*const fn ([]u8, i64) void,
+    opts: ?*const fn (std.fs.File, []const u8, u64) Error!usize,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -191,6 +191,9 @@ pub const DB = struct {
         // if !options.ReadOnly.
         // The database file is locked using the shared lock (more than oe process may hold a lock at the same time) otherwise (options.ReadOnly is set).
         // TODO
+
+        // Default values for test hooks.
+        db.opts = Self.opsWriteAt;
 
         // Initialize the database if it doesn't exist.
         const stat = try db.file.stat();
@@ -653,15 +656,17 @@ pub const DB = struct {
         self.opened = false;
 
         util.munmap(self.dataRef.?);
+
         self.file.close();
         self.allocator.free(self._path);
 
         self.freelist.deinit();
         self.txs.deinit();
+        // self.allocator.free(self.dataRef.?);
     }
 
-    fn opsWriteAt(self: *Self, bytes: []const u8, offset: u64) !usize {
-        const writeN = try self.file.pwrite(bytes, offset);
+    fn opsWriteAt(fp: std.fs.File, bytes: []const u8, offset: u64) Error!usize {
+        const writeN = fp.pwrite(bytes, offset) catch unreachable;
         return writeN;
     }
 };

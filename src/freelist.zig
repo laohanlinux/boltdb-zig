@@ -1,9 +1,9 @@
-const page = @import("./page.zig");
+const page = @import("page.zig");
 const std = @import("std");
-const tx = @import("./tx.zig");
-const Error = @import("./error.zig").Error;
-const consts = @import("./consts.zig");
-const assert = @import("./assert.zig").assert;
+const tx = @import("tx.zig");
+const Error = @import("error.zig").Error;
+const consts = @import("consts.zig");
+const assert = @import("assert.zig").assert;
 const TxId = consts.TxId;
 // FreeList represents a list of all pages that are available for allcoation.
 // It also tracks pages that  have been freed but are still in use by open transactions.
@@ -217,6 +217,7 @@ pub const FreeList = struct {
     /// saved to disk since in the event of a program crash, all pending ids will
     /// become free.
     pub fn write(self: *Self, p: *page.Page) Error!void {
+        defer std.log.info("after write freelist", .{});
         // Combine the old free pgids and pgids waiting on an open transaction.
         //
         // Update the header flag.

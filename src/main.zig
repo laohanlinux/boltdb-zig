@@ -1,5 +1,5 @@
 const std = @import("std");
-const page = @import("./page.zig");
+const page = @import("page.zig");
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)

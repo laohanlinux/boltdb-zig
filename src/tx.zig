@@ -1,17 +1,18 @@
 const std = @import("std");
-const db = @import("./db.zig");
-const bucket = @import("./bucket.zig");
-const page = @import("./page.zig");
-const Cursor = @import("./cursor.zig").Cursor;
-const consts = @import("./consts.zig");
-const util = @import("./util.zig");
+const db = @import("db.zig");
+const bucket = @import("bucket.zig");
+const page = @import("page.zig");
+const Cursor = @import("cursor.zig").Cursor;
+const consts = @import("consts.zig");
+const util = @import("util.zig");
 const TxId = consts.TxId;
-const Error = @import("./error.zig").Error;
+const Error = @import("error.zig").Error;
 const DB = db.DB;
 const Meta = db.Meta;
 const Page = page.Page;
 const Bucket = bucket.Bucket;
 const onCommitFn = util.closure(usize);
+const assert = @import("assert.zig").assert;
 
 // Represent a read-only or read/write transaction on the database.
 // Read-only transactions can be used for retriving values for keys and creating cursors.
@@ -39,6 +40,8 @@ pub const TX = struct {
     // set the flag to syscall.O_DIRECT to avoid trashing the page cache.
     writeFlag: isize,
 
+    allocator: std.mem.Allocator,
+
     const Self = @This();
 
     /// Initializes the transaction.
@@ -56,22 +59,22 @@ pub const TX = struct {
         self.root = bucket.Bucket.init(self);
         self.root._b.? = self.meta.root;
         self.root.rootNode = null;
+        self.allocator = _db.allocator;
 
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
-            self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.db.?.allocator);
+            self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.allocator);
             self.meta.txid += 1;
         }
-        self._commitHandlers = std.ArrayList(onCommitFn).init(_db.allocator);
+        self._commitHandlers = std.ArrayList(onCommitFn).init(self.allocator);
         std.debug.print("tx's root bucket {any}\n", .{self.root._b.?});
         std.debug.print("onCommit init: {}\n", .{self._commitHandlers.capacity});
         return self;
     }
 
     pub fn destroy(self: *Self) void {
-        if (self.db) |_db| {
-            _db.allocator.destroy(self);
-        }
+        assert(self.db == null, "db should be null before destroy", .{});
+        self.allocator.destroy(self);
     }
 
     /// Returns the current database size in bytes as seen by this transaction.
@@ -136,7 +139,6 @@ pub const TX = struct {
     /// called on a ready-only transaction.
     pub fn commit(self: *Self) Error!void {
         defer std.debug.print("finish commit.\n", .{});
-        const assert = @import("./assert.zig").assert;
         assert(!self.managed, "mananged tx commit not allowed", .{});
         if (self.db == null) {
             return Error.TxClosed;
@@ -209,10 +211,8 @@ pub const TX = struct {
         self.stats.writeTime += startTime.lap();
         std.debug.print("write cost time: {}ms\n", .{self.stats.writeTime / std.time.ns_per_ms});
 
-
         // Finalize the transaction.
         self.close();
-
 
         // ok
     }
@@ -220,7 +220,6 @@ pub const TX = struct {
     /// Closes the transaction and ignores all previous updates. Read-only
     /// transactions must be rolled back and not committed.
     pub fn rollback(self: *Self) Error!void {
-        const assert = @import("./assert.zig").assert;
         assert(!self.managed, "managed tx rollback not allowed", .{});
         if (self.db == null) {
             return Error.TxClosed;
@@ -228,22 +227,40 @@ pub const TX = struct {
         self._rollback();
     }
 
-    pub fn write(_: *Self) Error!void {}
+    /// Writes any dirty pages to disk.
+    pub fn write(self: *Self) Error!void {
+        // Sort pages by id.
+        const pagesSlice = try self.allocator.alloc(std.ArrayList(consts.PgIds), self.pages.count());
+        var itr = self.pages.keyIterator();
+        while (itr.next()) |pgid| {
+            try pagesSlice.append(*pgid);
+        }
+    }
 
     // Writes the meta to the disk.
     fn writeMeta(self: *Self) Error!void {
         // Create a tempory buffer for the meta page.
-        var buf = std.ArrayList(u8).initCapacity(self.getDB().allocator, self.getDB().pageSize) catch unreachable;
+        const _db = self.getDB();
+        var buf = std.ArrayList(u8).initCapacity(self.allocator, self.getDB().pageSize) catch unreachable;
         buf.appendNTimes(0, self.getDB().pageSize) catch unreachable;
-        const p = self.getDB().pageInBuffer(buf.items, 0);
+        const buffer = try buf.toOwnedSlice();
+        const p = _db.pageInBuffer(buffer, 0);
+        defer self.allocator.free(buffer);
         self.meta.write(p);
         // Write the meta page to file.
-        // TODO
+        const opts = _db.opts.?;
+        const sz = p.id * @as(u64, _db.pageSize);
+        const writeSize = opts(_db.file, buffer, sz) catch unreachable;
+        assert(writeSize == sz, "failed to write meta page to disk", .{});
+        if (!_db.noSync) { // TODO
+            _db.file.sync() catch unreachable;
+        }
+        // Update statistics.
+        self.stats.write += 1;
     }
 
     // Internal rollback function.
     pub fn _rollback(self: *Self) void {
-        //std.debug.print("transaction executes rollback!\n", .{});
         if (self.db == null) {
             return;
         }
@@ -283,8 +300,8 @@ pub const TX = struct {
         }
 
         // clear all reference.
-        const allocator = self.db.?.allocator;
-        self.db.?.allocator.destroy(self.meta);
+        // const allocator = self.db.?.allocator;
+        self.allocator.destroy(self.meta);
         self.db = null;
         self.pages.deinit();
         self.root.deinit();
@@ -293,7 +310,7 @@ pub const TX = struct {
         for (self._commitHandlers.items) |func| {
             func.execute();
         }
-        allocator.destroy(self);
+        // allocator.destroy(self);
     }
 
     /// Iterates over every page within a given page and executes a function.

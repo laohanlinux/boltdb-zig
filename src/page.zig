@@ -1,6 +1,6 @@
 const std = @import("std");
-const db = @import("./db.zig");
-const consts = @import("./consts.zig");
+const db = @import("db.zig");
+const consts = @import("consts.zig");
 
 pub const min_keys_page: usize = 2;
 

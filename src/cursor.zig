@@ -1,17 +1,17 @@
 const std = @import("std");
-const Bucket = @import("./bucket.zig").Bucket;
-const Node = @import("./node.zig").Node;
-const INode = @import("./node.zig").INode;
+const Bucket = @import("bucket.zig").Bucket;
+const Node = @import("node.zig").Node;
+const INode = @import("node.zig").INode;
 const findINodeFn = @import("./node.zig").findFn;
 const lessThanFn = @import("./node.zig").lessThanFn;
-const page = @import("./page.zig");
-const util = @import("./util.zig");
+const page = @import("page.zig");
+const util = @import("util.zig");
 const assert = util.assert;
-const consts = @import("./consts.zig");
+const consts = @import("consts.zig");
 const Tuple = consts.Tuple;
 const KeyPair = consts.KeyPair;
 const KeyValueRet = consts.Tuple.t3(?[]const u8, ?[]u8, u32);
-const Error = @import("./error.zig").Error;
+const Error = @import("error.zig").Error;
 
 /// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
 /// Cursors see nested buckets with value == nil.
