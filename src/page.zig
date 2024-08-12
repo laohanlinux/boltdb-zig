@@ -162,6 +162,16 @@ pub const Page = struct {
         const slice: [*]u8 = @ptrFromInt(ptr);
         return slice[0..(page_size - Self.headerSize())];
     }
+
+    pub fn asSlice(self: *Self) []u8 {
+        const slice: [*]u8 = @ptrCast(self);
+        if (self.count == 0xFFFF) {
+            const end = @as(usize, self.overflow + 1) * @as(usize, page_size);
+            return slice[0..@as(usize, end)];
+        } else {
+            return slice[0..@as(usize, page_size)];
+        }
+    }
 };
 
 pub const BranchPageElement = packed struct {

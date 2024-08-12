@@ -230,10 +230,38 @@ pub const TX = struct {
     /// Writes any dirty pages to disk.
     pub fn write(self: *Self) Error!void {
         // Sort pages by id.
-        const pagesSlice = try self.allocator.alloc(std.ArrayList(consts.PgIds), self.pages.count());
-        var itr = self.pages.keyIterator();
+        const pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.count());
+        defer pagesSlice.deinit();
+        var itr = self.pages.valueIterator();
         while (itr.next()) |pgid| {
             try pagesSlice.append(*pgid);
+        }
+        const asc = struct {
+            fn inner(_: void, a: *Page, b: *Page) bool {
+                return a.id > b.id;
+            }
+        }.inner;
+        std.mem.sort(consts.PgidType, pagesSlice.items, {}, asc);
+
+        const _db = self.db.?;
+        const opts = _db.opts.?;
+        for (pagesSlice.items) |p| {
+            // Write out page in 'max allocation' sized chunks.
+            const slice = p.asSlice();
+            const offset = p.id * @as(u64, _db.pageSize);
+            try opts(_db.file, slice, offset);
+            // Update statistics
+            self.stats.write += 1;
+        }
+
+        // Ignore file sync if flag is set on DB.
+        if (!_db.noSync) {
+            try _db.file.sync();
+        }
+
+        // Free dirty page.
+        for (pagesSlice.items) |p| {
+            self.allocator.free(p);
         }
     }
 
