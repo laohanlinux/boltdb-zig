@@ -54,21 +54,24 @@ pub const Cursor = struct {
     pub fn first(self: *Self) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         self.stack.resize(0) catch unreachable;
-        const pNode = self._bucket.pageNode(self._bucket._b.root);
+        const pNode = self._bucket.pageNode(self._bucket._b.?.root);
+
         const ref = ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 };
         self.stack.append(ref) catch unreachable;
-        _ = self.first();
+        _ = self._first();
         // If we land on an empty page then move to the next value.
         // https://github.com/boltdb/bolt/issues/450
         if (self.stack.getLast().count() == 0) {
+            std.log.info("next key {any}", .{pNode.first});
+
             _ = self._next();
         }
         const keyValueRet = self.keyValue();
         // Return an error if current value is a bucket.
         if (keyValueRet.third & consts.BucketLeafFlag != 0) {
-            return KeyPair.init(keyValueRet.third, null);
+            return KeyPair.init(keyValueRet.first.?, null);
         }
-        return KeyPair.init(keyValueRet.first, keyValueRet.second);
+        return KeyPair.init(keyValueRet.first.?, keyValueRet.second);
     }
 
     /// Moves the cursor to the last item in the bucket and returns its key and value.
@@ -237,9 +240,9 @@ pub const Cursor = struct {
         while (true) {
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
-            var i: isize = self.stack.items.len - 1;
+            var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
             while (i >= 0) : (i -= 1) {
-                const elem = &self.stack.items[i];
+                const elem = &self.stack.items[@as(usize, @intCast(i))];
                 if (elem.index < elem.count() - 1) {
                     elem.index += 1;
                     break;
@@ -254,7 +257,7 @@ pub const Cursor = struct {
 
             // Otherwise start from where we left off in the stack and find the
             // first element of the first leaf page.
-            self.stack.resize(@as(usize, i + 1)) catch unreachable; // TODO
+            self.stack.resize(@as(usize, @intCast(i + 1))) catch unreachable; // TODO
             // Fix location
             self._first();
 
@@ -411,6 +414,7 @@ const ElementRef = struct {
     node: ?*Node = null,
     index: usize = 0,
 
+    // Create a new element reference.
     fn init(allocator: std.mem.Allocator, index: usize, p: ?*page.Page, node: ?*Node) *ElementRef {
         const self = allocator.create(ElementRef) catch unreachable;
         self.* = .{
@@ -421,6 +425,7 @@ const ElementRef = struct {
         return self;
     }
 
+    // Returns true if the element is a leaf element.
     fn isLeaf(self: *const ElementRef) bool {
         if (self.node) |node| {
             return node.isLeaf;

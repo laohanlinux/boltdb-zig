@@ -11,7 +11,7 @@ const DB = db.DB;
 const Meta = db.Meta;
 const Page = page.Page;
 const Bucket = bucket.Bucket;
-const onCommitFn = util.closure(usize);
+const onCommitFn = util.Closure(usize);
 const assert = @import("assert.zig").assert;
 
 // Represent a read-only or read/write transaction on the database.
@@ -50,36 +50,53 @@ pub const TX = struct {
         self.db = _db;
         self.pages = std.AutoHashMap(page.PgidType, *Page).init(_db.allocator);
         self.stats = TxStats{};
-        std.debug.print("the meta copy is \n", .{});
-
         // Copy the meta page since it can be changed by the writer.
         self.meta = _db.allocator.create(Meta) catch unreachable;
         _db.getMeta().copy(self.meta);
         // Copy over the root bucket.
         self.root = bucket.Bucket.init(self);
         self.root._b.? = self.meta.root;
+        // Note: here the root node is not set
         self.root.rootNode = null;
         self.allocator = _db.allocator;
 
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
-            self.pages = std.AutoHashMap(page.PgidType, *page.Page).init(self.allocator);
             self.meta.txid += 1;
         }
         self._commitHandlers = std.ArrayList(onCommitFn).init(self.allocator);
-        std.debug.print("tx's root bucket {any}\n", .{self.root._b.?});
-        std.debug.print("onCommit init: {}\n", .{self._commitHandlers.capacity});
         return self;
     }
 
+    /// Destroys the transaction and releases all associated resources.
     pub fn destroy(self: *Self) void {
         assert(self.db == null, "db should be null before destroy", .{});
         self.allocator.destroy(self);
     }
 
+    pub fn print(self: *const Self) void {
+        const printLog = struct {
+            // writeFlag: isize,
+            writable: bool,
+            meta: *Meta,
+            // root: *Bucket,
+            // pages: std.AutoHashMap(page.PgidType, *Page),
+            // stats: TxStats,
+        };
+        const printStruct = printLog{
+            // .writeFlag = self.writeFlag,
+            .meta = self.meta,
+            .writable = self.writable,
+            // .root = self.root,
+            // .pages = self.pages,
+            // .stats = self.stats,
+        };
+        std.log.info("{}", .{printStruct});
+    }
+
     /// Returns the current database size in bytes as seen by this transaction.
     pub fn size(self: *const Self) u64 {
-        return self.meta.pgid * @as(u64, self.db.?.pageSize);
+        return self.meta.pgid * @as(u64, self.getDB().pageSize);
     }
 
     /// Creates a cursor assosicated with the root bucket.
@@ -125,8 +142,15 @@ pub const TX = struct {
     /// Executes a function for each bucket in the root.
     /// If the provided function returns an error then the iteration is stopped and
     /// the error is returned to the caller.
-    pub fn forEach(self: *Self, f: fn (*bucket.Bucket, *const consts.KeyPair) Error!void) Error!void {
-        return self.root.forEach(f);
+    pub fn forEach(self: *Self, f: fn (name: []const u8, b: ?*Bucket) Error!void) Error!void {
+        const travel = struct {
+            fn inner(trx: *Self, key: []const u8, _: ?[]const u8) Error!void {
+                const b = trx.getBucket(key);
+                return f(key, b);
+            }
+        };
+        // self.root.forEachKeyValue(travel: fn(key:[]const u8, value:?[]const u8)Error!void)
+        return self.root.forEachKeyValue(*Self, self, travel.inner);
     }
 
     /// Adds a handler function to be executed after the transaction successfully commits.
@@ -138,13 +162,14 @@ pub const TX = struct {
     /// Returns an error if a disk write error occurs, or if commit is
     /// called on a ready-only transaction.
     pub fn commit(self: *Self) Error!void {
-        defer std.debug.print("finish commit.\n", .{});
+        defer std.log.debug("finish commit", .{});
         assert(!self.managed, "mananged tx commit not allowed", .{});
         if (self.db == null) {
             return Error.TxClosed;
         } else if (!self.writable) {
             return Error.TxNotWriteable;
         }
+        const _db = self.getDB();
 
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
@@ -169,13 +194,15 @@ pub const TX = struct {
 
         // Free the freelist and allocate new pages for it. This will overestimate
         // the size of the freelist but not underestimate the size (wich would be bad).
-        self.db.?.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
-        const p = self.allocate((self.db.?.freelist.size() / self.db.?.pageSize) + 1) catch |err| {
+        _db.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
+        const allocatePageCount = _db.freelist.size() / _db.pageSize + 1;
+        var p = self.allocate(allocatePageCount) catch |err| {
             std.log.err("failed to allocate memory: {}", .{err});
             self._rollback();
             return Error.OutOfMemory;
         };
-        self.db.?.freelist.write(p) catch |err| {
+        defer p.deinit(self.allocator);
+        _db.freelist.write(p) catch |err| {
             self._rollback();
             return err;
         };
@@ -184,7 +211,7 @@ pub const TX = struct {
         // If the high water mark has moved up then attempt to grow the database.
         if (self.meta.pgid > opgid) {
             const growSize = @as(usize, (self.meta.pgid + 1)) * self.db.?.pageSize;
-            self.db.?.grow(growSize) catch |err| {
+            _db.grow(growSize) catch |err| {
                 self._rollback();
                 return err;
             };
@@ -209,8 +236,8 @@ pub const TX = struct {
             return err;
         };
         self.stats.writeTime += startTime.lap();
-        std.debug.print("write cost time: {}ms\n", .{self.stats.writeTime / std.time.ns_per_ms});
-
+        std.log.info("write cost time: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
+        self.print();
         // Finalize the transaction.
         self.close();
 
@@ -230,18 +257,18 @@ pub const TX = struct {
     /// Writes any dirty pages to disk.
     pub fn write(self: *Self) Error!void {
         // Sort pages by id.
-        const pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.count());
+        var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.count());
         defer pagesSlice.deinit();
         var itr = self.pages.valueIterator();
         while (itr.next()) |pgid| {
-            try pagesSlice.append(*pgid);
+            try pagesSlice.append(pgid.*);
         }
         const asc = struct {
             fn inner(_: void, a: *Page, b: *Page) bool {
                 return a.id > b.id;
             }
         }.inner;
-        std.mem.sort(consts.PgidType, pagesSlice.items, {}, asc);
+        std.mem.sort(*Page, pagesSlice.items, {}, asc);
 
         const _db = self.db.?;
         const opts = _db.opts.?;
@@ -249,19 +276,20 @@ pub const TX = struct {
             // Write out page in 'max allocation' sized chunks.
             const slice = p.asSlice();
             const offset = p.id * @as(u64, _db.pageSize);
-            try opts(_db.file, slice, offset);
+            _ = try opts(_db.file, slice, offset);
             // Update statistics
             self.stats.write += 1;
         }
 
         // Ignore file sync if flag is set on DB.
         if (!_db.noSync) {
-            try _db.file.sync();
+            _db.file.sync() catch unreachable;
         }
 
         // Free dirty page.
         for (pagesSlice.items) |p| {
-            self.allocator.free(p);
+            std.log.debug("destroy page: {}", .{p.id});
+            self.allocator.destroy(p);
         }
     }
 
@@ -304,27 +332,28 @@ pub const TX = struct {
         if (self.db == null) {
             return;
         }
+        const _db = self.db.?;
         if (self.writable) {
             // Grab freelist stats.
-            const freelistFreeN = self.getDB().freelist.freeCount();
-            const freelistPendingN = self.getDB().freelist.pendingCount();
-            const freelistAlloc = self.getDB().freelist.size();
+            const freelistFreeN = _db.freelist.freeCount();
+            const freelistPendingN = _db.freelist.pendingCount();
+            const freelistAlloc = _db.freelist.size();
 
             // Remove transaction ref & writer lock.
-            self.getDB().rwtx = null;
-            self.getDB().rwlock.unlock();
+            _db.rwtx = null;
+            _db.rwlock.unlock();
 
             // Merge statistics.
-            self.getDB().statlock.lock();
-            self.getDB().stats.free_page_n = freelistFreeN;
-            self.getDB().stats.pending_page_n = freelistPendingN;
-            self.getDB().stats.free_alloc = (freelistFreeN + freelistPendingN) + self.getDB().pageSize;
-            self.getDB().stats.free_list_inuse = freelistAlloc;
-            self.getDB().stats.tx_stats.add(&self.stats);
-            self.getDB().statlock.unlock();
+            _db.statlock.lock();
+            _db.stats.free_page_n = freelistFreeN;
+            _db.stats.pending_page_n = freelistPendingN;
+            _db.stats.free_alloc = (freelistFreeN + freelistPendingN) + self.getDB().pageSize;
+            _db.stats.free_list_inuse = freelistAlloc;
+            _db.stats.txStats.add(&self.stats);
+            _db.statlock.unlock();
         } else {
-            self.db.?.removeTx(self);
-            std.debug.print("remove tx({}) from db\n", .{self.meta.txid});
+            _db.removeTx(self);
+            std.log.info("remove tx({}) from db", .{self.meta.txid});
         }
 
         // clear all reference.
@@ -334,7 +363,7 @@ pub const TX = struct {
         self.pages.deinit();
         self.root.deinit();
         // Execute commit handlers now that the locks have been removed.
-        std.debug.print("execute commit handlers {}\n", .{self._commitHandlers.capacity});
+        std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});
         for (self._commitHandlers.items) |func| {
             func.execute();
         }
@@ -385,7 +414,12 @@ pub const TX = struct {
     }
 
     pub fn allocate(self: *Self, count: usize) !*page.Page {
-        const p = self.db.?.allocatePage(count);
+        const p = try self.db.?.allocatePage(count);
+        // Save to our page cache.
+        self.pages.put(p.id, p) catch unreachable;
+        // Update statistics.
+        self.stats.pageCount += 1;
+        self.stats.pageAlloc += count * self.db.?.pageSize;
         return p;
     }
 };
@@ -393,8 +427,8 @@ pub const TX = struct {
 // Represents statusctics about the actiosn performed by the transaction
 pub const TxStats = packed struct {
     // Page statistics.
-    page_count: usize = 0, // number of page allocations
-    page_alloc: usize = 0, // total bytes allocated
+    pageCount: usize = 0, // number of page allocations
+    pageAlloc: usize = 0, // total bytes allocated
 
     // Cursor statistics
     cursor_count: usize = 0, // number of cursors created
@@ -418,8 +452,8 @@ pub const TxStats = packed struct {
 
     const Self = @This();
     pub fn add(self: *Self, other: *TxStats) void {
-        self.page_count += other.page_count;
-        self.page_alloc += other.page_alloc;
+        self.pageCount += other.pageCount;
+        self.pageAlloc += other.pageAlloc;
         self.cursor_count += other.cursor_count;
         self.nodeCount += other.nodeCount;
         self.nodeDeref += other.nodeDeref;
@@ -437,8 +471,8 @@ pub const TxStats = packed struct {
     // you need the performance counters that occurred within that time span.
     pub fn sub(self: *Self, other: *TxStats) Self {
         return TxStats{
-            .page_count = self.page_count - other.page_count,
-            .page_alloc = self.page_alloc - other.page_alloc,
+            .pageCount = self.pageCount - other.pageCount,
+            .pageAlloc = self.pageAlloc - other.pageAlloc,
             .cursor_count = self.cursor_count - other.cursor_count,
             .nodeCount = self.nodeCount - other.nodeCount,
             .nodeDeref = self.nodeDeref - other.nodeDeref,

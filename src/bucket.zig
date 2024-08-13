@@ -31,6 +31,7 @@ pub const Bucket = struct {
 
     const Self = @This();
 
+    /// Initializes a new bucket.
     pub fn init(_tx: *tx.TX) *Bucket {
         const b = _tx.db.?.allocator.create(Self) catch unreachable;
         b._b = _Bucket{};
@@ -43,6 +44,7 @@ pub const Bucket = struct {
         return b;
     }
 
+    /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
         self.buckets.deinit();
         self.nodes.deinit();
@@ -77,19 +79,19 @@ pub const Bucket = struct {
         // Move cursor to key.
         const _cursor = self.cursor();
         const keyPairRef = _cursor._seek(name);
-        if (keyPairRef.key == null) {
+        if (keyPairRef.first == null) {
             return null;
         }
 
         // Return nil if the key dosn't exist or it is not a bucket.
-        if (std.mem.eql(u8, name, keyPairRef.key.?) or keyPairRef.first & consts.BucketLeafFlag == 0) {
+        if (std.mem.eql(u8, name, keyPairRef.first.?) or keyPairRef.third & consts.BucketLeafFlag == 0) {
             return null;
         }
 
-        std.log.info("get a new bucket: {}, current page: {}", .{ name, self.page.?.id });
-        const child = self.openBucket(keyPairRef.second);
+        std.log.info("get a new bucket: {s}, current page: {}", .{ name, self.page.?.id });
+        const child = self.openBucket(keyPairRef.second.?);
 
-        self.buckets.put(util.cloneBytes(self.allocator, name), child);
+        self.buckets.put(util.cloneBytes(self.allocator, name), child) catch unreachable;
         return child;
     }
 
@@ -104,9 +106,9 @@ pub const Bucket = struct {
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
         if (self.tx.?.writable) {
-            self._b = _Bucket.init(util.cloneBytes(self.tx.?.db.?.allocator, value));
+            self._b = _Bucket.init(util.cloneBytes(self.tx.?.db.?.allocator, value)).*;
         } else {
-            self._b = _Bucket.init(value);
+            self._b = _Bucket.init(value).*;
         }
 
         // Save a reference to the inline page if the bucket is inline.
@@ -346,6 +348,21 @@ pub const Bucket = struct {
         return;
     }
 
+    pub fn forEachKeyValue(self: *Self, comptime CTX: type, ctx: CTX, travel: fn (ctx: CTX, key: []const u8, value: ?[]const u8) Error!void) Error!void {
+        if (self.tx.?.db == null) {
+            return Error.TxClosed;
+        }
+
+        const c = self.cursor();
+
+        var keyPairRef = c.first();
+        while (keyPairRef.key != null) {
+            try travel(ctx, keyPairRef.key.?, keyPairRef.value);
+            keyPairRef = c.next();
+        }
+        return;
+    }
+
     // Return stats on a bucket.
     pub fn stats(self: *const Self) BucketStats {
         var s = BucketStats.init();
@@ -457,6 +474,7 @@ pub const Bucket = struct {
         self._forEachPageNode(CTX, c, self._b.?.root, 0, travel);
     }
 
+    // Recursively iterates over every page or node in a bucket and its nested buckets.
     fn _forEachPageNode(self: *Self, comptime CTX: type, c: CTX, pgid: page.PgidType, depth: usize, travel: fn (c: CTX, p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
         const pNode = self.pageNode(pgid);
 
@@ -594,6 +612,7 @@ pub const Bucket = struct {
         self._b.?.root = 0;
     }
 
+    // Recursively frees all pages in the bucket.
     fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*Node, _: usize) void {
         if (p) |_p| {
             trx.db.?.freelist.free(trx.meta.txid, _p) catch unreachable;
@@ -710,10 +729,12 @@ pub const BucketStats = struct {
     InlineBucketN: usize = 0, // total number on inlined buckets
     InlineBucketInuse: usize = 0, // bytes used for inlined buckets (also accouted for in LeafInuse)
 
+    /// Initializes a new bucket statistics.
     pub fn init() BucketStats {
         return BucketStats{};
     }
 
+    /// Adds the statistics from another bucket to the current bucket.
     pub fn add(self: *BucketStats, other: *const BucketStats) void {
         self.BranchPageN += other.BranchPageN;
         self.BranchOverflowN += other.BranchOverflowN;
@@ -734,6 +755,7 @@ pub const BucketStats = struct {
     }
 };
 
+// Recursively deletes all child buckets of a bucket.
 fn traveBucket(bucket: *Bucket, keyPair: *const consts.KeyPair) Error!void {
     if (keyPair.value == null) {
         try bucket.deleteBucket(keyPair.key);

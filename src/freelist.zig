@@ -42,7 +42,7 @@ pub const FreeList = struct {
             // The first elements will be used to store the count. See freelist.write.
             n += 1;
         }
-        return page.page_size + @sizeOf(page.PgidType) * n;
+        return page.Page.headerSize() + @sizeOf(page.PgidType) * n;
     }
 
     // Returns count of pages on the freelist.
@@ -69,10 +69,10 @@ pub const FreeList = struct {
     pub fn copyAll(self: *Self, dst: []page.PgidType) void {
         var array = std.ArrayList(page.PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
         array.appendNTimes(0, self.pendingCount()) catch unreachable;
-        var p_itr = self.pending.valueIterator();
+        var pitr = self.pending.valueIterator();
         var index: usize = 0;
 
-        while (p_itr.next()) |entry| {
+        while (pitr.next()) |entry| {
             for (entry.*) |pgid| {
                 array.items[index] = pgid;
                 index += 1;
@@ -221,7 +221,7 @@ pub const FreeList = struct {
         // Combine the old free pgids and pgids waiting on an open transaction.
         //
         // Update the header flag.
-        p.flags |= consts.intFromFlags(consts.PageFlag.free_list);
+        p.flags |= consts.intFromFlags(.free_list);
 
         // The page.Count can only hold up to 64k elements so if we overflow that
         // number then we handle it by putting the size in the first element.

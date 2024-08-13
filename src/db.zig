@@ -9,6 +9,7 @@ const consts = @import("consts.zig");
 const Error = @import("error.zig").Error;
 const TX = tx.TX;
 const PageFlag = consts.PageFlag;
+const assert = util.assert;
 
 const Page = page.Page;
 // TODO
@@ -205,13 +206,13 @@ pub const DB = struct {
             const buf = try db.allocator.alloc(u8, 0x1000);
             defer db.allocator.free(buf);
             const sz = try db.file.readAll(buf[0..]);
-            std.debug.print("has load meta size: {}\n", .{sz});
+            std.log.info("has load meta size: {}", .{sz});
             const m = db.pageInBuffer(buf[0..sz], 0).meta();
             db.pageSize = blk: {
                 m.validate() catch {
                     break :blk consts.PageSize;
                 };
-                break :blk m.page_size;
+                break :blk m.pageSize;
             };
         }
         errdefer db.close() catch unreachable;
@@ -228,9 +229,10 @@ pub const DB = struct {
 
     /// init creates a new database file and initializes its meta pages.
     fn init(self: *Self) !void {
+        std.log.info("init a new db!", .{});
         // Set the page size to the OS page size.
         self.pageSize = consts.PageSize;
-        // Create two meta pages on a buffer.
+        // Create two meta pages on a buffer, and
         const buf = try self.allocator.alloc(u8, self.pageSize * 4);
         defer self.allocator.free(buf);
         for (0..2) |i| {
@@ -244,13 +246,13 @@ pub const DB = struct {
             const m = p.meta();
             m.magic = consts.Magic;
             m.version = consts.Version;
-            m.page_size = @truncate(self.pageSize);
+            m.pageSize = @truncate(self.pageSize);
             m.freelist = 2;
             m.root = bucket._Bucket{ .root = 3 }; // So the top root bucket is a leaf
             m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
             m.txid = @as(consts.TxId, i);
             m.flags = consts.intFromFlags(PageFlag.meta);
-            std.debug.print("init meta{}\n", .{i});
+            std.log.info("init meta{}", .{i});
             m.check_sum = m.sum64();
         }
 
@@ -305,7 +307,7 @@ pub const DB = struct {
 
         // Memory-map the data file as a byte slice.
         self.dataRef = try util.mmap(self.file, size, true);
-        std.debug.print("succeed to init data reference: {}\n", .{size});
+        std.log.info("succeed to init data reference, size: {}", .{size});
         // Save references to the meta pages.
         self.meta0 = self.pageById(0).meta();
         self.meta1 = self.pageById(1).meta();
@@ -402,9 +404,11 @@ pub const DB = struct {
         return maxMeta;
     }
 
+    /// Allocates a count pages
     pub fn allocatePage(self: *Self, count: usize) !*Page {
         // TODO Allocate a tempory buffer for the page.
         const buf = try self.allocator.alloc(u8, count * self.pageSize);
+        std.log.debug("allocate a new page, count:{}, size: {}", .{ count, count * self.pageSize });
         const p = Page.init(buf);
         p.overflow = @as(u32, @intCast(count)) - 1;
 
@@ -454,12 +458,14 @@ pub const DB = struct {
         self.filesz = sz;
     }
 
+    /// isReadOnly returns true if the database was opened with read-only mode.
     pub fn isReadOnly(self: *const Self) bool {
         return self.readOnly;
     }
 
+    /// close closes the database and releases all associated resources.
     pub fn close(self: *Self) !void {
-        defer std.debug.print("succeed to close db!\n", .{});
+        defer std.log.info("succeed to close db!", .{});
         defer self.allocator.destroy(self);
         self.rwlock.lock();
         defer self.rwlock.unlock();
@@ -528,6 +534,7 @@ pub const DB = struct {
         return trx;
     }
 
+    // beginRWTx starts a new read-write transaction.
     fn beginRWTx(self: *Self) Error!*TX {
         // If the database was opened with Options.ReadOnly, return an error.
         if (self.readOnly) {
@@ -537,7 +544,7 @@ pub const DB = struct {
         // Obtain writer lock. This released by the transaction when it closes.
         // This is enforces only one writer transaction at a time.
         self.rwlock.lock();
-        std.debug.print("lock rwlock!\n", .{});
+        std.log.debug("lock rwlock!", .{});
 
         // Once we have the writer lock then we can lock the meta pages so that
         // we can set up the transaction.
@@ -593,7 +600,7 @@ pub const DB = struct {
         func(ctx, trx) catch |err| {
             trx.managed = false;
             trx.rollback() catch {};
-            std.debug.print("after execute transaction commit handle\n", .{});
+            std.log.info("after execute transaction commit handle", .{});
             return err;
         };
         trx.managed = false;
@@ -627,7 +634,7 @@ pub const DB = struct {
         // Use the meta lock to restrict access to the DB object.
         self.metalock.lock();
 
-        std.debug.print("transaction executes rollback!\n", .{});
+        std.log.info("transaction executes rollback!", .{});
         // Remove the transaction.
         for (self.txs.items, 0..) |_trx, i| {
             if (_trx == trx) {
@@ -637,15 +644,14 @@ pub const DB = struct {
 
         const n = self.txs.items.len;
 
-        std.debug.print("1transaction executes rollback!\n", .{});
+        std.log.info("1transaction executes rollback!", .{});
         // Unlock the meta pages.
         self.metalock.unlock();
 
         // Merge statistics.
         self.statlock.lock();
         self.stats.open_tx_n = n;
-        std.debug.print("{any}\n", .{self.stats});
-        self.stats.tx_stats.add(&trx.stats);
+        self.stats.txStats.add(&trx.stats);
         self.statlock.unlock();
     }
 
@@ -706,7 +712,7 @@ pub const defaultOptions = Options{
     .noGrowSync = false,
 };
 
-// Represents statistics about the database
+/// Represents statistics about the database
 pub const Stats = packed struct {
     // freelist stats
     free_page_n: usize = 0, // total number of free pages on the freelist
@@ -718,10 +724,11 @@ pub const Stats = packed struct {
     tx_n: usize = 0, // total number of started read transactions
     open_tx_n: usize = 0, // number of currently open read transactions
 
-    tx_stats: tx.TxStats = tx.TxStats{}, // global, ongoing stats
+    txStats: tx.TxStats = tx.TxStats{}, // global, ongoing stats
 
     const Self = @This();
 
+    /// Subtracts the statistics of one Stats from another.
     pub fn sub(self: *Self, other: *Stats) Stats {
         if (other == null) {
             return self.*;
@@ -732,13 +739,14 @@ pub const Stats = packed struct {
             .free_alloc = self.free_alloc,
             .free_list_inuse = self.free_list_inuse,
             .tx_n = self.tx_n - other.tx_n,
-            .tx_stats = self.tx_stats.sub(other.tx_stats),
+            .txStats = self.txStats.sub(other.txStats),
         };
         return diff;
     }
 
+    /// Adds the statistics of one Stats to another.
     pub fn add(self: *Self, other: *Stats) void {
-        self.tx_stats.add(other.tx_stats);
+        self.txStats.add(other.txStats);
     }
 };
 
@@ -747,10 +755,11 @@ pub const Info = packed struct {
     page_size: usize,
 };
 
+/// Represents the meta data of the database.
 pub const Meta = packed struct {
     magic: u32 = 0,
     version: u32 = 0,
-    page_size: u32 = 0,
+    pageSize: u32 = 0,
     flags: u32 = 0,
     root: bucket._Bucket = bucket._Bucket{ .root = 0, .sequence = 0 },
     freelist: page.PgidType = 0,
@@ -788,13 +797,15 @@ pub const Meta = packed struct {
         dest.* = self.*;
     }
 
-    // Writes the meta onto a page.
+    /// Writes the meta onto a page.
     pub fn write(self: *Self, p: *page.Page) void {
-        if (self.root.root >= self.pgid) {
-            unreachable;
-        } else if (self.freelist >= self.pgid) {
-            unreachable;
-        }
+        assert(self.root.root < self.pgid, "root page id is invalid", .{});
+        assert(self.freelist < self.pgid, "freelist page id is invalid", .{});
+        // if (self.root.root >= self.pgid) {
+        //     unreachable;
+        // } else if (self.freelist >= self.pgid) {
+        //     unreachable;
+        // }
         // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
         p.id = @as(page.PgidType, self.txid % 2);
         p.flags |= consts.intFromFlags(consts.PageFlag.meta);
@@ -814,14 +825,6 @@ pub const Meta = packed struct {
 //     const meta = Meta{};
 //     std.debug.print("{}\n", .{meta});
 // }
-
-fn opfn(p: []u8, n: i64) void {
-    std.debug.print("excute me: {any}, {}\n", .{ p, n });
-}
-
-fn onCommitAdd(n: *usize) void {
-    n.* += 1;
-}
 
 // test "DB-Read" {
 //     var options = defaultOptions;
@@ -897,6 +900,7 @@ fn onCommitAdd(n: *usize) void {
 // }
 
 test "DB-Write" {
+    std.testing.log_level = .debug;
     var options = defaultOptions;
     options.read_only = false;
     options.initialMmapSize = 10 * consts.PageSize;
@@ -905,13 +909,21 @@ test "DB-Write" {
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
+
     const updateFn = struct {
         fn update(_kvDB: ?*DB, trx: *TX) Error!void {
             if (_kvDB == null) {
                 return Error.DatabaseNotOpen;
             }
+
+            const forEach = struct {
+                fn inner(_: []const u8, _: ?*bucket.Bucket) Error!void {
+                    std.log.info("execute forEach!", .{});
+                }
+            };
             std.debug.assert(trx.getID() == 1);
             std.debug.print("execute transaction: {}\n", .{trx.getID()});
+            return trx.forEach(forEach.inner);
         }
     };
 

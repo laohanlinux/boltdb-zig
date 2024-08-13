@@ -94,7 +94,7 @@ pub fn munmap(ptr: []u8) void {
     }
 }
 
-pub fn closure(comptime T: type) type {
+pub fn Closure(comptime T: type) type {
     return struct {
         captureVar: *T,
         _callback: *const fn (t: *T) void,
@@ -128,8 +128,8 @@ fn onCmt2(n: *usize) void {
 
 test "arm" {
     var n: usize = 2000;
-    const c = closure(usize).init(&n, onCmt);
-    var closures = std.ArrayList(closure(usize)).init(std.testing.allocator);
+    const c = Closure(usize).init(&n, onCmt);
+    var closures = std.ArrayList(Closure(usize)).init(std.testing.allocator);
     defer closures.deinit();
     try closures.append(c);
     try closures.append(c);
