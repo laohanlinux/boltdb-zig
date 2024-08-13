@@ -63,10 +63,12 @@ pub const Cursor = struct {
         // https://github.com/boltdb/bolt/issues/450
         if (self.stack.getLast().count() == 0) {
             std.log.info("next key {any}", .{pNode.first});
-
             _ = self._next();
         }
         const keyValueRet = self.keyValue();
+        if (keyValueRet.first == null) {
+            return KeyPair.init(null, null);
+        }
         // Return an error if current value is a bucket.
         if (keyValueRet.third & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.first.?, null);
@@ -241,9 +243,10 @@ pub const Cursor = struct {
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
             var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
+            std.log.info("the i is {}", .{i});
             while (i >= 0) : (i -= 1) {
                 const elem = &self.stack.items[@as(usize, @intCast(i))];
-                if (elem.index < elem.count() - 1) {
+                if ((elem.index + 1) < elem.count()) {
                     elem.index += 1;
                     break;
                 }

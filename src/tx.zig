@@ -149,7 +149,6 @@ pub const TX = struct {
                 return f(key, b);
             }
         };
-        // self.root.forEachKeyValue(travel: fn(key:[]const u8, value:?[]const u8)Error!void)
         return self.root.forEachKeyValue(*Self, self, travel.inner);
     }
 
@@ -196,12 +195,11 @@ pub const TX = struct {
         // the size of the freelist but not underestimate the size (wich would be bad).
         _db.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
         const allocatePageCount = _db.freelist.size() / _db.pageSize + 1;
-        var p = self.allocate(allocatePageCount) catch |err| {
+        const p = self.allocate(allocatePageCount) catch |err| {
             std.log.err("failed to allocate memory: {}", .{err});
             self._rollback();
             return Error.OutOfMemory;
         };
-        defer p.deinit(self.allocator);
         _db.freelist.write(p) catch |err| {
             self._rollback();
             return err;
@@ -357,7 +355,6 @@ pub const TX = struct {
         }
 
         // clear all reference.
-        // const allocator = self.db.?.allocator;
         self.allocator.destroy(self.meta);
         self.db = null;
         self.pages.deinit();
@@ -367,7 +364,6 @@ pub const TX = struct {
         for (self._commitHandlers.items) |func| {
             func.execute();
         }
-        // allocator.destroy(self);
     }
 
     /// Iterates over every page within a given page and executes a function.
@@ -409,10 +405,6 @@ pub const TX = struct {
         self.db.pageSize * @as(usize, self.meta.txid);
     }
 
-    pub fn writable(self: *const Self) bool {
-        return self.writable;
-    }
-
     pub fn allocate(self: *Self, count: usize) !*page.Page {
         const p = try self.db.?.allocatePage(count);
         // Save to our page cache.
@@ -451,6 +443,7 @@ pub const TxStats = packed struct {
     writeTime: u64 = 0, // total time spent writing to disk
 
     const Self = @This();
+
     pub fn add(self: *Self, other: *TxStats) void {
         self.pageCount += other.pageCount;
         self.pageAlloc += other.pageAlloc;
