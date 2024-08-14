@@ -286,8 +286,8 @@ pub const TX = struct {
 
         // Free dirty page.
         for (pagesSlice.items) |p| {
-            std.log.debug("destroy page: {}", .{p.id});
-            self.allocator.destroy(p);
+            std.log.debug("destroy page: {}, memory size: {}", .{p.id, p.asSlice().len});
+            self.allocator.free(p.asSlice());
         }
     }
 

@@ -61,7 +61,7 @@ pub const Bucket = struct {
     /// Create a cursor associated with the bucket.
     /// The cursor is only valid as long as the transaction is open.
     /// Do not use a cursor after the transaction is closed.
-    pub fn cursor(self: *Self) *Cursor {
+    pub fn cursor(self: *Self) Cursor {
         // Update transaction statistics.
         self.tx.?.stats.cursor_count += 1;
         // Allocate and return a cursor.
@@ -77,7 +77,7 @@ pub const Bucket = struct {
         }
 
         // Move cursor to key.
-        const _cursor = self.cursor();
+        var _cursor = self.cursor();
         const keyPairRef = _cursor._seek(name);
         if (keyPairRef.first == null) {
             return null;
@@ -352,9 +352,8 @@ pub const Bucket = struct {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         }
-
-        const c = self.cursor();
-
+        var c = self.cursor();
+        defer c.deinit();
         var keyPairRef = c.first();
         while (keyPairRef.key != null) {
             try travel(ctx, keyPairRef.key.?, keyPairRef.value);
@@ -363,7 +362,7 @@ pub const Bucket = struct {
         return;
     }
 
-    // Return stats on a bucket.
+    /// Return stats on a bucket.
     pub fn stats(self: *const Self) BucketStats {
         var s = BucketStats.init();
         const subStats = BucketStats.init();
@@ -520,7 +519,8 @@ pub const Bucket = struct {
             }
 
             // Update parent node.
-            const c = self.cursor();
+            var c = self.cursor();
+            defer c.deinit();
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.first.?) });
             assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});

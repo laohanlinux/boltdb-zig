@@ -404,6 +404,10 @@ pub const DB = struct {
         return maxMeta;
     }
 
+    pub fn getFreelist(self: *const Self) *freelist.FreeList {
+        return self.freelist;
+    }
+
     /// Allocates a count pages
     pub fn allocatePage(self: *Self, count: usize) !*Page {
         // TODO Allocate a tempory buffer for the page.
@@ -915,7 +919,6 @@ test "DB-Write" {
             if (_kvDB == null) {
                 return Error.DatabaseNotOpen;
             }
-
             const forEach = struct {
                 fn inner(_: []const u8, _: ?*bucket.Bucket) Error!void {
                     std.log.info("execute forEach!", .{});
@@ -943,5 +946,10 @@ test "DB-Write" {
         // trx.onCommit(onCommitFn.onCommit);
         // defer trx.rollback() catch unreachable;
         try kvDB.update(?*DB, kvDB, updateFn.update);
+        const meta = kvDB.getMeta();
+        std.log.info("meta: {}",.{meta.*});
+        const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
+        defer std.testing.allocator.free(freelistStr);
+        std.log.info("freelist: {s}", .{freelistStr});
     }
 }

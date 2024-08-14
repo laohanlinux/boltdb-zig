@@ -30,16 +30,15 @@ pub const Cursor = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, _bt: *Bucket) *Self {
-        const cursorPtr = allocator.create(Self) catch unreachable;
-        cursorPtr._bucket = _bt;
-        cursorPtr.stack = std.ArrayList(ElementRef).init(allocator);
-        cursorPtr.allocator = allocator;
-        return cursorPtr;
+    pub fn init(allocator: std.mem.Allocator, _bt: *Bucket) Self {
+        return Cursor{
+            ._bucket = _bt,
+            .stack = std.ArrayList(ElementRef).init(allocator),
+            .allocator = allocator,
+        };
     }
 
     pub fn deinit(self: *Self) void {
-        defer self.allocator.destroy(self);
         self.stack.deinit();
     }
 
