@@ -25,7 +25,7 @@ pub const Bucket = struct {
     // amout if you know that your write workloads are mostly append-only.
     //
     // This is non-presisted across transactions so it must be set in every TX.
-    fillPercent: f64 = consts.defaultFillPercent,
+    fillPercent: f64 = consts.DefaultFillPercent,
 
     allocator: std.mem.Allocator,
 

@@ -119,8 +119,8 @@ pub const FreeList = struct {
         return 0;
     }
 
-    // Releases a page and its overflow for a given transaction id.
-    // If the page is already free then a panic will occur.
+    /// Releases a page and its overflow for a given transaction id.
+    /// If the page is already free then a panic will occur.
     pub fn free(self: *Self, txid: TxId, p: *const page.Page) !void {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
 
@@ -143,7 +143,7 @@ pub const FreeList = struct {
         try self.pending.put(txid, _ids);
     }
 
-    // Moves all page ids for a transaction id (or older) to the freelist.
+    /// Moves all page ids for a transaction id (or older) to the freelist.
     pub fn release(self: *Self, txid: TxId) !void {
         var m = std.ArrayList(page.PgidType).init(self.allocator);
         defer m.deinit();
@@ -341,11 +341,22 @@ pub const FreeList = struct {
         }
     }
 
+    /// Format freelist to string with _allocator.
     pub fn string(self: *Self, _allocator: std.mem.Allocator) []u8 {
         var buf = std.ArrayList(u8).init(_allocator);
         defer buf.deinit();
         const writer = buf.writer();
-        writer.print("count: {}, freeCount: {}, pendingCount: {}", .{ self.count(), self.freeCount(), self.pendingCount() }) catch unreachable;
+
+        {
+            writer.print("pending:", .{}) catch unreachable;
+            var itr = self.pending.iterator();
+            while (itr.next()) |entry| {
+                writer.print(" [txid: {any}, pages: {any}], ", .{ entry.key_ptr.*, entry.value_ptr.* }) catch unreachable;
+            }
+            writer.print("\n", .{}) catch unreachable;
+        }
+        const pendingIds = self.pending.keyIterator().items;
+        writer.print("count: {}, freeCount: {}, pendingCount: {}, pendingKeys: {any}", .{ self.count(), self.freeCount(), self.pendingCount(), pendingIds[0..] }) catch unreachable;
         return buf.toOwnedSlice() catch unreachable;
     }
 };

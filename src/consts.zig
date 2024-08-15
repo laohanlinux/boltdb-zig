@@ -16,8 +16,8 @@ pub const DefaultAllocSize = 16 * 1024 * 1024;
 /// A bucket leaf flag.
 pub const BucketLeafFlag: u32 = 0x01;
 
-pub const minFillPercent: f64 = 0.1;
-pub const maxFillPercent: f64 = 1.0;
+pub const MinFillPercent: f64 = 0.1;
+pub const MaxFillPercent: f64 = 1.0;
 
 /// The maximum length of a key, in bytes
 pub const MaxKeySize: usize = 32768;
@@ -26,7 +26,7 @@ pub const MaxValueSize: usize = (1 << 32) - 2;
 
 /// The percentage that split pages are filled.
 /// This value can be changed by setting Bucket.FillPercent.
-pub const defaultFillPercent = 0.5;
+pub const DefaultFillPercent = 0.5;
 
 /// A page flag.
 pub const PageFlag = enum(u8) {

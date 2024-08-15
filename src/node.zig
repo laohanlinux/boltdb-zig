@@ -313,10 +313,10 @@ pub const Node = struct {
 
         // Determine the threshold before starting a new node.
         var fillPercent = self.bucket.?.fillPercent;
-        if (fillPercent < consts.minFillPercent) {
-            fillPercent = consts.minFillPercent;
-        } else if (fillPercent > consts.maxFillPercent) {
-            fillPercent = consts.maxFillPercent;
+        if (fillPercent < consts.MinFillPercent) {
+            fillPercent = consts.MinFillPercent;
+        } else if (fillPercent > consts.MaxFillPercent) {
+            fillPercent = consts.MaxFillPercent;
         }
 
         const fPageSize: f64 = @floatFromInt(pageSize);

@@ -947,7 +947,7 @@ test "DB-Write" {
         // defer trx.rollback() catch unreachable;
         try kvDB.update(?*DB, kvDB, updateFn.update);
         const meta = kvDB.getMeta();
-        std.log.info("meta: {}",.{meta.*});
+        std.log.info("meta: {}", .{meta.*});
         const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
         defer std.testing.allocator.free(freelistStr);
         std.log.info("freelist: {s}", .{freelistStr});
