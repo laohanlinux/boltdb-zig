@@ -75,7 +75,7 @@ pub const FreeList = struct {
             array.appendSlice(entries.*) catch unreachable;
         }
         assert(array.items.len == self.pendingCount(), "sanity check!", .{});
-        Self.merge_sorted_array(dst, self.ids.items, array.items);
+        Self.mergeSortedArray(dst, self.ids.items, array.items);
     }
 
     // Returns the starting page id of a contiguous list of pages of a given size.
@@ -157,11 +157,12 @@ pub const FreeList = struct {
             }
         }
 
-        const array_ids = try m.toOwnedSlice();
-        std.mem.sort(page.PgidType, array_ids, {}, std.sort.asc(page.PgidType));
-        var array = try std.ArrayList(page.PgidType).initCapacity(self.allocator, array_ids.len + self.ids.items.len);
+        const arrayIDs = try m.toOwnedSlice();
+        std.mem.sort(page.PgidType, arrayIDs, {}, std.sort.asc(page.PgidType));
+        var array = try std.ArrayList(page.PgidType).initCapacity(self.allocator, arrayIDs.len + self.ids.items.len);
         defer array.deinit();
-        Self.merge_sorted_array(array.items, array_ids, self.ids.items);
+        try array.appendNTimes(0, arrayIDs.len + self.ids.items.len);
+        Self.mergeSortedArray(array.items, arrayIDs, self.ids.items);
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
     }
@@ -211,7 +212,7 @@ pub const FreeList = struct {
     /// saved to disk since in the event of a program crash, all pending ids will
     /// become free.
     pub fn write(self: *Self, p: *page.Page) Error!void {
-        defer std.log.info("after write freelist", .{});
+        defer std.log.info("after write freelist to page: {}", .{p.id});
         // Combine the old free pgids and pgids waiting on an open transaction.
         //
         // Update the header flag.
@@ -282,7 +283,7 @@ pub const FreeList = struct {
         }
     }
 
-    pub fn merge_sorted_array(dst: []page.PgidType, a: []const page.PgidType, b: []const page.PgidType) void {
+    pub fn mergeSortedArray(dst: []page.PgidType, a: []const page.PgidType, b: []const page.PgidType) void {
         const size1 = a.len;
         const size2 = b.len;
         var i: usize = 0;

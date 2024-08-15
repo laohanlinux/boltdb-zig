@@ -222,8 +222,8 @@ pub const TX = struct {
             return err;
         };
 
-        // // If strict mode is enabled then perform a consistency check.
-        // // Only the first consistency error is reported in the panic.
+        // If strict mode is enabled then perform a consistency check.
+        // Only the first consistency error is reported in the panic.
         // if (self.db.?.strict_mode) {
         //     // TODO
         // }
@@ -254,6 +254,7 @@ pub const TX = struct {
 
     /// Writes any dirty pages to disk.
     pub fn write(self: *Self) Error!void {
+        std.log.info("ready to write dirty pages into disk", .{});
         // Sort pages by id.
         var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.count());
         defer pagesSlice.deinit();
@@ -277,6 +278,7 @@ pub const TX = struct {
             _ = try opts(_db.file, slice, offset);
             // Update statistics
             self.stats.write += 1;
+            std.log.debug("write page into disk: pgid: {}, offset: {}, size: {}", .{ p.id, offset, slice.len });
         }
 
         // Ignore file sync if flag is set on DB.
@@ -286,7 +288,7 @@ pub const TX = struct {
 
         // Free dirty page.
         for (pagesSlice.items) |p| {
-            std.log.debug("destroy page: {}, memory size: {}", .{p.id, p.asSlice().len});
+            std.log.debug("destroy page: {}, memory size: {}", .{ p.id, p.asSlice().len });
             self.allocator.free(p.asSlice());
         }
     }
