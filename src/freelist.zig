@@ -30,7 +30,12 @@ pub const FreeList = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        std.log.info("deinit freelist", .{});
         defer self.allocator.destroy(self);
+        var itr = self.pending.valueIterator();
+        while (itr.next()) |value| {
+            value.deinit();
+        }
         self.pending.deinit();
         self.cache.deinit();
         self.ids.deinit();
@@ -125,7 +130,7 @@ pub const FreeList = struct {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
 
         // Free page and all its overflow pages.
-        const ids = self.pending.getOrPut(txid) catch unreachable;
+        const ids = try self.pending.getOrPut(txid);
         if (!ids.found_existing) {
             ids.value_ptr.* = std.ArrayList(PgidType).init(self.allocator);
         }
@@ -137,7 +142,6 @@ pub const FreeList = struct {
             try ids.value_ptr.append(id);
             try self.cache.put(id, true);
         }
-        try self.pending.put(txid, ids.value_ptr.*);
     }
 
     /// Moves all page ids for a transaction id (or older) to the freelist.
@@ -318,7 +322,7 @@ pub const FreeList = struct {
             writer.print("pending:", .{}) catch unreachable;
             var itr = self.pending.iterator();
             while (itr.next()) |entry| {
-                writer.print(" [txid: {any}, pages: {any}], ", .{ entry.key_ptr.*, entry.value_ptr.* }) catch unreachable;
+                writer.print(" [txid: {any}, pages: {any}], ", .{ entry.key_ptr.*, entry.value_ptr.*.items }) catch unreachable;
             }
             writer.print("\n", .{}) catch unreachable;
         }
