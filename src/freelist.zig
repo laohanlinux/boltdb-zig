@@ -12,7 +12,7 @@ pub const FreeList = struct {
     // all free and available free page ids.
     ids: std.ArrayList(PgidType),
     // mapping of soon-to-be free page ids by tx.
-    pending: std.AutoHashMap(consts.TxId, []page.PgidType),
+    pending: std.AutoHashMap(consts.TxId, std.ArrayList(PgidType)),
     // fast lookup of all free and pending pgae ids.
     cache: std.AutoHashMap(PgidType, bool),
 
@@ -23,7 +23,7 @@ pub const FreeList = struct {
     pub fn init(allocator: std.mem.Allocator) *Self {
         const f = allocator.create(Self) catch unreachable;
         f.ids = std.ArrayList(PgidType).init(allocator);
-        f.pending = std.AutoHashMap(TxId, []page.PgidType).init(allocator);
+        f.pending = std.AutoHashMap(TxId, std.ArrayList(PgidType)).init(allocator);
         f.cache = std.AutoHashMap(PgidType, bool).init(allocator);
         f.allocator = allocator;
         return f;
@@ -61,7 +61,7 @@ pub const FreeList = struct {
         var _count: usize = 0;
         var itr = self.pending.iterator();
         while (itr.next()) |entry| {
-            _count += entry.value_ptr.len;
+            _count += entry.value_ptr.items.len;
         }
         return _count;
     }
@@ -72,7 +72,7 @@ pub const FreeList = struct {
         defer array.deinit();
         var itr = self.pending.valueIterator();
         while (itr.next()) |entries| {
-            array.appendSlice(entries.*) catch unreachable;
+            array.appendSlice(entries.*.items) catch unreachable;
         }
         assert(array.items.len == self.pendingCount(), "sanity check!", .{});
         Self.mergeSortedArray(dst, self.ids.items, array.items);
@@ -125,53 +125,52 @@ pub const FreeList = struct {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
 
         // Free page and all its overflow pages.
-        const pendingIds: []u64 = self.pending.get(txid) orelse &.{};
-        var ids = std.ArrayList(page.PgidType).init(std.heap.page_allocator);
-        ids.appendSlice(pendingIds) catch unreachable;
+        const ids = self.pending.getOrPut(txid) catch unreachable;
+        if (!ids.found_existing) {
+            ids.value_ptr.* = std.ArrayList(PgidType).init(self.allocator);
+        }
         for (p.id..(p.id + p.overflow + 1)) |id| {
             // Verify that page is not already free.
             assert(!self.cache.contains(id), "page({}) already free", .{id});
             std.log.debug("free a page, id: {}", .{id});
             // Add to the freelist and cache.
-            try ids.append(id);
+            try ids.value_ptr.append(id);
             try self.cache.put(id, true);
         }
-        if (pendingIds.len > 0) {
-            self.allocator.free(pendingIds);
-        }
-        const _ids = try ids.toOwnedSlice();
-        try self.pending.put(txid, _ids);
+        try self.pending.put(txid, ids.value_ptr.*);
     }
 
     /// Moves all page ids for a transaction id (or older) to the freelist.
     pub fn release(self: *Self, txid: TxId) !void {
-        var m = std.ArrayList(page.PgidType).init(self.allocator);
-        defer m.deinit();
+        var arrayIDs = std.ArrayList(PgidType).init(self.allocator);
+        defer arrayIDs.deinit();
         var itr = self.pending.iterator();
         while (itr.next()) |entry| {
             if (entry.key_ptr.* <= txid) {
                 // Move transaction's pending pages to the available freelist.
                 // Don't remove from the cache since the page is still free.
-                try m.appendSlice(entry.value_ptr.*);
-                _ = self.pending.remove(entry.key_ptr.*);
+                try arrayIDs.appendSlice(entry.value_ptr.*.items);
+                const have = self.pending.remove(entry.key_ptr.*);
+                assert(have, "sanity check", .{});
             }
         }
 
-        const arrayIDs = try m.toOwnedSlice();
-        std.mem.sort(page.PgidType, arrayIDs, {}, std.sort.asc(page.PgidType));
-        var array = try std.ArrayList(page.PgidType).initCapacity(self.allocator, arrayIDs.len + self.ids.items.len);
+        std.mem.sort(PgidType, arrayIDs.items, {}, std.sort.asc(PgidType));
+        var array = try std.ArrayList(PgidType).initCapacity(self.allocator, arrayIDs.items.len + self.ids.items.len);
         defer array.deinit();
-        try array.appendNTimes(0, arrayIDs.len + self.ids.items.len);
-        Self.mergeSortedArray(array.items, arrayIDs, self.ids.items);
+        try array.appendNTimes(0, arrayIDs.items.len + self.ids.items.len);
+        std.log.info("before merge: {}, {}, {}", .{ arrayIDs.items.len, self.ids.items.len, array.items.len });
+        Self.mergeSortedArray(array.items, arrayIDs.items, self.ids.items);
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
+        std.log.info("after release: {}", .{self.ids.items.len});
     }
 
-    // Removes the pages from a given pending tx.
+    /// Removes the pages from a given pending tx.
     pub fn rollback(self: *Self, txid: TxId) void {
         // Remove page ids from cache.
         if (self.pending.get(txid)) |pendingIds| {
-            for (pendingIds) |id| {
+            for (pendingIds.items) |id| {
                 _ = self.cache.remove(id);
             }
         }
@@ -179,7 +178,7 @@ pub const FreeList = struct {
         _ = self.pending.remove(txid);
     }
 
-    // Returns whether a given page is in the free list.
+    /// Returns whether a given page is in the free list.
     pub fn freed(self: *Self, pgid: page.PgidType) bool {
         return self.cache.contains(pgid);
     }
@@ -241,21 +240,21 @@ pub const FreeList = struct {
         self.read(p);
 
         // Build a cache of only pending pages.
-        var pcache = std.AutoHashMap(page.PgidType, bool).init(self.allocator);
+        var pagaeCahe = std.AutoHashMap(page.PgidType, bool).init(self.allocator);
         var vitr = self.pending.valueIterator();
 
         while (vitr.next()) |pendingIDs| {
-            for (pendingIDs.*) |pendingID| {
-                pcache.put(pendingID, true) catch unreachable;
+            for (pendingIDs.*.items) |pendingID| {
+                pagaeCahe.put(pendingID, true) catch unreachable;
             }
         }
 
         // Check each page in the freelist and build a new available freelist.
         // with any pages not in the pending lists.
-        var a = std.ArrayList(page.PgidType).init(self.allocator);
+        var a = std.ArrayList(PgidType).init(self.allocator);
         defer a.deinit();
         for (self.ids.items) |id| {
-            if (!pcache.contains(id)) {
+            if (!pagaeCahe.contains(id)) {
                 a.append(id) catch unreachable;
             }
         }
@@ -277,13 +276,14 @@ pub const FreeList = struct {
         var itr = self.pending.iterator();
         while (itr.next()) |entry| {
             const pitr = entry.value_ptr.*;
-            for (pitr) |id| {
+            for (pitr.items) |id| {
                 self.cache.put(id, true) catch unreachable;
             }
         }
     }
 
-    pub fn mergeSortedArray(dst: []page.PgidType, a: []const page.PgidType, b: []const page.PgidType) void {
+    /// Merge two sorted arrays into a third array.
+    fn mergeSortedArray(dst: []page.PgidType, a: []const PgidType, b: []const PgidType) void {
         const size1 = a.len;
         const size2 = b.len;
         var i: usize = 0;
@@ -305,40 +305,6 @@ pub const FreeList = struct {
         }
         if (j < size2) {
             std.mem.copyForwards(page.PgidType, dst[index..], b[j..]);
-        }
-    }
-
-    // Copies the sorted unoin of a and b into dst.
-    pub fn merge_ids(dst: page.PgIds, a: page.PgIds, b: page.PgIds) void {
-        if (a.len == 0) {
-            std.mem.copy(dst, a);
-        }
-        if (b.len == 0) {
-            std.mem.copy(dst, b);
-        }
-
-        // Assign lead to the slice with a lower starting value, follow to the heigher value.
-        var lead = a;
-        var follow = b;
-        if (b[0] < a[0]) {
-            lead = b;
-            follow = a;
-        }
-
-        // Continue while there are elements in the lead.
-        while (lead.len > 0) {
-            // Merge largest prefix of lead that is ahead of follow[0].
-            const n = std.sort.binarySearch(
-                page.PgIds,
-                follow[0],
-                lead[0..],
-                {},
-                std.sort.asc(page.PgidType),
-            );
-
-            if (n == null) {
-                break;
-            }
         }
     }
 

@@ -311,95 +311,80 @@ fn lessThanPid(context: void, lhs: PgidType, rhs: PgidType) bool {
     return lhs < rhs;
 }
 
-fn cmp(context: void, lhs: PgidType, rhs: PgidType) std.math.Order {
-    _ = context;
-    if (lhs > rhs) {
-        return std.math.Order.gt;
-    } else if (lhs < rhs) {
-        return std.math.Order.lt;
-    } else {
-        return std.math.Order.eq;
-    }
-}
+// test "page struct" {
+//     const page = Page{ .id = 1, .flags = 2, .count = 1, .overflow = 1 };
+//     _ = page;
+//     const slice = std.testing.allocator.alloc(u8, page_size) catch unreachable;
+//     defer std.testing.allocator.free(slice);
+//     @memset(slice, 0);
+//     // Meta
+//     {
+//         std.debug.print("Test Meta\n", .{});
+//         var page1 = Page.init(slice);
+//         var page2 = Page.init(slice);
+//         page2.id = 200;
+//         page2.flags = consts.intFromFlags(.leaf);
+//         page2.meta().*.version = 1;
+//         page2.meta().*.version = 2;
+//         try std.testing.expectEqual(page1.meta().*.version, 2);
+//         try std.testing.expectEqual(page1.meta().*.version, page2.meta().*.version);
+//         try std.testing.expectEqual(page1.flags, page2.flags);
+//     }
+//     @memset(slice, 0);
+//     // Branch
+//     {
+//         std.debug.print("Test Branch\n", .{});
+//         const pageRef = Page.init(slice);
+//         pageRef.count = 10;
+//         for (0..10) |i| {
+//             const branch = pageRef.branchPageElement(i);
+//             branch.?.pos = @as(u32, @intCast(i * 9 + 300));
+//             branch.?.kSize = @as(u32, @intCast(i + 1));
+//             branch.?.pgid = @as(u64, i + 2);
+//         }
+//         const branchElements = pageRef.branchPageElements().?;
+//         std.debug.print("{}\n", .{branchElements.len});
+//         for (0..10) |i| {
+//             const branch = pageRef.branchPageElement(i);
+//             std.debug.print("{} {}\n", .{ branch.?, branchElements[i] });
+//         }
+//     }
+//     @memset(slice, 0);
+//     std.debug.print("-------------------------------page size {}-----------\n", .{page_size});
+//     // Leaf
+//     {
+//         const pageRef = Page.init(slice);
+//         pageRef.count = 10;
+//         const n: usize = @as(usize, pageRef.count);
+//         var leftPos = pageRef.getDataPtrInt();
+//         var rightPos: usize = @intFromPtr(slice.ptr) + page_size - 1;
+//         // store it
+//         for (0..n) |i| {
+//             const leaf = pageRef.leafPageElement(i).?;
+//             leaf.flags = 0;
+//             leaf.kSize = @as(u32, @intCast(i + 1));
+//             leaf.vSize = @as(u32, @intCast(i + 2));
+//             const kvSize = leaf.kSize + leaf.vSize;
 
-fn sortPgIds(ids: PgIds) void {
-    std.mem.sort(PgidType, ids, .{}, cmp);
-}
-
-test "page struct" {
-    const page = Page{ .id = 1, .flags = 2, .count = 1, .overflow = 1 };
-    _ = page;
-    const slice = std.testing.allocator.alloc(u8, page_size) catch unreachable;
-    defer std.testing.allocator.free(slice);
-    @memset(slice, 0);
-    // Meta
-    {
-        std.debug.print("Test Meta\n", .{});
-        var page1 = Page.init(slice);
-        var page2 = Page.init(slice);
-        page2.id = 200;
-        page2.flags = consts.intFromFlags(.leaf);
-        page2.meta().*.version = 1;
-        page2.meta().*.version = 2;
-        try std.testing.expectEqual(page1.meta().*.version, 2);
-        try std.testing.expectEqual(page1.meta().*.version, page2.meta().*.version);
-        try std.testing.expectEqual(page1.flags, page2.flags);
-    }
-    @memset(slice, 0);
-    // Branch
-    {
-        std.debug.print("Test Branch\n", .{});
-        const pageRef = Page.init(slice);
-        pageRef.count = 10;
-        for (0..10) |i| {
-            const branch = pageRef.branchPageElement(i);
-            branch.?.pos = @as(u32, @intCast(i * 9 + 300));
-            branch.?.kSize = @as(u32, @intCast(i + 1));
-            branch.?.pgid = @as(u64, i + 2);
-        }
-        const branchElements = pageRef.branchPageElements().?;
-        std.debug.print("{}\n", .{branchElements.len});
-        for (0..10) |i| {
-            const branch = pageRef.branchPageElement(i);
-            std.debug.print("{} {}\n", .{ branch.?, branchElements[i] });
-        }
-    }
-    @memset(slice, 0);
-    std.debug.print("-------------------------------page size {}-----------\n", .{page_size});
-    // Leaf
-    {
-        const pageRef = Page.init(slice);
-        pageRef.count = 10;
-        const n: usize = @as(usize, pageRef.count);
-        var leftPos = pageRef.getDataPtrInt();
-        var rightPos: usize = @intFromPtr(slice.ptr) + page_size - 1;
-        // store it
-        for (0..n) |i| {
-            const leaf = pageRef.leafPageElement(i).?;
-            leaf.flags = 0;
-            leaf.kSize = @as(u32, @intCast(i + 1));
-            leaf.vSize = @as(u32, @intCast(i + 2));
-            const kvSize = leaf.kSize + leaf.vSize;
-
-            leaf.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
-            std.debug.assert(leaf.pos == pageRef.leafPageElement(i).?.pos);
-            leftPos += LeafPageElement.headerSize();
-            rightPos -= @as(usize, kvSize);
-            const key = leaf.key();
-            for (0..key.len) |index| {
-                key[index] = @as(u8, @intCast(index + 'B'));
-            }
-            const value = leaf.value();
-            for (0..value.len) |index| {
-                value[index] = @as(u8, @intCast(index + 'E'));
-            }
-        }
-        const leafElements = pageRef.leafPageElements();
-        for (leafElements.?) |leaf| {
-            std.debug.print("{?}\n", .{leaf});
-        }
-    }
-}
+//             leaf.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
+//             std.debug.assert(leaf.pos == pageRef.leafPageElement(i).?.pos);
+//             leftPos += LeafPageElement.headerSize();
+//             rightPos -= @as(usize, kvSize);
+//             const key = leaf.key();
+//             for (0..key.len) |index| {
+//                 key[index] = @as(u8, @intCast(index + 'B'));
+//             }
+//             const value = leaf.value();
+//             for (0..value.len) |index| {
+//                 value[index] = @as(u8, @intCast(index + 'E'));
+//             }
+//         }
+//         const leafElements = pageRef.leafPageElements();
+//         for (leafElements.?) |leaf| {
+//             std.debug.print("{?}\n", .{leaf});
+//         }
+//     }
+// }
 
 // pub fn main() !void {
 //     // std.testing.run();

@@ -945,12 +945,21 @@ test "DB-Write" {
         // const trx = try kvDB.begin(true);
         // trx.onCommit(onCommitFn.onCommit);
         // defer trx.rollback() catch unreachable;
-        try kvDB.update(?*DB, kvDB, updateFn.update);
-        try kvDB.update(?*DB, kvDB, updateFn.update);
-        const meta = kvDB.getMeta();
-        std.log.info("meta: {}", .{meta.*});
-        const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
-        defer std.testing.allocator.free(freelistStr);
-        std.log.info("freelist: {s}", .{freelistStr});
+        {
+            try kvDB.update(?*DB, kvDB, updateFn.update);
+            const meta = kvDB.getMeta();
+            std.log.info("meta: {}", .{meta.*});
+            const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
+            defer std.testing.allocator.free(freelistStr);
+            std.log.info("freelist: {s}", .{freelistStr});
+        }
+        {
+            try kvDB.update(?*DB, kvDB, updateFn.update);
+            const meta = kvDB.getMeta();
+            std.log.info("meta: {}", .{meta.*});
+            const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
+            defer std.testing.allocator.free(freelistStr);
+            std.log.info("freelist: {s}", .{freelistStr});
+        }
     }
 }
