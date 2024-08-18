@@ -2,42 +2,53 @@ const std = @import("std");
 const db = @import("db.zig");
 const consts = @import("consts.zig");
 
+/// The minimum number of keys in a page.
 pub const min_keys_page: usize = 2;
 
+/// The size of a branch page element.
 pub const branchPageElementSize = BranchPageElement.headerSize();
+/// The size of a leaf page element.
 pub const leafPageElementSize = LeafPageElement.headerSize();
-
+/// The bucket leaf flag.
 pub const bucket_leaf_flag: u32 = 0x01;
-
+/// The type of a page identifier.
 pub const PgidType = u64;
-
+/// A slice of page identifiers.
 pub const PgIds = []PgidType;
-
+/// The size of a page.
 pub const page_size: usize = std.mem.page_size;
-
+/// A page.
 pub const Page = struct {
+    // The page identifier.
     id: PgidType,
+    // The page flags.
     flags: u16,
+    // The number of elements in the page.
     count: u16,
+    // The number of overflow elements in the page.
     overflow: u32,
     const Self = @This();
     // the size of this, but why align(4)?
     // pub const headerSize: usize = 16; // Has some bug if use @sizeOf(Page), when other file reference it;
 
+    /// Initializes a page from a slice of bytes.
     pub fn init(slice: []u8) *Page {
         const ptr: *Page = @ptrCast(@alignCast(slice));
         return ptr;
     }
 
+    /// Deinitializes a page.
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         const ptr = self.asSlice();
         allocator.free(ptr);
     }
 
+    /// Returns the size of the page header.
     pub inline fn headerSize() usize {
         return @sizeOf(Self);
     }
 
+    /// Returns the type of the page.
     pub fn typ(self: *const Self) []const u8 {
         if (self.flags & consts.intFromFlags(.branch) != 0) {
             return "branch";
@@ -52,11 +63,12 @@ pub const Page = struct {
         }
     }
 
+    /// Returns whether the page is a leaf page.
     pub fn isLeaf(self: *const Self) bool {
         return self.flags & consts.intFromFlags(.leaf) != 0;
     }
 
-    // Returns a pointer to the metadata section of the page.
+    /// Returns a pointer to the metadata section of the page.
     pub fn meta(self: *Self) *db.Meta {
         const ptr: usize = self.getDataPtrInt();
         const _meta: *db.Meta = @ptrFromInt(ptr);
@@ -73,11 +85,12 @@ pub const Page = struct {
         return dPtr;
     }
 
+    /// Converts a pointer to a specific type.
     pub fn opaqPtrTo(_: *Self, ptr: ?*anyopaque, comptime T: type) T {
         return @ptrCast(@alignCast(ptr));
     }
 
-    // Retrives a list of leaf nodes.
+    /// Retrives a list of branch nodes.
     pub fn branchPageElements(self: *Self) ?[]BranchPageElement {
         if (self.count == 0) {
             return null;
@@ -107,6 +120,7 @@ pub const Page = struct {
         return dPtr;
     }
 
+    /// Returns the pointer of index's leaf elements
     pub fn leafPageElementPtr(self: *Self, index: usize) *LeafPageElement {
         if (self.count <= index) {
             return undefined;
@@ -116,7 +130,7 @@ pub const Page = struct {
         return dPtr;
     }
 
-    // Retrives a list of leaf nodes.
+    /// Retrives a list of leaf nodes.
     pub fn leafPageElements(self: *Self) ?[]LeafPageElement {
         if (self.count == 0) {
             return null;
@@ -126,6 +140,7 @@ pub const Page = struct {
         return elements[0..self.count];
     }
 
+    /// Retrives a list of freelist page elements.
     pub fn freelistPageElements(self: *Self) ?[]PgidType {
         const ptr = self.getDataPtrInt();
         const firstPtr: *PgidType = @ptrFromInt(ptr);
@@ -133,6 +148,7 @@ pub const Page = struct {
         return elements[0..self.count];
     }
 
+    /// Retrives a list of freelist page elements.
     pub fn freelistPageOverElements(self: *Self) ?[]PgidType {
         const ptr = self.getDataPtrInt();
         const firstPtr: *PgidType = @ptrFromInt(ptr);
@@ -143,6 +159,7 @@ pub const Page = struct {
         return elements[1..@as(usize, overflowCount)];
     }
 
+    /// Retrives a list of freelist page elements.
     pub fn freelistPageOverWithCountElements(self: *Self) ?[]PgidType {
         const ptr = self.getDataPtrInt();
         const firstPtr: *PgidType = @ptrFromInt(ptr);
@@ -157,17 +174,20 @@ pub const Page = struct {
         }
     }
 
+    /// Returns the pointer of the page data.
     pub fn getDataPtrInt(self: *Self) usize {
         const ptr = @intFromPtr(self);
         return ptr + Self.headerSize();
     }
 
+    /// Returns a byte slice of the page data.
     pub fn getDataSlice(self: *Self) []u8 {
         const ptr = self.getDataPtrInt();
         const slice: [*]u8 = @ptrFromInt(ptr);
         return slice[0..(page_size - Self.headerSize())];
     }
 
+    /// Returns a byte slice of the page data.
     pub fn asSlice(self: *Self) []u8 {
         const slice: [*]u8 = @ptrCast(self);
         if (self.count == 0xFFFF) {
@@ -179,6 +199,7 @@ pub const Page = struct {
     }
 };
 
+/// A branch page element.
 pub const BranchPageElement = packed struct {
     //
     // |pageHeader| --> |element0|, |element1|, |element2|, |element3|, |element4| --> |key1| --> |key2| --> |key3| --> |key4|
@@ -188,6 +209,7 @@ pub const BranchPageElement = packed struct {
     pgid: PgidType,
 
     const Self = @This();
+    /// Returns the size of the branch page element header.
     pub inline fn headerSize() usize {
         return @sizeOf(Self);
     }
@@ -202,6 +224,7 @@ pub const BranchPageElement = packed struct {
     }
 };
 
+/// A leaf page element.
 pub const LeafPageElement = packed struct {
     flags: u32,
     // pos is the offset from first position of the element.
@@ -213,25 +236,25 @@ pub const LeafPageElement = packed struct {
     vSize: u32,
 
     const Self = @This();
-
+    /// Returns the size of the leaf page element header.
     pub inline fn headerSize() usize {
         return @sizeOf(Self);
     }
 
-    // Return a byte slice of the node key.
-    pub fn key(self: *const Self) []u8 {
+    /// Returns a byte slice of the node key.
+    pub fn key(self: *const Self) []const u8 {
         const buf = @as([*]u8, @ptrCast(@constCast(self)));
         return buf[0..][self.pos..(self.pos + self.kSize)];
     }
 
-    // Returns a byte slice of the node value.
+    /// Returns a byte slice of the node value.
     pub fn value(self: *Self) []u8 {
         const buf: [*]u8 = @ptrCast(self);
         return buf[0..][(self.pos + self.kSize)..(self.pos + self.kSize + self.vSize)];
     }
 };
 
-// PageInfo represents human readable information about a page.
+/// PageInfo represents human readable information about a page.
 pub const PageInfo = struct {
     id: isize,
     typ: []u8,

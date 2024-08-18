@@ -45,9 +45,10 @@ pub const TX = struct {
     const Self = @This();
 
     /// Initializes the transaction.
-    pub fn init(_db: *DB) *Self {
+    pub fn init(_db: *DB, writable: bool) *Self {
         const self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
+        self.writable = writable;
         self.pages = std.AutoHashMap(page.PgidType, *Page).init(_db.allocator);
         self.stats = TxStats{};
         // Copy the meta page since it can be changed by the writer.
@@ -59,7 +60,7 @@ pub const TX = struct {
         // Note: here the root node is not set
         self.root.rootNode = null;
         self.allocator = _db.allocator;
-
+        std.log.debug("the transaction reference meta: {}", .{self.meta.txid});
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
             self.meta.txid += 1;
@@ -297,17 +298,16 @@ pub const TX = struct {
     fn writeMeta(self: *Self) Error!void {
         // Create a tempory buffer for the meta page.
         const _db = self.getDB();
-        var buf = std.ArrayList(u8).initCapacity(self.allocator, self.getDB().pageSize) catch unreachable;
-        buf.appendNTimes(0, self.getDB().pageSize) catch unreachable;
-        const buffer = try buf.toOwnedSlice();
-        const p = _db.pageInBuffer(buffer, 0);
-        defer self.allocator.free(buffer);
+        var buf = std.ArrayList(u8).initCapacity(self.allocator, _db.pageSize) catch unreachable;
+        defer buf.deinit();
+        buf.appendNTimes(0, _db.pageSize) catch unreachable;
+        const p = _db.pageInBuffer(buf.items, 0);
         self.meta.write(p);
         // Write the meta page to file.
         const opts = _db.opts.?;
-        const sz = p.id * @as(u64, _db.pageSize);
-        const writeSize = opts(_db.file, buffer, sz) catch unreachable;
-        assert(writeSize == sz, "failed to write meta page to disk", .{});
+        const sz = @as(u64, _db.pageSize);
+        const writeSize = opts(_db.file, buf.items, sz) catch unreachable;
+        assert(writeSize == sz, "failed to write meta page to disk, {} != {}", .{ writeSize, sz });
         if (!_db.noSync) { // TODO
             _db.file.sync() catch unreachable;
         }
@@ -345,10 +345,10 @@ pub const TX = struct {
 
             // Merge statistics.
             _db.statlock.lock();
-            _db.stats.free_page_n = freelistFreeN;
-            _db.stats.pending_page_n = freelistPendingN;
-            _db.stats.free_alloc = (freelistFreeN + freelistPendingN) + self.getDB().pageSize;
-            _db.stats.free_list_inuse = freelistAlloc;
+            _db.stats.freePageN = freelistFreeN;
+            _db.stats.pendingPageN = freelistPendingN;
+            _db.stats.freeAlloc = (freelistFreeN + freelistPendingN) + self.getDB().pageSize;
+            _db.stats.freelistInuse = freelistAlloc;
             _db.stats.txStats.add(&self.stats);
             _db.statlock.unlock();
         } else {

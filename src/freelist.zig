@@ -6,6 +6,7 @@ const consts = @import("consts.zig");
 const PgidType = page.PgidType;
 const assert = @import("assert.zig").assert;
 const TxId = consts.TxId;
+const Page = page.Page;
 // FreeList represents a list of all pages that are available for allcoation.
 // It also tracks pages that  have been freed but are still in use by open transactions.
 pub const FreeList = struct {
@@ -35,6 +36,7 @@ pub const FreeList = struct {
         var itr = self.pending.valueIterator();
         while (itr.next()) |value| {
             value.deinit();
+            std.log.info("free pending ids: {any}", .{value.items});
         }
         self.pending.deinit();
         self.cache.deinit();
@@ -48,7 +50,7 @@ pub const FreeList = struct {
             // The first elements will be used to store the count. See freelist.write.
             n += 1;
         }
-        return page.Page.headerSize() + @sizeOf(page.PgidType) * n;
+        return Page.headerSize() + @sizeOf(PgidType) * n;
     }
 
     // Returns count of pages on the freelist.
@@ -63,17 +65,17 @@ pub const FreeList = struct {
 
     // Returns count of pending pages.
     pub fn pendingCount(self: *Self) usize {
-        var _count: usize = 0;
-        var itr = self.pending.iterator();
-        while (itr.next()) |entry| {
-            _count += entry.value_ptr.items.len;
+        var pageCount: usize = 0;
+        var itr = self.pending.valueIterator();
+        while (itr.next()) |valuePtr| {
+            pageCount += valuePtr.items.len;
         }
-        return _count;
+        return pageCount;
     }
 
     // Copies into dst a list of all free ids end all pending ids in one sorted list.
-    pub fn copyAll(self: *Self, dst: []page.PgidType) void {
-        var array = std.ArrayList(page.PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
+    pub fn copyAll(self: *Self, dst: []PgidType) void {
+        var array = std.ArrayList(PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
         defer array.deinit();
         var itr = self.pending.valueIterator();
         while (itr.next()) |entries| {
@@ -84,7 +86,7 @@ pub const FreeList = struct {
     }
 
     // Returns the starting page id of a contiguous list of pages of a given size.
-    pub fn allocate(self: *Self, n: usize) page.PgidType {
+    pub fn allocate(self: *Self, n: usize) PgidType {
         if (self.ids.items.len == 0) {
             return 0;
         }
@@ -99,16 +101,16 @@ pub const FreeList = struct {
                 initial = id;
             }
             // If we found a contignous block then remove it and return it.
-            if ((id - initial) + 1 == @as(page.PgidType, n)) {
+            if ((id - initial) + 1 == @as(PgidType, n)) {
                 // If we're allocating off the beginning then take the fast path
                 // and just adjust then existing slice. This will use extra memory
                 // temporarilly but then append() in free() will realloc the slice
                 // as is necessary.
                 if (i + 1 == n) {
-                    std.mem.copyForwards(page.PgidType, self.ids.items[0..], self.ids.items[i + 1 ..]);
+                    std.mem.copyForwards(PgidType, self.ids.items[0..], self.ids.items[i + 1 ..]);
                     self.ids.resize(self.ids.items.len - i - 1) catch unreachable;
                 } else {
-                    std.mem.copyForwards(page.PgidType, self.ids.items[i - n + 1 ..], self.ids.items[(i + 1)..]);
+                    std.mem.copyForwards(PgidType, self.ids.items[i - n + 1 ..], self.ids.items[(i + 1)..]);
                     self.ids.resize(self.ids.items.len - n) catch unreachable;
                 }
 
@@ -126,7 +128,7 @@ pub const FreeList = struct {
 
     /// Releases a page and its overflow for a given transaction id.
     /// If the page is already free then a panic will occur.
-    pub fn free(self: *Self, txid: TxId, p: *const page.Page) !void {
+    pub fn free(self: *Self, txid: TxId, p: *const Page) !void {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
 
         // Free page and all its overflow pages.
@@ -163,11 +165,11 @@ pub const FreeList = struct {
         var array = try std.ArrayList(PgidType).initCapacity(self.allocator, arrayIDs.items.len + self.ids.items.len);
         defer array.deinit();
         try array.appendNTimes(0, arrayIDs.items.len + self.ids.items.len);
-        std.log.info("before merge: {}, {}, {}", .{ arrayIDs.items.len, self.ids.items.len, array.items.len });
+        //std.log.info("before merge: {}, {}, {}", .{ arrayIDs.items.len, self.ids.items.len, array.items.len });
         Self.mergeSortedArray(array.items, arrayIDs.items, self.ids.items);
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
-        std.log.info("after release: {}", .{self.ids.items.len});
+        std.log.info("after release: {any}", .{self.ids.items});
     }
 
     /// Removes the pages from a given pending tx.
@@ -183,12 +185,12 @@ pub const FreeList = struct {
     }
 
     /// Returns whether a given page is in the free list.
-    pub fn freed(self: *Self, pgid: page.PgidType) bool {
+    pub fn freed(self: *Self, pgid: PgidType) bool {
         return self.cache.contains(pgid);
     }
 
     /// Initializes the freelist from a freelist page.
-    pub fn read(self: *Self, p: *page.Page) void {
+    pub fn read(self: *Self, p: *Page) void {
         // If the page.count is at the max u16 value (64k) then it's considered
         // an overflow and the size of the freelist is stored as the first elment.
         var _count = @as(usize, p.count);
@@ -205,7 +207,7 @@ pub const FreeList = struct {
             const ids = p.freelistPageOverWithCountElements().?;
             self.ids.appendSlice(ids[idx.._count]) catch unreachable;
             // Make sure they're sorted
-            std.mem.sortUnstable(page.PgidType, self.ids.items, {}, std.sort.asc(page.PgidType));
+            std.mem.sortUnstable(PgidType, self.ids.items, {}, std.sort.asc(PgidType));
         }
         // Rebuild the page cache.
         self.reindex();
@@ -214,7 +216,7 @@ pub const FreeList = struct {
     /// Writes the page ids onto a freelist page. All free and pending ids are
     /// saved to disk since in the event of a program crash, all pending ids will
     /// become free.
-    pub fn write(self: *Self, p: *page.Page) Error!void {
+    pub fn write(self: *Self, p: *Page) Error!void {
         defer std.log.info("after write freelist to page: {}", .{p.id});
         // Combine the old free pgids and pgids waiting on an open transaction.
         //
@@ -240,11 +242,11 @@ pub const FreeList = struct {
     }
 
     // Reads the freelist from a page and filters out pending itmes.
-    pub fn reload(self: *Self, p: *page.Page) void {
+    pub fn reload(self: *Self, p: *Page) void {
         self.read(p);
 
         // Build a cache of only pending pages.
-        var pagaeCahe = std.AutoHashMap(page.PgidType, bool).init(self.allocator);
+        var pagaeCahe = std.AutoHashMap(PgidType, bool).init(self.allocator);
         var vitr = self.pending.valueIterator();
 
         while (vitr.next()) |pendingIDs| {
@@ -287,7 +289,7 @@ pub const FreeList = struct {
     }
 
     /// Merge two sorted arrays into a third array.
-    fn mergeSortedArray(dst: []page.PgidType, a: []const PgidType, b: []const PgidType) void {
+    fn mergeSortedArray(dst: []PgidType, a: []const PgidType, b: []const PgidType) void {
         const size1 = a.len;
         const size2 = b.len;
         var i: usize = 0;
@@ -305,10 +307,10 @@ pub const FreeList = struct {
             index += 1;
         }
         if (i < size1) {
-            std.mem.copyForwards(page.PgidType, dst[index..], a[i..]);
+            std.mem.copyForwards(PgidType, dst[index..], a[i..]);
         }
         if (j < size2) {
-            std.mem.copyForwards(page.PgidType, dst[index..], b[j..]);
+            std.mem.copyForwards(PgidType, dst[index..], b[j..]);
         }
     }
 

@@ -17,6 +17,7 @@ const IgnoreNoSync = false;
 // Page size for db is set to the OS page size.
 const default_page_size = std.os.getPageSize();
 
+/// DB is the main struct that holds the database state.
 pub const DB = struct {
     pageSize: usize,
 
@@ -119,6 +120,7 @@ pub const DB = struct {
         return buf.toOwnedSlice() catch unreachable;
     }
 
+    /// Returns db pretty format string.
     pub fn pageString(self: *const Self, _allocator: std.mem.Allocator) []u8 {
         var buf = std.ArrayList(u8).init(_allocator);
         defer buf.deinit();
@@ -139,7 +141,7 @@ pub const DB = struct {
         db.allocator = allocator;
         // Set default options if no options are proveide.
         db.noGrowSync = options.noGrowSync;
-        db.mmapFlags = options.mmap_flags;
+        db.mmapFlags = options.mmapFlags;
         // Set default values for later DB operations.
         db.maxBatchSize = consts.DefaultMaxBatchSize;
         db.maxBatchDelay = consts.DefaultMaxBatchDelay;
@@ -153,17 +155,17 @@ pub const DB = struct {
         db.pageSize = 0;
         db.txs = std.ArrayList(*TX).init(allocator);
         db.stats = Stats{};
-        db.readOnly = options.read_only;
+        db.readOnly = options.readOnly;
 
         // Open data file and separate sync handler for metadata writes.
         db._path = util.cloneBytes(db.allocator, filePath);
-        if (options.read_only) {
+        if (options.readOnly) {
             db.file = try std.fs.cwd().openFile(db._path, std.fs.File.OpenFlags{
                 .lock = .shared,
                 .mode = .read_only,
             });
         }
-        if (!options.read_only) {
+        if (!options.readOnly) {
             const createFlag = std.fs.File.CreateFlags{
                 .mode = fileMode orelse std.fs.File.default_mode,
                 .truncate = false,
@@ -228,7 +230,7 @@ pub const DB = struct {
     }
 
     /// init creates a new database file and initializes its meta pages.
-    fn init(self: *Self) !void {
+    pub fn init(self: *Self) !void {
         std.log.info("init a new db!", .{});
         // Set the page size to the OS page size.
         self.pageSize = consts.PageSize;
@@ -404,6 +406,7 @@ pub const DB = struct {
         return maxMeta;
     }
 
+    /// Returns the freelist associated with the database.
     pub fn getFreelist(self: *const Self) *freelist.FreeList {
         return self.freelist;
     }
@@ -521,7 +524,7 @@ pub const DB = struct {
         }
 
         // Create a transaction associated with the database.
-        const trx = TX.init(self);
+        const trx = TX.init(self, false);
         // Keep track of transaction until it closes.
         self.txs.append(trx) catch unreachable;
         const n = self.txs.items.len;
@@ -531,8 +534,8 @@ pub const DB = struct {
 
         // Update the transaction stats.
         self.statlock.lock();
-        self.stats.tx_n += 1;
-        self.stats.open_tx_n = n;
+        self.stats.txN += 1;
+        self.stats.openTxN = n;
         self.statlock.unlock();
 
         return trx;
@@ -562,7 +565,7 @@ pub const DB = struct {
         }
 
         // Create a transaction associated with the database.
-        const trx = TX.init(self);
+        const trx = TX.init(self, true);
         trx.writable = true;
         self.rwtx = trx;
 
@@ -590,8 +593,10 @@ pub const DB = struct {
     /// Attempting to manually commit or rollback within the function will cause a panic.
     pub fn update(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
+        const trxID = trx.getID();
+        std.log.info("Star a transaction, txid: {}", .{trxID});
         defer trx.destroy();
-
+        defer std.log.info("End a transaction, txid: {}", .{trxID});
         // Make sure the transaction rolls back in the event of a panic.
         defer if (trx.db != null) {
             trx._rollback();
@@ -654,7 +659,7 @@ pub const DB = struct {
 
         // Merge statistics.
         self.statlock.lock();
-        self.stats.open_tx_n = n;
+        self.stats.openTxN = n;
         self.stats.txStats.add(&trx.stats);
         self.statlock.unlock();
     }
@@ -671,8 +676,11 @@ pub const DB = struct {
         self.allocator.free(self._path);
 
         self.freelist.deinit();
+
+        for (self.txs.items) |trx| {
+            trx.destroy();
+        }
         self.txs.deinit();
-        // self.allocator.free(self.dataRef.?);
     }
 
     fn opsWriteAt(fp: std.fs.File, bytes: []const u8, offset: u64) Error!usize {
@@ -681,7 +689,7 @@ pub const DB = struct {
     }
 };
 
-// Represents the options that can be set when opening a database.
+/// Represents the options that can be set when opening a database.
 pub const Options = packed struct {
     // The amount of time to what wait to obtain a file lock.
     // When set to zero it will wait indefinitely. This option is only
@@ -693,10 +701,10 @@ pub const Options = packed struct {
 
     // Open database in read-only mode, Uses flock(..., LOCK_SH | LOCK_NB) to
     // grab a shared lock (UNIX).
-    read_only: bool = false,
+    readOnly: bool = false,
 
     // Sets the DB.mmap_flags before memory mapping the file.
-    mmap_flags: isize = 0,
+    mmapFlags: isize = 0,
 
     // The initial mmap size of the database
     // in bytes. Read transactions won't block write transaction
@@ -719,14 +727,14 @@ pub const defaultOptions = Options{
 /// Represents statistics about the database
 pub const Stats = packed struct {
     // freelist stats
-    free_page_n: usize = 0, // total number of free pages on the freelist
-    pending_page_n: usize = 0, // total number of pending pages on the freelist
-    free_alloc: usize = 0, // total bytes allocated in free pages
-    free_list_inuse: usize = 0, // total bytes used by the freelist
+    freePageN: usize = 0, // total number of free pages on the freelist
+    pendingPageN: usize = 0, // total number of pending pages on the freelist
+    freeAlloc: usize = 0, // total bytes allocated in free pages
+    freelistInuse: usize = 0, // total bytes used by the freelist
 
     // Transaction stats
-    tx_n: usize = 0, // total number of started read transactions
-    open_tx_n: usize = 0, // number of currently open read transactions
+    txN: usize = 0, // total number of started read transactions
+    openTxN: usize = 0, // number of currently open read transactions
 
     txStats: tx.TxStats = tx.TxStats{}, // global, ongoing stats
 
@@ -738,11 +746,11 @@ pub const Stats = packed struct {
             return self.*;
         }
         const diff = Stats{
-            .free_page_n = self.free_page_n,
-            .pending_page_n = self.pending_page_n,
-            .free_alloc = self.free_alloc,
-            .free_list_inuse = self.free_list_inuse,
-            .tx_n = self.tx_n - other.tx_n,
+            .freePageN = self.freePageN,
+            .pendingPageN = self.pendingPageN,
+            .freeAlloc = self.freeAlloc,
+            .freelistInuse = self.freelistInuse,
+            .txN = self.txN - other.txN,
             .txStats = self.txStats.sub(other.txStats),
         };
         return diff;
@@ -772,6 +780,7 @@ pub const Meta = packed struct {
     check_sum: u64 = 0,
 
     const Self = @This();
+    // The size of the meta object.
     pub const header_size = @sizeOf(Meta);
 
     /// Validates the meta object.
@@ -803,21 +812,16 @@ pub const Meta = packed struct {
 
     /// Writes the meta onto a page.
     pub fn write(self: *Self, p: *page.Page) void {
-        assert(self.root.root < self.pgid, "root page id is invalid", .{});
-        assert(self.freelist < self.pgid, "freelist page id is invalid", .{});
-        // if (self.root.root >= self.pgid) {
-        //     unreachable;
-        // } else if (self.freelist >= self.pgid) {
-        //     unreachable;
-        // }
+        assert(self.root.root < self.pgid, "root page id is invalid, self's pgid: {}", .{self.pgid});
+        assert(self.freelist < self.pgid, "freelist page id is invalid, self's pgid: {}", .{self.pgid});
         // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
-        p.id = @as(page.PgidType, self.txid % 2);
+        p.id = @as(page.PgidType, self.txid & 0b1);
         p.flags |= consts.intFromFlags(consts.PageFlag.meta);
-
         // Calculate the checksum.
         self.check_sum = self.sum64();
         const meta = p.meta();
         meta.* = self.*;
+        assert(meta.check_sum == p.meta().check_sum, "CheckSum is invalid", .{});
         return;
     }
 };
@@ -906,7 +910,7 @@ pub const Meta = packed struct {
 test "DB-Write" {
     std.testing.log_level = .debug;
     var options = defaultOptions;
-    options.read_only = false;
+    options.readOnly = false;
     options.initialMmapSize = 10 * consts.PageSize;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
     defer std.testing.allocator.free(filePath);
@@ -924,7 +928,7 @@ test "DB-Write" {
                     std.log.info("execute forEach!", .{});
                 }
             };
-            std.debug.assert(trx.getID() == 1);
+            //std.debug.assert(trx.getID() == 2);
             std.debug.print("execute transaction: {}\n", .{trx.getID()});
             return trx.forEach(forEach.inner);
         }
@@ -948,6 +952,9 @@ test "DB-Write" {
         {
             try kvDB.update(?*DB, kvDB, updateFn.update);
             const meta = kvDB.getMeta();
+            assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
+            assert(meta.freelist == 4, "the freelist is invalid: {}", .{meta.freelist});
+            assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
             std.log.info("meta: {}", .{meta.*});
             const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
             defer std.testing.allocator.free(freelistStr);
