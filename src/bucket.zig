@@ -46,8 +46,19 @@ pub const Bucket = struct {
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
+        var btIter = self.buckets.valueIterator();
+        while (btIter.next()) |nextBucket| {
+            nextBucket.*.deinit();
+            nextBucket.*.destroy();
+        }
         self.buckets.deinit();
+
+        var nodesItr = self.nodes.valueIterator();
+        while (nodesItr.next()) |nextNode| {
+            nextNode.*.deinit();
+        }
         self.nodes.deinit();
+
         if (self.tx.?.writable) {
             // self.tx.?.getDB().allocator.destroy(self._b.?);
         }
@@ -134,7 +145,7 @@ pub const Bucket = struct {
         }
 
         // Move cursor to correct position.
-        const c = self.cursor();
+        var c = self.cursor();
         std.log.info("first levels: {}", .{c._bucket._b.?.root});
         const keyPairRef = c._seek(key);
 
@@ -147,7 +158,7 @@ pub const Bucket = struct {
         }
 
         // Create empty, inline bucket.
-        const newBucket = Bucket.init(self.tx);
+        const newBucket = Bucket.init(self.tx.?);
         newBucket.rootNode = Node.init(self.allocator);
         newBucket.rootNode.?.isLeaf = true;
 
@@ -162,7 +173,7 @@ pub const Bucket = struct {
         // FIXME: why
         self.page = null;
 
-        return self.getBucket(key);
+        return self.getBucket(key) orelse return Error.BucketNotFound;
     }
 
     /// Creates a new bucket if it doesn't already exist and returns a reference to it.
@@ -579,7 +590,7 @@ pub const Bucket = struct {
         const n = self.rootNode.?;
         const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize()) catch unreachable;
         const _bt = _Bucket.init(value);
-        _bt.* = self._b.?.*;
+        _bt.* = self._b.?;
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
         n.write(p);
 

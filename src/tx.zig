@@ -315,7 +315,7 @@ pub const TX = struct {
         self.stats.write += 1;
     }
 
-    // Internal rollback function.
+    /// Internal rollback function.
     pub fn _rollback(self: *Self) void {
         if (self.db == null) {
             return;
@@ -356,7 +356,7 @@ pub const TX = struct {
             std.log.info("remove tx({}) from db", .{self.meta.txid});
         }
 
-        // clear all reference.
+        // Clear all reference.
         self.allocator.destroy(self.meta);
         self.db = null;
         self.pages.deinit();

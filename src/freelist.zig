@@ -102,6 +102,7 @@ pub const FreeList = struct {
             }
             // If we found a contignous block then remove it and return it.
             if ((id - initial) + 1 == @as(PgidType, n)) {
+                const beforeCount = self.ids.items.len;
                 // If we're allocating off the beginning then take the fast path
                 // and just adjust then existing slice. This will use extra memory
                 // temporarilly but then append() in free() will realloc the slice
@@ -120,7 +121,8 @@ pub const FreeList = struct {
                     const have = self.cache.remove(initial + ii);
                     assert(have, "page {} not found in cache", .{initial + ii});
                 }
-
+                const afterCount = self.ids.items.len;
+                assert(beforeCount == (n + afterCount), "{} != {}", .{ beforeCount, afterCount });
                 return initial;
             }
         }
@@ -138,8 +140,8 @@ pub const FreeList = struct {
             assert(!self.cache.contains(id), "page({}) already free", .{id});
             std.log.debug("free a page, id: {}", .{id});
             // Add to the freelist and cache.
-            ids.value_ptr.append(id) catch unreachable;
-            try self.cache.put(id, true);
+            try self.cache.putNoClobber(id, true);
+            try ids.value_ptr.append(id);
         }
     }
 
@@ -169,7 +171,7 @@ pub const FreeList = struct {
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
         assert(self.ids.items.len == array.items.len, "self.ids.items.len == array.items.len", .{});
-        std.log.info("after release: {any}", .{self.ids.items});
+        std.log.info("after merge: {any}", .{self.ids.items});
     }
 
     /// Removes the pages from a given pending tx.

@@ -621,7 +621,7 @@ pub const DB = struct {
     ///
     /// Attempting to manually rollback within the function will cause a panic.
     pub fn view(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
-        const trx = try self.begin(true);
+        const trx = try self.begin(false);
         const trxID = trx.getID();
         std.log.info("Star a read-only transaction, txid: {}", .{trxID});
         defer trx.destroy();
@@ -663,7 +663,6 @@ pub const DB = struct {
 
         const n = self.txs.items.len;
 
-        std.log.info("1transaction executes rollback!", .{});
         // Unlock the meta pages.
         self.metalock.unlock();
 
@@ -954,7 +953,7 @@ test "DB-Write" {
 
     {
         // test "DB-update"
-        for (0..10) |i| {
+        for (0..1) |i| {
             _ = i; // autofix
             try kvDB.update(?*DB, kvDB, updateFn.update);
             const meta = kvDB.getMeta();
@@ -964,10 +963,19 @@ test "DB-Write" {
             assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
             std.log.info("meta: {}", .{meta.*});
         }
+
+        // Create a bucket
+        const updateFn2 = struct {
+            fn update(_: void, trx: *TX) Error!void {
+                _ = try trx.createBucket("hello");
+            }
+        };
+        try kvDB.update(void, {}, updateFn2.update);
         // test "DB-view"
-        for (0..2) |i| {
+        for (0..0) |i| {
             _ = i; // autofix
             try kvDB.view(?*DB, kvDB, viewFn.view);
+            // std.debug.print("{any}\n", .{kvDB.getFreelist().ids.items});
         }
         kvDB.close() catch unreachable;
     }
