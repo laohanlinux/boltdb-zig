@@ -2,15 +2,15 @@ const std = @import("std");
 const Bucket = @import("bucket.zig").Bucket;
 const Node = @import("node.zig").Node;
 const INode = @import("node.zig").INode;
-const findINodeFn = @import("./node.zig").findFn;
-const lessThanFn = @import("./node.zig").lessThanFn;
+const findINodeFn = @import("node.zig").findFn;
+const lessThanFn = @import("node.zig").lessThanFn;
 const page = @import("page.zig");
 const util = @import("util.zig");
 const assert = util.assert;
 const consts = @import("consts.zig");
 const Tuple = consts.Tuple;
 const KeyPair = consts.KeyPair;
-const KeyValueRet = consts.Tuple.t3(?[]const u8, ?[]u8, u32);
+const KeyValueRef = consts.Tuple.t3(?[]const u8, ?[]u8, u32);
 const Error = @import("error.zig").Error;
 
 /// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
@@ -178,7 +178,7 @@ pub const Cursor = struct {
 
     // Moves the cursor to a given key and returns it.
     // If the key does not exist then the next key is used.
-    pub fn _seek(self: *Self, seekKey: []const u8) KeyValueRet {
+    pub fn _seek(self: *Self, seekKey: []const u8) KeyValueRef {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Start from root page/node and traverse to correct page.
         self.stack.resize(0) catch unreachable;
@@ -186,7 +186,7 @@ pub const Cursor = struct {
         var ref = &self.stack.getLast();
         // If the cursor is pointing to the end of page/node then return nil.
         if (ref.index >= ref.count()) {
-            return KeyValueRet{ .first = null, .second = null, .third = 0 };
+            return KeyValueRef{ .first = null, .second = null, .third = 0 };
         }
         // If this is a bucket then return a nil value.
         return self.keyValue();
@@ -237,7 +237,7 @@ pub const Cursor = struct {
 
     /// Moves to the next leaf element and returns the key and value.
     /// If the cursor is at the last leaf element then it stays there and return null.
-    pub fn _next(self: *Self) KeyValueRet {
+    pub fn _next(self: *Self) KeyValueRef {
         while (true) {
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
@@ -254,7 +254,7 @@ pub const Cursor = struct {
             // If we've hit the root page then stop and return. This will leave the
             // cursor on the last element of the past page.
             if (i == -1) {
-                return KeyValueRet{ .first = null, .second = null, .third = 0 };
+                return KeyValueRef{ .first = null, .second = null, .third = 0 };
             }
 
             // Otherwise start from where we left off in the stack and find the
@@ -318,6 +318,7 @@ pub const Cursor = struct {
         return n;
     }
 
+    // Search key from nodes.
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
         const index = std.sort.binarySearch(INode, INode.init(0, 0, key, null), n.inodes.items, {}, findINodeFn) orelse (self.stack.items.len - 1);
         // Recursively search to the next node.
@@ -326,6 +327,7 @@ pub const Cursor = struct {
         self.search(key, self.stack.items[index].p.?.id);
     }
 
+    // Search key from pages
     fn searchPage(self: *Self, key: []const u8, p: *page.Page) void {
         // Binary search for the correct range.
         const inodes = p.branchPageElements().?;
@@ -351,30 +353,32 @@ pub const Cursor = struct {
         }
 
         // If we have a page then search its leaf elements.
-        const inodes = p.?.leafPageElements().?;
+        e.index = 0;
+        const inodes = p.?.leafPageElements() orelse return;
         var keyEl: page.LeafPageElement = undefined;
         keyEl.pos = 0;
         const index = std.sort.lowerBound(page.LeafPageElement, keyEl, inodes, key, lessThanLeafElementFn);
         e.index = index;
     }
 
-    fn keyValue(self: *Self) KeyValueRet {
+    // get the key and value of the cursor.
+    fn keyValue(self: *Self) KeyValueRef {
         const ref = self.stack.getLast();
         if (ref.count() == 0 or ref.index >= ref.count()) {
             // 1: all key remove of tx, the page's keys are 0,
             // 2: index == count indicate not found the key.
-            return KeyValueRet{ .first = null, .second = null, .third = 0 };
+            return KeyValueRef{ .first = null, .second = null, .third = 0 };
         }
 
         // Retrieve value from node.
         if (ref.node) |refNode| {
             const inode = refNode.inodes.items[ref.index];
-            return KeyValueRet{ .first = inode.key, .second = inode.value, .third = inode.flags };
+            return KeyValueRef{ .first = inode.key, .second = inode.value, .third = inode.flags };
         }
 
         // Or retrieve value from page.
         const elem = ref.p.?.leafPageElement(ref.index);
-        return KeyValueRet{ .first = elem.?.key(), .second = elem.?.value(), .third = elem.?.flags };
+        return KeyValueRef{ .first = elem.?.key(), .second = elem.?.value(), .third = elem.?.flags };
     }
 
     /// Returns the node that the cursor is currently positioned on.
@@ -392,7 +396,7 @@ pub const Cursor = struct {
         if (n == null) {
             n = self._bucket.node(self.stack.items[0].p.?.id, null);
         }
-
+        // find the node from the stack from the top to the bottom.
         for (self.stack.items[0..(self.stack.items.len - 1)]) |ref| {
             assert(!n.?.isLeaf, "expected branch node", .{});
             n = n.?.childAt(ref.index);
@@ -402,6 +406,7 @@ pub const Cursor = struct {
         return n;
     }
 
+    // get the last element reference of the stack.
     fn getLastElementRef(self: *Self) ?*ElementRef {
         if (self.stack.items.len == 0) {
             return null;
@@ -412,7 +417,9 @@ pub const Cursor = struct {
 
 // Represents a reference to an element on a given page/node.
 const ElementRef = struct {
+    // page
     p: ?*page.Page = null,
+    // node, Thinking: if the transaction is read-only, the node is null. don't you know?
     node: ?*Node = null,
     index: usize = 0,
 
@@ -444,11 +451,13 @@ const ElementRef = struct {
     }
 };
 
-pub fn findEqualBranchElementFn(findKey: []const u8, a: page.BranchPageElement, b: page.BranchPageElement) bool {
+// find the key in the branch page.
+fn findEqualBranchElementFn(findKey: []const u8, a: page.BranchPageElement, b: page.BranchPageElement) bool {
     const order = cmpBranchElementFn(findKey, a, b);
     return order == std.math.Order.eq;
 }
 
+// find the key in the branch page.
 fn cmpBranchElementFn(findKey: []const u8, a: page.BranchPageElement, b: page.BranchPageElement) std.math.Order {
     var aKey: []const u8 = undefined;
     if (a.pos == 0) {
@@ -466,7 +475,8 @@ fn cmpBranchElementFn(findKey: []const u8, a: page.BranchPageElement, b: page.Br
     return order;
 }
 
-pub fn lessThanLeafElementFn(findKey: []const u8, a: page.LeafPageElement, b: page.LeafPageElement) bool {
+// find the key in the leaf page.
+fn lessThanLeafElementFn(findKey: []const u8, a: page.LeafPageElement, b: page.LeafPageElement) bool {
     var aKey: []const u8 = undefined;
     if (a.pos == 0) {
         aKey = findKey;

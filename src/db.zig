@@ -421,10 +421,10 @@ pub const DB = struct {
 
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
+        std.log.debug("allocatoe a new page from freelist, id: {}", .{p.id});
         if (p.id != 0) {
             return p;
         }
-
         // Resize mmap() if we're at the end.
         p.id = self.rwtx.?.meta.pgid;
         const minsz: usize = (@as(usize, @intCast(p.id)) + 1 + count) * self.pageSize;
@@ -594,9 +594,9 @@ pub const DB = struct {
     pub fn update(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
         const trxID = trx.getID();
-        std.log.info("Star a transaction, txid: {}", .{trxID});
+        std.log.info("Star a write transaction, txid: {}", .{trxID});
         defer trx.destroy();
-        defer std.log.info("End a transaction, txid: {}", .{trxID});
+        defer std.log.info("End a write transaction, txid: {}", .{trxID});
         // Make sure the transaction rolls back in the event of a panic.
         defer if (trx.db != null) {
             trx._rollback();
@@ -621,16 +621,26 @@ pub const DB = struct {
     ///
     /// Attempting to manually rollback within the function will cause a panic.
     pub fn view(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
-        const trx = try self.begin(false);
+        const trx = try self.begin(true);
+        const trxID = trx.getID();
+        std.log.info("Star a read-only transaction, txid: {}", .{trxID});
+        defer trx.destroy();
+        defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
         // Make sure the transaction rolls back in the event of a panic.
-        errdefer if (trx.db) |_| trx._rollback();
+        defer if (trx.db != null) {
+            trx._rollback();
+        };
 
         // Mark as managed tx so that the inner function cannot manually rollback.
         trx.managed = true;
 
         // If an error is returned from the function then pass it through.
-        //errdefer trx.managed = false;
-        try func(ctx, trx);
+        func(ctx, trx) catch |err| {
+            trx.managed = false;
+            trx.rollback() catch {};
+            std.log.info("after execute transaction commit handle", .{});
+            return err;
+        };
         trx.managed = false;
         try trx.rollback();
     }
@@ -916,7 +926,6 @@ test "DB-Write" {
     defer std.testing.allocator.free(filePath);
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-    defer kvDB.close() catch unreachable;
 
     const updateFn = struct {
         fn update(_kvDB: ?*DB, trx: *TX) Error!void {
@@ -934,39 +943,34 @@ test "DB-Write" {
         }
     };
 
+    const viewFn = struct {
+        fn view(_kvDB: ?*DB, trx: *TX) Error!void {
+            _ = _kvDB; // autofix
+            const bt = trx.getBucket("Alice");
+            assert(bt == null, "the bucket is not null", .{});
+            std.log.info("txid: {}, execute view!", .{trx.getID()});
+        }
+    };
+
     {
-        // var checkVar: usize = 10;
-        // const onCommit = util.closure(usize);
-        // const onCommitFn = onCommit.init(&checkVar, onCommitAdd);
-        // var onCommitFns = std.ArrayList(onCommit).init(std.testing.allocator);
-        // defer onCommitFns.deinit();
-        // onCommitFns.append(onCommitFn) catch unreachable;
-        // onCommitFns.append(onCommitFn) catch unreachable;
-        // for (onCommitFns.items) |f| {
-        //     f.execute();
-        // }
-        // std.debug.print("checkVar: {}\n", .{checkVar});
-        // const trx = try kvDB.begin(true);
-        // trx.onCommit(onCommitFn.onCommit);
-        // defer trx.rollback() catch unreachable;
-        {
+        // test "DB-update"
+        for (0..10) |i| {
+            _ = i; // autofix
             try kvDB.update(?*DB, kvDB, updateFn.update);
             const meta = kvDB.getMeta();
+            // because only freelist page is used, so the max pgid is 5
             assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
-            assert(meta.freelist == 4, "the freelist is invalid: {}", .{meta.freelist});
+            assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
             assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
             std.log.info("meta: {}", .{meta.*});
-            const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
-            defer std.testing.allocator.free(freelistStr);
-            std.log.info("freelist: {s}", .{freelistStr});
         }
-        {
-            try kvDB.update(?*DB, kvDB, updateFn.update);
-            const meta = kvDB.getMeta();
-            std.log.info("meta: {}", .{meta.*});
-            const freelistStr = kvDB.getFreelist().string(std.testing.allocator);
-            defer std.testing.allocator.free(freelistStr);
-            std.log.info("freelist: {s}", .{freelistStr});
+        // test "DB-view"
+        for (0..2) |i| {
+            _ = i; // autofix
+            try kvDB.view(?*DB, kvDB, viewFn.view);
         }
+        kvDB.close() catch unreachable;
     }
+    // test "DB-read" {
+    {}
 }

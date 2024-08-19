@@ -181,7 +181,7 @@ pub const TX = struct {
 
         // spill data onto dirty pages.
         startTime = std.time.Timer.start() catch unreachable;
-        // 在分裂（比如合并两个节点90%，以及30%，合并后就变成120%，所以先合并，再分裂没问题）
+        // During splitting (for example, merging two nodes at 90% and 30% will become 120% after merging, so merging first and then splitting is no problem)
         self.root.spill() catch |err| {
             self._rollback();
             return err;

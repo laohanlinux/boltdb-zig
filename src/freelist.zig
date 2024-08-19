@@ -33,10 +33,10 @@ pub const FreeList = struct {
     pub fn deinit(self: *Self) void {
         std.log.info("deinit freelist", .{});
         defer self.allocator.destroy(self);
-        var itr = self.pending.valueIterator();
-        while (itr.next()) |value| {
-            value.deinit();
-            std.log.info("free pending ids: {any}", .{value.items});
+        var itr = self.pending.iterator();
+        while (itr.next()) |entry| {
+            std.log.info("free pending, txid: {}, ids: {any}", .{ entry.key_ptr.*, entry.value_ptr.items });
+            entry.value_ptr.deinit();
         }
         self.pending.deinit();
         self.cache.deinit();
@@ -79,7 +79,7 @@ pub const FreeList = struct {
         defer array.deinit();
         var itr = self.pending.valueIterator();
         while (itr.next()) |entries| {
-            array.appendSlice(entries.*.items) catch unreachable;
+            array.appendSlice(entries.items) catch unreachable;
         }
         assert(array.items.len == self.pendingCount(), "sanity check!", .{});
         Self.mergeSortedArray(dst, self.ids.items, array.items);
@@ -117,7 +117,8 @@ pub const FreeList = struct {
                 // Remove from the free cache.
                 // TODO Notice
                 for (0..n) |ii| {
-                    _ = self.cache.remove(initial + ii);
+                    const have = self.cache.remove(initial + ii);
+                    assert(have, "page {} not found in cache", .{initial + ii});
                 }
 
                 return initial;
@@ -130,18 +131,14 @@ pub const FreeList = struct {
     /// If the page is already free then a panic will occur.
     pub fn free(self: *Self, txid: TxId, p: *const Page) !void {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
-
         // Free page and all its overflow pages.
-        const ids = try self.pending.getOrPut(txid);
-        if (!ids.found_existing) {
-            ids.value_ptr.* = std.ArrayList(PgidType).init(self.allocator);
-        }
+        const ids = try self.pending.getOrPutValue(txid, std.ArrayList(PgidType).init(self.allocator));
         for (p.id..(p.id + p.overflow + 1)) |id| {
             // Verify that page is not already free.
             assert(!self.cache.contains(id), "page({}) already free", .{id});
             std.log.debug("free a page, id: {}", .{id});
             // Add to the freelist and cache.
-            try ids.value_ptr.append(id);
+            ids.value_ptr.append(id) catch unreachable;
             try self.cache.put(id, true);
         }
     }
@@ -155,20 +152,23 @@ pub const FreeList = struct {
             if (entry.key_ptr.* <= txid) {
                 // Move transaction's pending pages to the available freelist.
                 // Don't remove from the cache since the page is still free.
-                try arrayIDs.appendSlice(entry.value_ptr.*.items);
+                try arrayIDs.appendSlice(entry.value_ptr.items);
+                entry.value_ptr.deinit();
                 const have = self.pending.remove(entry.key_ptr.*);
                 assert(have, "sanity check", .{});
             }
         }
-
+        // Sort the array
         std.mem.sort(PgidType, arrayIDs.items, {}, std.sort.asc(PgidType));
         var array = try std.ArrayList(PgidType).initCapacity(self.allocator, arrayIDs.items.len + self.ids.items.len);
         defer array.deinit();
         try array.appendNTimes(0, arrayIDs.items.len + self.ids.items.len);
-        //std.log.info("before merge: {}, {}, {}", .{ arrayIDs.items.len, self.ids.items.len, array.items.len });
+        assert(array.items.len == (arrayIDs.items.len + self.ids.items.len), "array.items.len == (arrayIDs.items.len + self.ids.items.len)", .{});
+        std.log.info("before merge: {any}, {any}, {any}", .{ array.items, arrayIDs.items, self.ids.items });
         Self.mergeSortedArray(array.items, arrayIDs.items, self.ids.items);
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
+        assert(self.ids.items.len == array.items.len, "self.ids.items.len == array.items.len", .{});
         std.log.info("after release: {any}", .{self.ids.items});
     }
 
@@ -179,9 +179,10 @@ pub const FreeList = struct {
             for (pendingIds.items) |id| {
                 _ = self.cache.remove(id);
             }
+            pendingIds.deinit();
+            // Remove pages from pending list.
+            _ = self.pending.remove(txid);
         }
-        // Remove pages from pending list.
-        _ = self.pending.remove(txid);
     }
 
     /// Returns whether a given page is in the free list.
@@ -250,7 +251,7 @@ pub const FreeList = struct {
         var vitr = self.pending.valueIterator();
 
         while (vitr.next()) |pendingIDs| {
-            for (pendingIDs.*.items) |pendingID| {
+            for (pendingIDs.items) |pendingID| {
                 pagaeCahe.put(pendingID, true) catch unreachable;
             }
         }
@@ -279,10 +280,9 @@ pub const FreeList = struct {
             self.cache.put(id, true) catch unreachable;
         }
 
-        var itr = self.pending.iterator();
+        var itr = self.pending.valueIterator();
         while (itr.next()) |entry| {
-            const pitr = entry.value_ptr.*;
-            for (pitr.items) |id| {
+            for (entry.items) |id| {
                 self.cache.put(id, true) catch unreachable;
             }
         }
@@ -324,7 +324,7 @@ pub const FreeList = struct {
             writer.print("pending:", .{}) catch unreachable;
             var itr = self.pending.iterator();
             while (itr.next()) |entry| {
-                writer.print(" [txid: {any}, pages: {any}], ", .{ entry.key_ptr.*, entry.value_ptr.*.items }) catch unreachable;
+                writer.print(" [txid: {any}, pages: {any}], ", .{ entry.key_ptr.*, entry.value_ptr.items }) catch unreachable;
             }
             writer.print("\n", .{}) catch unreachable;
         }

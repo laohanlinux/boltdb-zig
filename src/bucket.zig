@@ -78,6 +78,7 @@ pub const Bucket = struct {
 
         // Move cursor to key.
         var _cursor = self.cursor();
+        defer _cursor.deinit();
         const keyPairRef = _cursor._seek(name);
         if (keyPairRef.first == null) {
             return null;
