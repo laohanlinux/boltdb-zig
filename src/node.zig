@@ -8,7 +8,7 @@ const assert = @import("assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
-    bucket: ?*bucket.Bucket,
+    bucket: ?*bucket.Bucket, // If the node is top root node, the key is null, but here ?
     isLeaf: bool,
     unbalance: bool,
     spilled: bool,
@@ -112,8 +112,7 @@ pub const Node = struct {
 
     // Returns the index of a given child node.
     fn childIndex(self: *Self, child: *Node) usize {
-        const keyINode = INode.init(0, 0, child.key.?, null);
-        const index = std.sort.lowerBound(INode, keyINode, self.inodes.items, {}, lessThanFn);
+        const index = std.sort.lowerBound(INode, self.inodes.items, child.key.?, INode.cmp);
         return index;
     }
 
@@ -160,8 +159,7 @@ pub const Node = struct {
             assert(false, "put: zero-length new key", .{});
         }
         // Find insertion index.
-        const keyINode = INode.init(0, 0, oldKey, null);
-        const index = std.sort.lowerBound(INode, keyINode, self.inodes.items, {}, lessThanFn);
+        const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.cmp);
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?));
         if (!exact) {
             const insertINode = INode.init(0, 0, null, null);
@@ -178,8 +176,7 @@ pub const Node = struct {
     /// Removes a key from the node.
     pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
-        const keyINode = INode.init(0, 0, key, null);
-        const index = std.sort.binarySearch(INode, keyINode, self.inodes.items, {}, findFn) orelse return;
+        const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.cmp) orelse return;
         _ = self.inodes.orderedRemove(index);
         // Mark the node as needing rebalancing.
         self.unbalance = true;
@@ -217,8 +214,9 @@ pub const Node = struct {
             self.key = self.inodes.items[0].key.?;
             std.debug.assert(self.key.?.len > 0);
         } else {
+            // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
-            @panic("It should be not hanppen");
+            // @panic("It should be not hanppen");
         }
     }
 
@@ -631,6 +629,10 @@ pub const INode = struct {
         inode.value = value;
         return inode;
     }
+
+    pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {
+        return util.cmpBytes(findKey, self.key.?);
+    }
 };
 
 const INodes = std.ArrayList(INode);
@@ -647,23 +649,6 @@ fn freeInodes(allocator: std.mem.Allocator, inodes: INodes) void {
     }
 }
 
-fn sortINodes(inodes: INodes) void {
-    std.mem.sort(*INode, inodes.?, {}, sortFn);
-}
-
-fn sortFn(_: void, a: *INode, b: *INode) bool {
-    const order = util.cmpBytes(a.key.?, b.key.?);
-    return order == std.math.Order.lt or order == std.math.Order.eq;
-}
-
-pub fn findFn(_: void, a: INode, b: INode) std.math.Order {
-    return util.cmpBytes(a.key.?, b.key.?);
-}
-
-pub fn lessThanFn(_: void, a: INode, b: INode) bool {
-    const order = util.cmpBytes(a.key.?, b.key.?);
-    return order == std.math.Order.lt;
-}
 //
 // test "node" {
 //     const node = Node.init(std.testing.allocator);

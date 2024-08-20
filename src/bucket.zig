@@ -40,6 +40,8 @@ pub const Bucket = struct {
         // if (_tx.writable) { // TODO ?
         b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
         b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
+        b.rootNode = null;
+        b.page = null;
         // }
         return b;
     }
@@ -166,7 +168,7 @@ pub const Bucket = struct {
         // Insert into node
         const cpKey = util.cloneBytes(self.allocator, key);
         c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
-
+        std.log.info("create a new bucket: {s}", .{cpKey});
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
         // to be treated as regular, non-inline bucket for the rest of the tx.
@@ -593,7 +595,6 @@ pub const Bucket = struct {
         _bt.* = self._b.?;
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
         n.write(p);
-
         return value;
     }
 
@@ -669,7 +670,7 @@ pub const Bucket = struct {
 
     /// Creates a node from a page and associates it with a given parent.
     pub fn node(self: *Self, pgid: page.PgidType, parentNode: ?*Node) *Node {
-        assert(self.nodes.count() > 0, "nodes map expected!", .{});
+        // assert(self.nodes.count() > 0, "nodes map expected!", .{});
 
         // Retrive node if it's already been created.
         if (self.nodes.get(pgid)) |_node| {
@@ -689,7 +690,6 @@ pub const Bucket = struct {
             // if is inline bucket, the page is not null ???
             p = self.tx.?.getPage(pgid);
         }
-
         // Read the page into the node and cacht it.
         n.read(p.?);
         self.nodes.put(pgid, n) catch unreachable;

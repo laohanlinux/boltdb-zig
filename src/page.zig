@@ -1,6 +1,7 @@
 const std = @import("std");
 const db = @import("db.zig");
 const consts = @import("consts.zig");
+const cmpBytes = @import("util.zig").cmpBytes;
 
 /// The minimum number of keys in a page.
 pub const min_keys_page: usize = 2;
@@ -251,6 +252,10 @@ pub const LeafPageElement = packed struct {
     pub fn value(self: *Self) []u8 {
         const buf: [*]u8 = @ptrCast(self);
         return buf[0..][(self.pos + self.kSize)..(self.pos + self.kSize + self.vSize)];
+    }
+
+    pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {
+        return cmpBytes(findKey, self.key());
     }
 };
 
