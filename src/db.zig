@@ -415,6 +415,7 @@ pub const DB = struct {
     pub fn allocatePage(self: *Self, count: usize) !*Page {
         // TODO Allocate a tempory buffer for the page.
         const buf = try self.allocator.alloc(u8, count * self.pageSize);
+        @memset(buf, 0);
         std.log.debug("allocate a new page, count:{}, size: {}", .{ count, count * self.pageSize });
         const p = Page.init(buf);
         p.overflow = @as(u32, @intCast(count)) - 1;
@@ -591,7 +592,7 @@ pub const DB = struct {
     /// returned from the update() method.
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
-    pub fn update(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
+    pub fn update(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
         const trxID = trx.getID();
         std.log.info("Star a write transaction, txid: {}", .{trxID});
@@ -606,7 +607,7 @@ pub const DB = struct {
         trx.managed = true;
 
         // If an errors is returned from the function then rollback and return error.
-        func(ctx, trx) catch |err| {
+        func(context, trx) catch |err| {
             trx.managed = false;
             trx.rollback() catch {};
             std.log.info("after execute transaction commit handle", .{});
@@ -620,7 +621,7 @@ pub const DB = struct {
     /// Any error that is returned from the function is returned from the view() method.
     ///
     /// Attempting to manually rollback within the function will cause a panic.
-    pub fn view(self: *Self, comptime CTX: anytype, ctx: CTX, func: fn (ctx: CTX, self: *TX) Error!void) Error!void {
+    pub fn view(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
         const trxID = trx.getID();
         std.log.info("Star a read-only transaction, txid: {}", .{trxID});
@@ -635,7 +636,7 @@ pub const DB = struct {
         trx.managed = true;
 
         // If an error is returned from the function then pass it through.
-        func(ctx, trx) catch |err| {
+        func(context, trx) catch |err| {
             trx.managed = false;
             trx.rollback() catch {};
             std.log.info("after execute transaction commit handle", .{});
@@ -955,7 +956,7 @@ test "DB-Write" {
         // test "DB-update"
         for (0..1) |i| {
             _ = i; // autofix
-            try kvDB.update(?*DB, kvDB, updateFn.update);
+            try kvDB.update(kvDB, updateFn.update);
             const meta = kvDB.getMeta();
             // because only freelist page is used, so the max pgid is 5
             assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
@@ -970,11 +971,11 @@ test "DB-Write" {
                 _ = try trx.createBucket("hello");
             }
         };
-        try kvDB.update(void, {}, updateFn2.update);
+        try kvDB.update({}, updateFn2.update);
         // test "DB-view"
         for (0..0) |i| {
             _ = i; // autofix
-            try kvDB.view(?*DB, kvDB, viewFn.view);
+            try kvDB.view(kvDB, viewFn.view);
             // std.debug.print("{any}\n", .{kvDB.getFreelist().ids.items});
         }
         kvDB.close() catch unreachable;

@@ -591,6 +591,8 @@ pub const Bucket = struct {
         // Allocate the approprivate size.
         const n = self.rootNode.?;
         const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize()) catch unreachable;
+        @memset(value, 0);
+        std.debug.print("{any}\n", .{value});
         const _bt = _Bucket.init(value);
         _bt.* = self._b.?;
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
@@ -679,6 +681,7 @@ pub const Bucket = struct {
 
         // Otherwise create a node and cache it.
         const n = Node.init(self.allocator);
+        n.bucket = self;
         if (parentNode != null) {
             parentNode.?.children.append(n) catch unreachable;
         } else {
