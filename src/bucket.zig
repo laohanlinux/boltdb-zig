@@ -37,12 +37,11 @@ pub const Bucket = struct {
         b._b = _Bucket{};
         b.tx = _tx;
         b.allocator = _tx.db.?.allocator;
-        // if (_tx.writable) { // TODO ?
         b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
         b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
         b.rootNode = null;
         b.page = null;
-        // }
+        b.fillPercent = consts.DefaultFillPercent;
         return b;
     }
 
@@ -67,6 +66,7 @@ pub const Bucket = struct {
         self.allocator.destroy(self);
     }
 
+    //
     fn destroy(self: *Self) void {
         self.allocator.destroy(self);
     }
@@ -159,6 +159,7 @@ pub const Bucket = struct {
             return Error.IncompactibleValue;
         }
 
+        std.log.debug("not found the bucket name: {s}, create a new. the cursor stack size: {}", .{ key, c.stack.items.len });
         // Create empty, inline bucket.
         const newBucket = Bucket.init(self.tx.?);
         newBucket.rootNode = Node.init(self.allocator);
@@ -586,15 +587,21 @@ pub const Bucket = struct {
         return self.tx.?.getDB().pageSize / 4;
     }
 
-    // Allocates and writes a bucket to a byte slice.
+    // Allocates and writes a bucket to a byte slice
+    // because bucket is embedded in node that node is rootNode, it maybe is topNode or other node
+    // #TODO it only use at inline bucket ?
     fn write(self: *Self) []u8 {
         // Allocate the approprivate size.
         const n = self.rootNode.?;
-        const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize()) catch unreachable;
+        const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
         @memset(value, 0);
-        std.debug.print("{any}\n", .{value});
+
+        // Write a bucket header.
         const _bt = _Bucket.init(value);
         _bt.* = self._b.?;
+
+        // Convert byte slice to a fake page and write the roor node.
+        std.debug.print("{any}\n", .{_bt.*});
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
         n.write(p);
         return value;

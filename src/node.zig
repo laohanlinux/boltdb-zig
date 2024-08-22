@@ -27,9 +27,6 @@ pub const Node = struct {
     /// init a node with allocator.
     pub fn init(allocator: std.mem.Allocator) *Self {
         const self = allocator.create(Self) catch unreachable;
-        self.allocator = allocator;
-        self.inodes = std.ArrayList(INode).init(self.allocator);
-        self.children = std.ArrayList(*Node).init(self.allocator);
         self.bucket = null;
         self.isLeaf = false;
         self.unbalance = false;
@@ -37,6 +34,10 @@ pub const Node = struct {
         self.key = null;
         self.pgid = 0;
         self.parent = null;
+        self.children = std.ArrayList(*Node).init(self.allocator);
+        self.inodes = std.ArrayList(INode).init(self.allocator);
+
+        self.allocator = allocator;
         return self;
     }
 
@@ -66,7 +67,7 @@ pub const Node = struct {
     }
 
     /// Returns the size of the node after serialization.
-    fn size(self: *const Self) usize {
+    pub fn size(self: *const Self) usize {
         var sz = page.Page.headerSize();
         const elsz = self.pageElementSize();
         for (self.inodes.items) |item| {
@@ -163,6 +164,7 @@ pub const Node = struct {
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?));
         if (!exact) {
             const insertINode = INode.init(0, 0, null, null);
+            self.inodes.addOne() catch unreachable;
             self.inodes.insert(index, insertINode) catch unreachable;
         }
         const inodeRef = &self.inodes.items[index];

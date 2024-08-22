@@ -279,7 +279,7 @@ pub const Cursor = struct {
         const p = pNode.first;
         const n = pNode.second;
         const condition = p == null or p.?.flags & (consts.intFromFlags(.branch) | consts.intFromFlags(.leaf)) != 0;
-        assert(condition, "invalid page type: {d}: {x}", .{ p.?.id, p.?.flags });
+        assert(condition, "invalid page type", .{});
         const e = ElementRef{ .p = p, .node = n };
         self.stack.append(e) catch unreachable;
         // If we're on a leaf page/node then find the specific node.
@@ -304,6 +304,7 @@ pub const Cursor = struct {
         // If the top of the stack is a leaf node then just return it.
         const topRef = self.getLastElementRef().?;
         if (topRef.node != null and topRef.node.?.isLeaf) {
+            std.log.debug("return a topRef node", .{});
             return topRef.node;
         }
 
