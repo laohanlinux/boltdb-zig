@@ -43,6 +43,9 @@ pub const Node = struct {
     /// free the node memory
     pub fn deinit(self: *Self) void {
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
+        for (self.inodes.items) |inode| {
+            inode.deinit(self.allocator);
+        }
         self.inodes.deinit();
         self.children.deinit();
         self.allocator.destroy(self);
@@ -171,6 +174,7 @@ pub const Node = struct {
         inodeRef.*.pgid = pgid;
         inodeRef.key = newKey;
         inodeRef.value = value;
+        inodeRef.isNew = true;
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
     }
 
@@ -626,6 +630,7 @@ pub const INode = struct {
     // If the value is nil then it's a branch node.
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
     value: ?[]u8 = null,
+    isNew: bool = false,
     const Self = @This();
 
     /// Initializes a node.
@@ -635,6 +640,13 @@ pub const INode = struct {
 
     pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {
         return util.cmpBytes(findKey, self.key.?);
+    }
+
+    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+        if (self.isNew) {
+            allocator.free(self.key.?);
+            allocator.free(self.value.?);
+        }
     }
 };
 

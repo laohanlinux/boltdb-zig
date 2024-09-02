@@ -47,11 +47,10 @@ pub const Bucket = struct {
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
-        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
-        var btIter = self.buckets.valueIterator();
+        var btIter = self.buckets.iterator();
         while (btIter.next()) |nextBucket| {
-            nextBucket.*.deinit();
-            nextBucket.*.destroy();
+            self.allocator.free(nextBucket.key_ptr.*);
+            nextBucket.value_ptr.*.deinit();
         }
         self.buckets.deinit();
 
@@ -61,9 +60,11 @@ pub const Bucket = struct {
         }
         self.nodes.deinit();
 
+        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         if (self.tx.?.writable) {
-            // self.tx.?.getDB().allocator.destroy(self._b.?);
+            self.allocator.destroy(self._b.?);
         }
+
         self.allocator.destroy(self);
     }
 

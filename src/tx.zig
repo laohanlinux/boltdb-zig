@@ -364,7 +364,6 @@ pub const TX = struct {
         self.allocator.destroy(self.meta);
         self.db = null;
         self.pages.deinit();
-        std.log.debug("<<<<<<<<<<<<<<<<,", .{});
         self.root.deinit();
 
         // Execute commit handlers now that the locks have been removed.
