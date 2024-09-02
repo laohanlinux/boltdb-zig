@@ -47,6 +47,7 @@ pub const Bucket = struct {
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
+        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         var btIter = self.buckets.valueIterator();
         while (btIter.next()) |nextBucket| {
             nextBucket.*.deinit();
@@ -98,13 +99,13 @@ pub const Bucket = struct {
         }
 
         // Return nil if the key dosn't exist or it is not a bucket.
-        if (std.mem.eql(u8, name, keyPairRef.first.?) or keyPairRef.third & consts.BucketLeafFlag == 0) {
+        if (!std.mem.eql(u8, name, keyPairRef.first.?) or keyPairRef.third & consts.BucketLeafFlag == 0) {
             return null;
         }
 
-        std.log.info("get a new bucket: {s}, current page: {}", .{ name, self.page.?.id });
+        // because the keyPairRef.second is a bucket value, so we need to open it.
         const child = self.openBucket(keyPairRef.second.?);
-
+        // cache the bucket
         self.buckets.put(util.cloneBytes(self.allocator, name), child) catch unreachable;
         return child;
     }
@@ -159,7 +160,7 @@ pub const Bucket = struct {
             return Error.IncompactibleValue;
         }
 
-        std.log.debug("not found the bucket name: {s}, create a new. the cursor stack size: {}", .{ key, c.stack.items.len });
+        // std.log.debug("not found the bucket name: {s}, create a new. the cursor stack size: {}", .{ key, c.stack.items.len });
         // Create empty, inline bucket.
         const newBucket = Bucket.init(self.tx.?);
         newBucket.rootNode = Node.init(self.allocator);
@@ -520,11 +521,13 @@ pub const Bucket = struct {
             var value = std.ArrayList(u8).init(self.allocator);
             if (entry.value_ptr.*.inlineable()) {
                 entry.value_ptr.*.free(); // TODO
+                value.appendSlice(entry.value_ptr.*.write()) catch unreachable;
             } else {
                 try entry.value_ptr.*.spill();
                 // Update the child bucket header in this bucket.
                 value.appendNTimes(0, _Bucket.size()) catch unreachable;
-                _ = _Bucket.init(value.items);
+                const bt = _Bucket.init(value.items);
+                bt.* = entry.value_ptr.*._b.?;
             }
 
             // Skip writing the bucket if there are no matterialized nodes.
@@ -544,15 +547,17 @@ pub const Bucket = struct {
 
         // Ignore if there's not a materialized root node.
         if (self.rootNode == null) {
+            std.log.debug("the rootNode is null", .{});
             return;
         }
-        std.debug.print("the rootNode is : {}\n", .{self.rootNode.?});
         // Spill nodes.
         self.rootNode.?.spill() catch unreachable;
         self.rootNode = self.rootNode.?.root();
         // Update the root node for this bucket.
-        assert(self.rootNode.?.pgid >= self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
+        std.log.debug("-------<<<>>>--------- ", .{});
+        assert(self.rootNode.?.pgid < self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
         self._b.?.root = self.rootNode.?.pgid;
+        // std.log.debug("update the rootNode: from {d} to {d}", .{ oldRootNode.pgid, self.rootNode.?.pgid });
     }
 
     // Returns true if a bucket is small enough to be written inline
@@ -561,6 +566,7 @@ pub const Bucket = struct {
         const n = self.rootNode;
         // Bucket must only contain a single leaf node.
         if (n == null or !n.?.isLeaf) { // the inline node has not parent rootNode, because it inline.
+            std.log.debug("the rootNode is null or not a leaf node: {d}", .{self._b.?.root});
             return false;
         }
 
@@ -601,13 +607,13 @@ pub const Bucket = struct {
         _bt.* = self._b.?;
 
         // Convert byte slice to a fake page and write the roor node.
-        std.debug.print("{any}\n", .{_bt.*});
+        std.debug.print("{any}, node: {any}\n", .{ _bt.*, n.* });
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
         n.write(p);
         return value;
     }
 
-    // Attemps to balance all nodes
+    /// Attemps to balance all nodes
     pub fn rebalance(self: *Self) void {
         var valueItr = self.nodes.valueIterator();
         while (valueItr.next()) |n| {
@@ -707,6 +713,15 @@ pub const Bucket = struct {
         // Update statistic.
         self.tx.?.stats.nodeCount += 1;
         return n;
+    }
+
+    /// #TODO
+    pub fn print(self: *Self) void {
+        const printStruct = .{
+            .root = self._b.?.root,
+            .sequence = self._b.?.sequence,
+        };
+        std.log.info("root: {}, sequence: {}, isInline bucket: {}", .{ printStruct.root, printStruct.sequence, self.page != null });
     }
 };
 

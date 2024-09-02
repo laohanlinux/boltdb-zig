@@ -435,7 +435,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(page.PgidType, count);
-
+        std.log.debug("update the meta page, pgid: {}", .{self.rwtx.?.meta.pgid});
         return p;
     }
 

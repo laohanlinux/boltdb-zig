@@ -21,6 +21,7 @@ pub const FreeList = struct {
 
     const Self = @This();
 
+    /// init freelist
     pub fn init(allocator: std.mem.Allocator) *Self {
         const f = allocator.create(Self) catch unreachable;
         f.ids = std.ArrayList(PgidType).init(allocator);
@@ -30,6 +31,7 @@ pub const FreeList = struct {
         return f;
     }
 
+    /// deinit freelist
     pub fn deinit(self: *Self) void {
         std.log.info("deinit freelist", .{});
         defer self.allocator.destroy(self);
@@ -43,7 +45,7 @@ pub const FreeList = struct {
         self.ids.deinit();
     }
 
-    // Return the size of the page after serlialization.
+    /// Return the size of the page after serlialization.
     pub fn size(self: *Self) usize {
         var n: usize = self.count();
         if (n >= 0xFFFF) {
@@ -53,17 +55,17 @@ pub const FreeList = struct {
         return Page.headerSize() + @sizeOf(PgidType) * n;
     }
 
-    // Returns count of pages on the freelist.
+    /// Returns count of pages on the freelist.
     pub fn count(self: *Self) usize {
         return self.freeCount() + self.pendingCount();
     }
 
-    // Returns count of free pages.
+    /// Returns count of free pages.
     pub fn freeCount(self: *Self) usize {
         return self.ids.items.len;
     }
 
-    // Returns count of pending pages.
+    /// Returns count of pending pages.
     pub fn pendingCount(self: *Self) usize {
         var pageCount: usize = 0;
         var itr = self.pending.valueIterator();
@@ -73,7 +75,7 @@ pub const FreeList = struct {
         return pageCount;
     }
 
-    // Copies into dst a list of all free ids end all pending ids in one sorted list.
+    /// Copies into dst a list of all free ids end all pending ids in one sorted list.
     pub fn copyAll(self: *Self, dst: []PgidType) void {
         var array = std.ArrayList(PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
         defer array.deinit();
@@ -85,7 +87,7 @@ pub const FreeList = struct {
         Self.mergeSortedArray(dst, self.ids.items, array.items);
     }
 
-    // Returns the starting page id of a contiguous list of pages of a given size.
+    /// Returns the starting page id of a contiguous list of pages of a given size.
     pub fn allocate(self: *Self, n: usize) PgidType {
         if (self.ids.items.len == 0) {
             return 0;

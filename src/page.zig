@@ -281,8 +281,8 @@ pub fn merge(allocator: std.mem.Allocator, a: PgIds, b: PgIds) PgIds {
     return merged;
 }
 
-/// Copies the sorted union of a and b into dst,
-/// If dst is too small, it panics.
+// Copies the sorted union of a and b into dst,
+// If dst is too small, it panics.
 fn mergePgIds(dst: PgIds, a: PgIds, b: PgIds) void {
     if (dst.len < (a.len + b.len)) {
         @panic("mergepids bad len");

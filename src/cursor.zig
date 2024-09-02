@@ -278,6 +278,7 @@ pub const Cursor = struct {
         const pNode = self._bucket.pageNode(pgid);
         const p = pNode.first;
         const n = pNode.second;
+        // std.log.debug("search key: {s}, pgid: {} | {}, {}", .{ key, pgid, p == null, n == null });
         const condition = p == null or p.?.flags & (consts.intFromFlags(.branch) | consts.intFromFlags(.leaf)) != 0;
         assert(condition, "invalid page type", .{});
         const e = ElementRef{ .p = p, .node = n };
@@ -353,6 +354,7 @@ pub const Cursor = struct {
         if (n) |_node| {
             const index = std.sort.lowerBound(INode, _node.inodes.items, key, INode.cmp);
             e.index = index;
+            // std.log.debug("nsearch: {s}, inodes: {s}", .{ key, _node.inodes.items[index].key.? });
             return;
         }
 

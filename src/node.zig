@@ -27,6 +27,7 @@ pub const Node = struct {
     /// init a node with allocator.
     pub fn init(allocator: std.mem.Allocator) *Self {
         const self = allocator.create(Self) catch unreachable;
+        self.allocator = allocator;
         self.bucket = null;
         self.isLeaf = false;
         self.unbalance = false;
@@ -36,8 +37,6 @@ pub const Node = struct {
         self.parent = null;
         self.children = std.ArrayList(*Node).init(self.allocator);
         self.inodes = std.ArrayList(INode).init(self.allocator);
-
-        self.allocator = allocator;
         return self;
     }
 
@@ -163,8 +162,8 @@ pub const Node = struct {
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.cmp);
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?));
         if (!exact) {
+            // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
-            self.inodes.addOne() catch unreachable;
             self.inodes.insert(index, insertINode) catch unreachable;
         }
         const inodeRef = &self.inodes.items[index];
@@ -292,6 +291,7 @@ pub const Node = struct {
 
             // If we can't split then exit the loop.
             if (b == null) {
+                std.log.info("the node is not need to split", .{});
                 break;
             }
 
@@ -299,7 +299,7 @@ pub const Node = struct {
             curNode = b.?;
         }
 
-        return nodes.items;
+        return nodes.toOwnedSlice() catch unreachable;
     }
 
     /// Breaks up a node into two smaller nodes, if approprivate.
@@ -433,6 +433,7 @@ pub const Node = struct {
                 parent.put(key, node.inodes.items[0].key.?, null, node.pgid, 0);
                 node.key = node.inodes.items[0].key;
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
+                std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
             }
 
             // Update the statistics.
@@ -450,6 +451,7 @@ pub const Node = struct {
     /// Attempts to combine the node with sibling nodes if the node fill
     /// size is below a threshold or if there are not enough keys.
     pub fn rebalance(self: *Self) void {
+        std.log.debug("rebalance node: {d}", .{self.pgid});
         if (!self.unbalance) {
             return;
         }
@@ -461,11 +463,13 @@ pub const Node = struct {
         // Ignore if node is above threshold (25%) and has enough keys.
         const threshold = self.bucket.?.tx.?.db.?.pageSize / 4;
         if (self.size() > threshold and self.inodes.items.len > self.minKeys()) {
+            std.log.debug("the node size is too large, so don't rebalance: {d}", .{self.pgid});
             return;
         }
 
         // Root node has special handling.
         if (self.parent == null) {
+            std.log.debug("the node parent is null, so rebalance root node: {d}\n", .{self.pgid});
             // If root node is a branch and only has one node then collapse it.
             if (!self.isLeaf and self.inodes.items.len == 1) {
                 // Move root's child up.
@@ -491,6 +495,8 @@ pub const Node = struct {
             }
             std.debug.print("nothing need to rebalance at root: {d}\n", .{self.pgid});
             return;
+        } else {
+            std.log.debug("the node parent is not null, so rebalance: {d}, parent: {d}", .{ self.pgid, self.parent.?.pgid });
         }
 
         // If node has no keys then just remove it.
@@ -624,12 +630,7 @@ pub const INode = struct {
 
     /// Initializes a node.
     pub fn init(flags: u32, pgid: page.PgidType, key: ?[]const u8, value: ?[]u8) Self {
-        var inode: Self = undefined;
-        inode.flags = flags;
-        inode.pgid = pgid;
-        inode.key = key;
-        inode.value = value;
-        return inode;
+        return .{ .flags = flags, .pgid = pgid, .key = key, .value = value };
     }
 
     pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {

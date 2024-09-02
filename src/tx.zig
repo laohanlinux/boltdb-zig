@@ -76,23 +76,24 @@ pub const TX = struct {
     }
 
     pub fn print(self: *const Self) void {
-        const printLog = struct {
-            // writeFlag: isize,
-            writable: bool,
-            meta: *Meta,
-            // root: *Bucket,
-            // pages: std.AutoHashMap(page.PgidType, *Page),
-            // stats: TxStats,
-        };
-        const printStruct = printLog{
-            // .writeFlag = self.writeFlag,
-            .meta = self.meta,
-            .writable = self.writable,
-            // .root = self.root,
-            // .pages = self.pages,
-            // .stats = self.stats,
-        };
-        std.log.info("{}", .{printStruct});
+        std.log.info("----------------------------------", .{});
+        std.log.info("meta: {}", .{self.meta});
+        std.log.info("writable: {}", .{self.writable});
+        // std.log.info("emptyRoot: {}", .{self.root == null});
+        std.log.info("root: {}, sequence: {}", .{ self.root._b.?.root, self.root._b.?.sequence });
+        std.log.info(">>>iterator buckets<<<", .{});
+        var btItr = self.root.buckets.iterator();
+        while (btItr.next()) |bt| {
+            std.log.debug("bucektName: {s}", .{bt.key_ptr.*});
+            bt.value_ptr.*.print();
+        }
+        std.log.info(">>>iterator nodes<<<", .{});
+        var ndItr = self.root.nodes.iterator();
+        while (ndItr.next()) |nd| {
+            const key = nd.value_ptr.*.key orelse "";
+            std.log.info("pid: {d}, key: {s}", .{ nd.key_ptr.*, key });
+        }
+        std.log.info("----------------------------------", .{});
     }
 
     /// Returns the current database size in bytes as seen by this transaction.
@@ -171,6 +172,7 @@ pub const TX = struct {
         }
         const _db = self.getDB();
 
+        self.print();
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;
@@ -186,6 +188,7 @@ pub const TX = struct {
             self._rollback();
             return err;
         };
+        std.log.debug("after commit root spill", .{});
         self.stats.spill_time += startTime.lap();
 
         // Free the old root bucket.
@@ -195,6 +198,7 @@ pub const TX = struct {
         // Free the freelist and allocate new pages for it. This will overestimate
         // the size of the freelist but not underestimate the size (wich would be bad).
         _db.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
+        std.log.debug("after freelist free transaction dirty pages", .{});
         const allocatePageCount = _db.freelist.size() / _db.pageSize + 1;
         const p = self.allocate(allocatePageCount) catch |err| {
             std.log.err("failed to allocate memory: {}", .{err});
@@ -236,10 +240,10 @@ pub const TX = struct {
         };
         self.stats.writeTime += startTime.lap();
         std.log.info("write cost time: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
-        self.print();
+        //self.print();
         // Finalize the transaction.
         self.close();
-
+        std.log.debug("after close transaction.", .{});
         // ok
     }
 
@@ -360,7 +364,9 @@ pub const TX = struct {
         self.allocator.destroy(self.meta);
         self.db = null;
         self.pages.deinit();
+        std.log.debug("<<<<<<<<<<<<<<<<,", .{});
         self.root.deinit();
+
         // Execute commit handlers now that the locks have been removed.
         std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});
         for (self._commitHandlers.items) |func| {
