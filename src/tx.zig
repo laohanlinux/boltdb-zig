@@ -151,7 +151,7 @@ pub const TX = struct {
                 return f(key, b);
             }
         };
-        return self.root.forEachKeyValue(*Self, self, travel.inner);
+        return self.root.forEachKeyValue(self, travel.inner);
     }
 
     /// Adds a handler function to be executed after the transaction successfully commits.
@@ -374,16 +374,18 @@ pub const TX = struct {
     }
 
     /// Iterates over every page within a given page and executes a function.
-    pub fn forEachPage(self: *Self, pgid: page.PgidType, depth: usize, comptime CTX: type, c: CTX, travel: fn (ctx: CTX, p: *const page.Page, depth: usize) void) void {
+    pub fn forEachPage(self: *Self, pgid: page.PgidType, depth: usize, context: anytype, comptime travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         const p = self.getPage(pgid);
 
         // Execute function.
-        travel(c, p, depth);
+        travel(context, p, depth);
+
+        // std.mem.sort(comptime T: type, items: []T, context: anytype, comptime lessThanFn: fn(@TypeOf(context), lhs:T, rhs:T)bool)
 
         // Recursively loop over children.
         if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
             for (p.branchPageElements().?) |elem| {
-                self.forEachPage(elem.pgid, depth + 1, CTX, c, travel);
+                self.forEachPage(elem.pgid, depth + 1, context, travel);
             }
         }
     }

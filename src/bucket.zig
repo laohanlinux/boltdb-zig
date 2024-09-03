@@ -62,10 +62,9 @@ pub const Bucket = struct {
 
         std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         if (self.tx.?.writable) {
-            // self._b.?.destroy(self.allocator);
-        }
-        if (self.rootNode) |nd| {
-            nd.deinit();
+            if (self._b != null) {
+                self._b.?.deinit(self.allocator);
+            }
         }
         self.allocator.destroy(self);
     }
@@ -124,7 +123,7 @@ pub const Bucket = struct {
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
         if (self.tx.?.writable) {
-            self._b = _Bucket.init(util.cloneBytes(self.tx.?.db.?.allocator, value)).*;
+            self._b = _Bucket.init(value).*;
         } else {
             self._b = _Bucket.init(value).*;
         }
@@ -152,6 +151,7 @@ pub const Bucket = struct {
 
         // Move cursor to correct position.
         var c = self.cursor();
+        defer c.deinit();
         std.log.info("first levels: {}", .{c._bucket._b.?.root});
         const keyPairRef = c._seek(key);
 
@@ -163,10 +163,11 @@ pub const Bucket = struct {
             return Error.IncompactibleValue;
         }
 
-        // std.log.debug("not found the bucket name: {s}, create a new. the cursor stack size: {}", .{ key, c.stack.items.len });
         // Create empty, inline bucket.
         const newBucket = Bucket.init(self.tx.?);
+        defer newBucket.deinit();
         newBucket.rootNode = Node.init(self.allocator);
+        defer newBucket.rootNode.?.deinit();
         newBucket.rootNode.?.isLeaf = true;
 
         const value = newBucket.write();
@@ -367,7 +368,7 @@ pub const Bucket = struct {
         return;
     }
 
-    pub fn forEachKeyValue(self: *Self, comptime CTX: type, ctx: CTX, travel: fn (ctx: CTX, key: []const u8, value: ?[]const u8) Error!void) Error!void {
+    pub fn forEachKeyValue(self: *Self, context: anytype, comptime travel: fn (@TypeOf(context), key: []const u8, value: ?[]const u8) Error!void) Error!void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         }
@@ -375,7 +376,7 @@ pub const Bucket = struct {
         defer c.deinit();
         var keyPairRef = c.first();
         while (keyPairRef.key != null) {
-            try travel(ctx, keyPairRef.key.?, keyPairRef.value);
+            try travel(context, keyPairRef.key.?, keyPairRef.value);
             keyPairRef = c.next();
         }
         return;
@@ -529,23 +530,25 @@ pub const Bucket = struct {
                 try entry.value_ptr.*.spill();
                 // Update the child bucket header in this bucket.
                 value.appendNTimes(0, _Bucket.size()) catch unreachable;
-                const bt = _Bucket.init(value.items);
+                const bt = _Bucket.init(value.toOwnedSlice() catch unreachable);
                 bt.* = entry.value_ptr.*._b.?;
             }
 
             // Skip writing the bucket if there are no matterialized nodes.
             // If we delete a bucket ?
             if (entry.value_ptr.*.rootNode == null) {
+                value.deinit();
                 continue;
             }
 
             // Update parent node.
             var c = self.cursor();
-            defer c.deinit();
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.first.?) });
             assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});
             c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.items, 0, consts.BucketLeafFlag);
+            c.deinit();
+            value.deinit();
         }
 
         // Ignore if there's not a materialized root node.
@@ -557,10 +560,8 @@ pub const Bucket = struct {
         self.rootNode.?.spill() catch unreachable;
         self.rootNode = self.rootNode.?.root();
         // Update the root node for this bucket.
-        std.log.debug("-------<<<>>>--------- ", .{});
         assert(self.rootNode.?.pgid < self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
         self._b.?.root = self.rootNode.?.pgid;
-        // std.log.debug("update the rootNode: from {d} to {d}", .{ oldRootNode.pgid, self.rootNode.?.pgid });
     }
 
     // Returns true if a bucket is small enough to be written inline
@@ -596,9 +597,7 @@ pub const Bucket = struct {
         return self.tx.?.getDB().pageSize / 4;
     }
 
-    // Allocates and writes a bucket to a byte slice
-    // because bucket is embedded in node that node is rootNode, it maybe is topNode or other node
-    // #TODO it only use at inline bucket ?
+    // Allocates and writes a bucket to a byte slice, *Note*! remember to free the memory
     fn write(self: *Self) []u8 {
         // Allocate the approprivate size.
         const n = self.rootNode.?;
@@ -745,9 +744,25 @@ pub const _Bucket = packed struct {
         return @sizeOf(_Bucket);
     }
 
-    fn destroy(self: *_Bucket, allocator: std.mem.Allocator) void {
-        allocator.destroy(self);
+    fn deinit(self: *_Bucket, allocator: std.mem.Allocator) void {
+        _ = self; // autofix
+        _ = allocator; // autofix
+        // const slice: [*]u8 = @ptrCast(self);
+        // const buf = slice[0..][0.._Bucket.size()];
+        // allocator.free(buf);
     }
+
+    // fn getDataPtrInt(self: *_Bucket) usize {
+    //     const ptr = @intFromPtr(self);
+    //     return ptr;
+    // }
+
+    // /// Returns a byte slice of the page data.
+    // fn getDataSlice(self: *_Bucket) []u8 {
+    //     const ptr = self.getDataPtrInt();
+    //     const slice: [*]u8 = @ptrFromInt(ptr);
+    //     return slice[0..(page_size - Self.headerSize())];
+    // }
 };
 
 /// Records statistics about resoureces used by a bucket.
