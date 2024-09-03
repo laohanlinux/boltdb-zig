@@ -24,12 +24,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const prettytableDep = b.dependency("prettytable", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
-    _ = b.addModule("prettytable", prettytableDep.module("prettytable"));
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
@@ -41,7 +35,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("prettytable", prettytableDep.module("prettytable"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -78,7 +71,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    lib_unit_tests.root_module.addImport("prettytable", prettytableDep.module("prettytable"));
+
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{

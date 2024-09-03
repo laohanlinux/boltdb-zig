@@ -62,9 +62,11 @@ pub const Bucket = struct {
 
         std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         if (self.tx.?.writable) {
-            self.allocator.destroy(self._b.?);
+            // self._b.?.destroy(self.allocator);
         }
-
+        if (self.rootNode) |nd| {
+            nd.deinit();
+        }
         self.allocator.destroy(self);
     }
 
@@ -741,6 +743,10 @@ pub const _Bucket = packed struct {
 
     fn size() usize {
         return @sizeOf(_Bucket);
+    }
+
+    fn destroy(self: *_Bucket, allocator: std.mem.Allocator) void {
+        allocator.destroy(self);
     }
 };
 
