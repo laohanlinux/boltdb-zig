@@ -361,7 +361,7 @@ pub const DB = struct {
 
     /// Retrieves ongoing performance stats for the database.
     /// This is only updated when a transaction closes.
-    pub fn stats(self: *const Self) Stats {
+    pub fn getStats(self: *const Self) Stats {
         self.statlock.lockShared();
         defer self.statlock.unlockShared();
         return self.stats;

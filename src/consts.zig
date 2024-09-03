@@ -81,3 +81,48 @@ pub const KeyPair = struct {
         return KeyPair{ .key = _key, .value = _value };
     }
 };
+
+pub const String = struct {
+    _str: []const u8,
+    ref: *std.atomic.Value(i64),
+    _allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, str: []const u8) @This() {
+        const refValue = allocator.create(std.atomic.Value(i64)) catch unreachable;
+        refValue.store(1, .seq_cst);
+        return .{ ._str = str, ._allocator = allocator, .ref = refValue };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        const refValue = self.ref.fetchSub(1, .seq_cst);
+        std.debug.print("refValue is {d}\n", .{refValue});
+        if (refValue < 1) {
+            unreachable;
+        }
+        if (refValue == 1) {
+            std.debug.print("Free string!", .{});
+            self._allocator.free(self._str);
+            self._allocator.destroy(self.ref);
+            self.* = undefined;
+        }
+    }
+
+    pub fn clone(self: *@This()) @This() {
+        _ = self.ref.fetchAdd(1, .seq_cst);
+        return .{
+            ._allocator = self._allocator,
+            ._str = self._str,
+            .ref = self.ref,
+        };
+    }
+};
+
+test "String" {
+    var str = try std.testing.allocator.alloc(u8, 3);
+    str[0] = 55;
+    str[1] = 65;
+    var str1 = String.init(std.testing.allocator, str);
+    defer str1.deinit();
+    var str2 = str1.clone();
+    defer str2.deinit();
+}

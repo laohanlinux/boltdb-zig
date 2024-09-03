@@ -470,46 +470,46 @@ pub const Bucket = struct {
     }
 
     /// Iterates over every page in a bucket, including inline pages.
-    fn forEachPage(self: *Self, comptime CTX: type, c: CTX, travel: fn (ctx: CTX, p: *const page.Page, depth: usize) void) void {
+    fn forEachPage(self: *Self, context: anytype, travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         // If we have an inline page then just use that.
         if (self.page != null) {
-            travel(c, self.page, 0);
+            travel(context, self.page, 0);
             return;
         }
 
         // Otherwise traverse the page hierarchy.
-        self.tx.?.forEachPage(self._b.?.root, 0, CTX, c, travel);
+        self.tx.?.forEachPage(self._b.?.root, 0, context, travel);
     }
 
     /// Iterators over every page （or node) in a bucket.
     /// This also include inline pages.
-    pub fn forEachPageNode(self: *Self, comptime CTX: type, c: CTX, travel: fn (c: CTX, p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
+    pub fn forEachPageNode(self: *Self, context: anytype, travel: fn (@TypeOf(context), p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
         // If we have an inline page or root node then just user that.
         if (self.page) |p| {
-            travel(c, p, null, 0);
+            travel(context, p, null, 0);
             return;
         }
 
-        self._forEachPageNode(CTX, c, self._b.?.root, 0, travel);
+        self._forEachPageNode(context, self._b.?.root, 0, travel);
     }
 
     // Recursively iterates over every page or node in a bucket and its nested buckets.
-    fn _forEachPageNode(self: *Self, comptime CTX: type, c: CTX, pgid: page.PgidType, depth: usize, travel: fn (c: CTX, p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
+    fn _forEachPageNode(self: *Self, context: anytype, pgid: page.PgidType, depth: usize, travel: fn (@TypeOf(context), p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
         const pNode = self.pageNode(pgid);
 
         // Execute function.
-        travel(c, pNode.first, pNode.second, depth);
+        travel(context, pNode.first, pNode.second, depth);
 
         // Recursively loop over children.
         if (pNode.first) |p| {
             if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
                 for (p.branchPageElements().?) |elem| {
-                    self._forEachPageNode(CTX, c, elem.pgid, depth + 1, travel);
+                    self._forEachPageNode(context, elem.pgid, depth + 1, travel);
                 }
             }
         } else if (!pNode.second.?.isLeaf) {
             for (pNode.second.?.inodes.items) |iNode| {
-                self._forEachPageNode(CTX, c, iNode.pgid, depth + 1, travel);
+                self._forEachPageNode(context, iNode.pgid, depth + 1, travel);
             }
         }
     }
@@ -518,26 +518,30 @@ pub const Bucket = struct {
     pub fn spill(self: *Self) Error!void {
         // Spill all child buckets first.
         var itr = self.buckets.iterator();
+        var value = std.ArrayList(u8).init(self.allocator);
+        defer value.deinit();
         while (itr.next()) |entry| {
+            value.resize(0) catch unreachable;
+            std.log.info("Run at bucket spill!", .{});
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
-            var value = std.ArrayList(u8).init(self.allocator);
             if (entry.value_ptr.*.inlineable()) {
-                entry.value_ptr.*.free(); // TODO
-                value.appendSlice(entry.value_ptr.*.write()) catch unreachable;
+                entry.value_ptr.*.free(); // TODO Opz code
+                const valBuffer = entry.value_ptr.*.write();
+                value.appendSlice(valBuffer) catch unreachable;
+                self.allocator.free(valBuffer);
             } else {
                 try entry.value_ptr.*.spill();
                 // Update the child bucket header in this bucket.
                 value.appendNTimes(0, _Bucket.size()) catch unreachable;
-                const bt = _Bucket.init(value.toOwnedSlice() catch unreachable);
+                const bt = _Bucket.init(value.items[0..]);
                 bt.* = entry.value_ptr.*._b.?;
             }
 
             // Skip writing the bucket if there are no matterialized nodes.
             // If we delete a bucket ?
             if (entry.value_ptr.*.rootNode == null) {
-                value.deinit();
                 continue;
             }
 
@@ -546,9 +550,8 @@ pub const Bucket = struct {
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.first.?) });
             assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});
-            c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.items, 0, consts.BucketLeafFlag);
+            c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
-            value.deinit();
         }
 
         // Ignore if there's not a materialized root node.
@@ -638,7 +641,7 @@ pub const Bucket = struct {
         }
 
         const trx = self.tx.?;
-        self.forEachPageNode(*tx.TX, trx, freeTravel);
+        self.forEachPageNode(trx, freeTravel);
         self._b.?.root = 0;
     }
 
