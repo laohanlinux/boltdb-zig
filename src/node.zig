@@ -209,19 +209,17 @@ pub const Node = struct {
                 inode.pgid = elem.pgid;
                 inode.key = elem.key();
             }
-            std.debug.assert(inode.key.?.len > 0);
+            assert(inode.key.?.len > 0, "key is null", .{});
             self.inodes.append(inode) catch unreachable;
         }
 
-        // TODO
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
             self.key = self.inodes.items[0].key.?;
-            std.debug.assert(self.key.?.len > 0);
+            assert(self.key.?.len > 0, "key is null", .{});
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
-            // @panic("It should be not hanppen");
         }
     }
 
@@ -638,10 +636,12 @@ pub const INode = struct {
         return .{ .flags = flags, .pgid = pgid, .key = key, .value = value };
     }
 
+    /// compare the key
     pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {
         return util.cmpBytes(findKey, self.key.?);
     }
 
+    /// deinit the inode
     pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
         if (self.isNew) {
             allocator.free(self.key.?);
@@ -653,16 +653,6 @@ pub const INode = struct {
 const INodes = std.ArrayList(INode);
 
 const Nodes = std.ArrayList(*Node);
-
-fn freeInodes(allocator: std.mem.Allocator, inodes: INodes) void {
-    for (inodes.?) |inode| {
-        allocator.free(inode.key.?);
-        if (inode.value != null) {
-            allocator.free(inode.value.?);
-        }
-        inode.destroy(allocator);
-    }
-}
 
 //
 // test "node" {

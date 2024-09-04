@@ -17,7 +17,7 @@ pub const Bucket = struct {
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
-    rootNode: ?*Node = null, // materialized node for the root page. (if is the top bucket? it is null.)
+    rootNode: ?*Node = null, // materialized node for the root page.
     page: ?*page.Page = null, // inline page reference
 
     // Sets the thredshold for filling nodes when they split. By default,
@@ -37,10 +37,18 @@ pub const Bucket = struct {
         b._b = _Bucket{};
         b.tx = _tx;
         b.allocator = _tx.db.?.allocator;
+        // Note:
+        // If the transaction is writable, then the b.buckets and b.nodes will be initialized.
+        // If the transaction is readonly, then the b.buckets and b.nodes will not be initialized.
+        // But for write better code, we need to initialize the b.buckets and b.nodes.
+        // So, if the transaction is readonly, travel all the bucket and nodes by underlaying page.
+        // don't load the bucket and node into memory.
         b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
         b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
+        // init the rootNode and page to null.
         b.rootNode = null;
         b.page = null;
+        // set the fill percent
         b.fillPercent = consts.DefaultFillPercent;
         return b;
     }
@@ -69,8 +77,8 @@ pub const Bucket = struct {
         self.allocator.destroy(self);
     }
 
-    //
-    fn destroy(self: *Self) void {
+    /// Destroy the bucket.
+    pub fn destroy(self: *Self) void {
         self.allocator.destroy(self);
     }
 
@@ -152,7 +160,6 @@ pub const Bucket = struct {
         // Move cursor to correct position.
         var c = self.cursor();
         defer c.deinit();
-        std.log.info("first levels: {}", .{c._bucket._b.?.root});
         const keyPairRef = c._seek(key);
 
         // Return an error if there is an existing key.
@@ -405,9 +412,10 @@ pub const Bucket = struct {
         s.add(&subStats);
     }
 
-    fn travelStats(ctx: Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats), p: *const page.Page, depth: usize) void {
-        const b = ctx.first.?;
-        const s = ctx.second.?;
+    // Travel the bucket and its sub-buckets to collect stats.
+    fn travelStats(context: Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats), p: *const page.Page, depth: usize) void {
+        const b = context.first.?;
+        const s = context.second.?;
         if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
             s.keyN += @as(usize, p.count);
 
@@ -464,12 +472,12 @@ pub const Bucket = struct {
         }
 
         // Keep track of maximum page depth.
-        if (depth + 1 > ctx.second.?.depth) {
+        if (depth + 1 > context.second.?.depth) {
             s.depth = (depth + 1);
         }
     }
 
-    /// Iterates over every page in a bucket, including inline pages.
+    // Iterates over every page in a bucket, including inline pages.
     fn forEachPage(self: *Self, context: anytype, travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         // If we have an inline page then just use that.
         if (self.page != null) {
@@ -630,11 +638,12 @@ pub const Bucket = struct {
         }
     }
 
+    /// Returns the size of the bucket header.
     fn bucketHeaderSize() usize {
         return @sizeOf(_Bucket);
     }
 
-    // Recursively frees all pages in the bucket.
+    /// Recursively frees all pages in the bucket.
     pub fn free(self: *Self) void {
         if (self._b == null or self._b.?.root == 0) {
             return;
@@ -672,7 +681,7 @@ pub const Bucket = struct {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b == null or self._b.?.root == 0) {
-            std.log.info("this is a inline bucket, embed at page({})", .{id});
+            std.log.info("this is a inline bucket, be embedded at page({})", .{id});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
                 return PageOrNode{ .first = null, .second = rNode };
@@ -684,13 +693,13 @@ pub const Bucket = struct {
         if (self.nodes.get(id)) |cacheNode| {
             return PageOrNode{ .first = null, .second = cacheNode };
         }
-        // Finally lookup the page from the transaction if no node is materialized.
+        // Finally lookup the page from the transaction if the id's node is not materialized.
         return PageOrNode{ .first = self.tx.?.getPage(id), .second = null };
     }
 
     /// Creates a node from a page and associates it with a given parent.
     pub fn node(self: *Self, pgid: page.PgidType, parentNode: ?*Node) *Node {
-        // assert(self.nodes.count() > 0, "nodes map expected!", .{});
+        //assert(self.nodes.count() > 0, "nodes map expected!", .{});
 
         // Retrive node if it's already been created.
         if (self.nodes.get(pgid)) |_node| {
@@ -735,7 +744,7 @@ pub const Bucket = struct {
 // then its root page can be stored inline in the "value", after the bucket
 // header, In the case of inline buckets, the "root" will be 0.
 pub const _Bucket = packed struct {
-    root: page.PgidType = 0, // page id of the bucket's root-level page
+    root: page.PgidType = 0, // page id of the bucket's root-level page, if the Bucket is embedded，it's root is zero.
     sequence: u64 = 0, // montotically incrementing. used by next_sequence().
 
     pub fn init(slice: []u8) *_Bucket {
@@ -754,18 +763,6 @@ pub const _Bucket = packed struct {
         // const buf = slice[0..][0.._Bucket.size()];
         // allocator.free(buf);
     }
-
-    // fn getDataPtrInt(self: *_Bucket) usize {
-    //     const ptr = @intFromPtr(self);
-    //     return ptr;
-    // }
-
-    // /// Returns a byte slice of the page data.
-    // fn getDataSlice(self: *_Bucket) []u8 {
-    //     const ptr = self.getDataPtrInt();
-    //     const slice: [*]u8 = @ptrFromInt(ptr);
-    //     return slice[0..(page_size - Self.headerSize())];
-    // }
 };
 
 /// Records statistics about resoureces used by a bucket.

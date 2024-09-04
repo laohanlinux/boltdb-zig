@@ -168,12 +168,12 @@ pub const FreeList = struct {
         defer array.deinit();
         try array.appendNTimes(0, arrayIDs.items.len + self.ids.items.len);
         assert(array.items.len == (arrayIDs.items.len + self.ids.items.len), "array.items.len == (arrayIDs.items.len + self.ids.items.len)", .{});
-        std.log.info("before merge: {any}, {any}, {any}", .{ array.items, arrayIDs.items, self.ids.items });
+        std.log.info("Release a tx's pages, before merge:\t {any} <= [{any}, {any}]", .{ array.items, arrayIDs.items, self.ids.items });
         Self.mergeSortedArray(array.items, arrayIDs.items, self.ids.items);
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
         assert(self.ids.items.len == array.items.len, "self.ids.items.len == array.items.len", .{});
-        std.log.info("after merge: {any}", .{self.ids.items});
+        std.log.info("Release a tx's pages, after merge:\t {any}", .{self.ids.items});
     }
 
     /// Removes the pages from a given pending tx.
@@ -246,7 +246,7 @@ pub const FreeList = struct {
         }
     }
 
-    // Reads the freelist from a page and filters out pending itmes.
+    /// Reads the freelist from a page and filters out pending itmes.
     pub fn reload(self: *Self, p: *Page) void {
         self.read(p);
 

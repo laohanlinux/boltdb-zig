@@ -13,21 +13,22 @@ const Page = page.Page;
 const Bucket = bucket.Bucket;
 const onCommitFn = util.Closure(usize);
 const assert = @import("assert.zig").assert;
+const Table = consts.Table;
 
-// Represent a read-only or read/write transaction on the database.
-// Read-only transactions can be used for retriving values for keys and creating cursors.
-// Read/Write transactions can create and remove buckets and create and remove keys.
-//
-// IMPORTANT: You must commit or rollback transactions when you are done with
-// them. Pages can not be reclaimed by the writer until no more transactions
-// are using them. A long running read transaction can cause the database to
-// quickly grow.
+/// Represent a read-only or read/write transaction on the database.
+/// Read-only transactions can be used for retriving values for keys and creating cursors.
+/// Read/Write transactions can create and remove buckets and create and remove keys.
+///
+/// IMPORTANT: You must commit or rollback transactions when you are done with
+/// them. Pages can not be reclaimed by the writer until no more transactions
+/// are using them. A long running read transaction can cause the database to
+/// quickly grow.
 pub const TX = struct {
     writable: bool,
     managed: bool,
     db: ?*DB,
     meta: *Meta,
-    root: *Bucket,
+    root: *Bucket, // the root bucket of the transaction, the bucket root is reference to the meta.root
     pages: std.AutoHashMap(page.PgidType, *Page),
     stats: TxStats,
 
@@ -60,7 +61,6 @@ pub const TX = struct {
         // Note: here the root node is not set
         self.root.rootNode = null;
         self.allocator = _db.allocator;
-        std.log.debug("the transaction reference meta: {}", .{self.meta.txid});
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
             self.meta.txid += 1;
@@ -76,24 +76,40 @@ pub const TX = struct {
     }
 
     /// Print the transaction information.
-    pub fn print(self: *const Self) void {
-        std.log.info("|----------------------------------|          ", .{});
-        std.log.info("|\tmeta: {}\t|", .{self.meta});
-        std.log.info("|\twritable: {}\t|", .{self.writable});
-        std.log.info("|\troot: {}, sequence: {}\t|", .{ self.root._b.?.root, self.root._b.?.sequence });
-        std.log.info("|\t>>iterator buckets<<<\t|", .{});
-        var btItr = self.root.buckets.iterator();
-        while (btItr.next()) |bt| {
-            std.log.info("|\tbucektName: {s}\t|", .{bt.key_ptr.*});
-            bt.value_ptr.*.print();
+    pub fn print(self: *const Self) !void {
+        var table = Table.init(self.allocator, 20, .Cyan, "Transaction Information");
+        defer table.deinit();
+
+        try table.addHeader(.{ "Field", "Value" });
+
+        var buf: [32]u8 = undefined;
+
+        const fields = .{
+            .{ "Root.Bucket.root", self.root._b.?.root },
+            .{ "Root.Bucket.sequence", self.root._b.?.sequence },
+            .{ "meta.Root.Root", self.meta.root.root },
+            .{ "meta.Root.Sequence", self.meta.root.sequence },
+            .{ "meta.Version", self.meta.version },
+            .{ "meta.Page Size", self.meta.pageSize },
+            .{ "meta.Flags", self.meta.flags },
+            .{ "meta.CheckSum", self.meta.check_sum },
+            .{ "meta.Magic", self.meta.magic },
+            .{ "meta.TxId", self.meta.txid },
+            .{ "meta.Freelist", self.meta.freelist },
+            .{ "meta.Pgid", self.meta.pgid },
+        };
+
+        inline for (fields) |field| {
+            const value = switch (@TypeOf(field[1])) {
+                u64, usize, u8, u16, u32, u128, i64, isize, i8, i16, i32, i128 => try std.fmt.bufPrint(&buf, "{d}", .{field[1]}),
+                else => try std.fmt.bufPrint(&buf, "0x{X:0>8}", .{field[1]}),
+            };
+            try table.addRow(&.{ field[0], value });
         }
-        std.log.info("|\t>>iterator nodes<<<\t|", .{});
-        var ndItr = self.root.nodes.iterator();
-        while (ndItr.next()) |nd| {
-            const key = nd.value_ptr.*.key orelse "";
-            std.log.info("|\tpid: {d}, key: {s}\t|", .{ nd.key_ptr.*, key });
-        }
-        std.log.info("|----------------------------------|", .{});
+
+        try table.addRow(&.{ "Writable", if (self.writable) "Yes" else "No" });
+
+        try table.print();
     }
 
     /// Returns the current database size in bytes as seen by this transaction.
@@ -171,8 +187,10 @@ pub const TX = struct {
             return Error.TxNotWriteable;
         }
         const _db = self.getDB();
-
-        self.print();
+        std.log.debug("before commit", .{});
+        self.print() catch |err| {
+            std.log.err("Failed to print transaction info: {}", .{err});
+        };
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;

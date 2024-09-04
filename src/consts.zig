@@ -137,13 +137,154 @@ pub const BufStr = struct {
     }
 };
 
-test "String" {
-    var str = try std.testing.allocator.alloc(u8, 3);
-    defer std.testing.allocator.free(str);
-    str[0] = 55;
-    str[1] = 65;
-    var str1 = BufStr.init(null, str);
-    defer str1.deinit();
-    var str2 = str1.clone();
-    defer str2.deinit();
+pub const Color = enum {
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
+
+    pub fn ansiCode(self: Color) []const u8 {
+        return switch (self) {
+            .Red => "\x1b[31m",
+            .Green => "\x1b[32m",
+            .Yellow => "\x1b[33m",
+            .Blue => "\x1b[34m",
+            .Magenta => "\x1b[35m",
+            .Cyan => "\x1b[36m",
+            .White => "\x1b[37m",
+        };
+    }
+};
+
+const ResetColor = "\x1b[0m";
+
+pub const Table = struct {
+    headers: std.ArrayList([]const u8),
+    rows: std.ArrayList(std.ArrayList([]const u8)),
+    columnWidth: usize,
+    allocator: std.mem.Allocator,
+    headerColor: Color,
+    name: []const u8,
+
+    pub fn init(allocator: std.mem.Allocator, columnWidth: usize, headerColor: Color, name: []const u8) @This() {
+        return .{
+            .headers = std.ArrayList([]const u8).init(allocator),
+            .rows = std.ArrayList(std.ArrayList([]const u8)).init(allocator),
+            .columnWidth = columnWidth,
+            .allocator = allocator,
+            .headerColor = headerColor,
+            .name = name,
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        for (self.headers.items) |header| {
+            self.allocator.free(header);
+        }
+        self.headers.deinit();
+        for (self.rows.items) |row| {
+            for (row.items) |cell| {
+                self.allocator.free(cell);
+            }
+            row.deinit();
+        }
+        self.rows.deinit();
+    }
+
+    pub fn addHeader(self: *@This(), comptime header: anytype) !void {
+        inline for (header) |cell| {
+            const cp = try self.allocator.dupe(u8, cell);
+            try self.headers.append(cp);
+        }
+    }
+
+    pub fn addRow(self: *@This(), row: anytype) !void {
+        var rowList = std.ArrayList([]const u8).init(self.allocator);
+        inline for (row) |cell| {
+            const cellStr = switch (@TypeOf(cell)) {
+                []const u8 => try self.allocator.dupe(u8, cell),
+                else => try std.fmt.allocPrint(self.allocator, "{s}", .{cell}),
+            };
+            try rowList.append(cellStr);
+        }
+        try self.rows.append(rowList);
+    }
+
+    pub fn print(self: @This()) !void {
+        const writer = std.io.getStdOut().writer();
+
+        // 打印表格名称
+        const totalWidth = self.columnWidth * self.headers.items.len + self.headers.items.len + 1;
+        const nameLen = self.name.len;
+        const leftPadding = if (totalWidth > nameLen) (totalWidth - nameLen) / 2 else 0;
+        const rightPadding = if (totalWidth > nameLen + leftPadding) totalWidth - nameLen - leftPadding else 0;
+
+        try writer.writeByteNTimes('-', leftPadding);
+        try writer.print(" {s} ", .{self.name});
+        try writer.writeByteNTimes('-', rightPadding);
+        try writer.print("\n", .{});
+
+        // 打印顶部分隔线
+        try self.printSeparator(writer);
+
+        // 打印表头（带颜色）
+        try writer.print("{s}", .{self.headerColor.ansiCode()});
+        try self.printRow(writer, self.headers.items);
+        try writer.print("{s}\n", .{ResetColor});
+
+        // 打印表头和数据之间的分隔线
+        try self.printSeparator(writer);
+
+        // 打印数据行
+        for (self.rows.items) |row| {
+            try self.printRow(writer, row.items);
+            try writer.print("\n", .{});
+        }
+
+        // 打印底部分隔线
+        try self.printSeparator(writer);
+    }
+
+    fn printSeparator(self: @This(), writer: anytype) !void {
+        try writer.writeByte('+');
+        for (self.headers.items) |_| {
+            try writer.writeByteNTimes('-', self.columnWidth);
+            try writer.writeByte('+');
+        }
+        try writer.print("\n", .{});
+    }
+
+    fn printRow(self: @This(), writer: anytype, row: []const []const u8) !void {
+        try writer.writeByte('|');
+        for (row) |cell| {
+            var cellLen: usize = cell.len;
+            if (cellLen > self.columnWidth) {
+                cellLen = self.columnWidth;
+            }
+            const padding = if (cellLen < self.columnWidth) (self.columnWidth - cellLen) / 2 else 0;
+            try writer.writeByteNTimes(' ', padding);
+            if (cell.len > self.columnWidth) {
+                try writer.print("{s}...", .{cell[0 .. self.columnWidth - 3]});
+            } else {
+                try writer.print("{s}", .{cell});
+                try writer.writeByteNTimes(' ', self.columnWidth - cellLen - padding);
+            }
+            try writer.writeByte('|');
+        }
+    }
+};
+
+test "Table" {
+    const allocator = std.testing.allocator;
+    var table = Table.init(allocator, 15, .Cyan, "User Information");
+    defer table.deinit();
+
+    try table.addHeader(.{ "Name", "Age", "Gender" });
+
+    try table.addRow(.{ "John Doe", "30", "Male" });
+    try table.addRow(.{ "Jane Doe", "25", "Female" });
+    try table.print();
 }

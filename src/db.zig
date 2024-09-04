@@ -569,6 +569,7 @@ pub const DB = struct {
         const trx = TX.init(self, true);
         trx.writable = true;
         self.rwtx = trx;
+        std.log.debug("After create a write transaction, meta: {any}", .{trx.root.*._b.?});
 
         // Free any pages associated with closed read-only transactions.
         var minid: u64 = std.math.maxInt(u64);
@@ -727,8 +728,8 @@ pub const Options = packed struct {
     initialMmapSize: usize = 0,
 };
 
-// Represents the options used if null options are passed into open().
-// No timeout is used which will cause Bolt to wait indefinitely for a lock.
+/// Represents the options used if null options are passed into open().
+/// No timeout is used which will cause Bolt to wait indefinitely for a lock.
 pub const defaultOptions = Options{
     .timeout = 0,
     .noGrowSync = false,
@@ -783,10 +784,15 @@ pub const Meta = packed struct {
     version: u32 = 0,
     pageSize: u32 = 0,
     flags: u32 = 0,
+    // the root bucket
     root: bucket._Bucket = bucket._Bucket{ .root = 0, .sequence = 0 },
+    // the freelist page id
     freelist: page.PgidType = 0,
+    // the max page id
     pgid: page.PgidType = 0,
+    // the transaction id
     txid: consts.TxId = 0,
+    // the checksum
     check_sum: u64 = 0,
 
     const Self = @This();
@@ -833,6 +839,15 @@ pub const Meta = packed struct {
         meta.* = self.*;
         assert(meta.check_sum == p.meta().check_sum, "CheckSum is invalid", .{});
         return;
+    }
+
+    /// Print the meta information
+    pub fn print(self: *const Self) void {
+        std.log.info("\t-meta-\t", .{});
+        std.log.info("\t|magic: {}, version: {}, flags: {}, checksum: {}\t", .{ self.magic, self.version, self.flags, self.check_sum });
+        std.log.info("\t|root: {}, sequence: {}\t", .{ self.root.root, self.root.sequence });
+        std.log.info("\t|freelist: {}, pgid: {}, txid: {}\t", .{ self.freelist, self.pgid, self.txid });
+        std.log.info("\t-end-\t", .{});
     }
 };
 
@@ -937,8 +952,7 @@ test "DB-Write" {
                     std.log.info("execute forEach!", .{});
                 }
             };
-            //std.debug.assert(trx.getID() == 2);
-            std.debug.print("execute transaction: {}\n", .{trx.getID()});
+            std.log.info("Execute write transaction: {}", .{trx.getID()});
             return trx.forEach(forEach.inner);
         }
     };
