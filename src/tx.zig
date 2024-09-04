@@ -75,25 +75,25 @@ pub const TX = struct {
         self.allocator.destroy(self);
     }
 
+    /// Print the transaction information.
     pub fn print(self: *const Self) void {
-        std.log.info("----------------------------------", .{});
-        std.log.info("meta: {}", .{self.meta});
-        std.log.info("writable: {}", .{self.writable});
-        // std.log.info("emptyRoot: {}", .{self.root == null});
-        std.log.info("root: {}, sequence: {}", .{ self.root._b.?.root, self.root._b.?.sequence });
-        std.log.info(">>>iterator buckets<<<", .{});
+        std.log.info("|----------------------------------|          ", .{});
+        std.log.info("|\tmeta: {}\t|", .{self.meta});
+        std.log.info("|\twritable: {}\t|", .{self.writable});
+        std.log.info("|\troot: {}, sequence: {}\t|", .{ self.root._b.?.root, self.root._b.?.sequence });
+        std.log.info("|\t>>iterator buckets<<<\t|", .{});
         var btItr = self.root.buckets.iterator();
         while (btItr.next()) |bt| {
-            std.log.debug("bucektName: {s}", .{bt.key_ptr.*});
+            std.log.info("|\tbucektName: {s}\t|", .{bt.key_ptr.*});
             bt.value_ptr.*.print();
         }
-        std.log.info(">>>iterator nodes<<<", .{});
+        std.log.info("|\t>>iterator nodes<<<\t|", .{});
         var ndItr = self.root.nodes.iterator();
         while (ndItr.next()) |nd| {
             const key = nd.value_ptr.*.key orelse "";
-            std.log.info("pid: {d}, key: {s}", .{ nd.key_ptr.*, key });
+            std.log.info("|\tpid: {d}, key: {s}\t|", .{ nd.key_ptr.*, key });
         }
-        std.log.info("----------------------------------", .{});
+        std.log.info("|----------------------------------|", .{});
     }
 
     /// Returns the current database size in bytes as seen by this transaction.
@@ -109,7 +109,7 @@ pub const TX = struct {
         return self.root.cursor();
     }
 
-    // Retrives a copy of the current transaction statistics.
+    /// Retrives a copy of the current transaction statistics.
     pub fn getStats(self: *const Self) TxStats {
         return self.stats;
     }
@@ -414,6 +414,7 @@ pub const TX = struct {
         self.db.pageSize * @as(usize, self.meta.txid);
     }
 
+    /// Allocate a page from the database.
     pub fn allocate(self: *Self, count: usize) !*page.Page {
         const p = try self.db.?.allocatePage(count);
         // Save to our page cache.
@@ -488,13 +489,3 @@ pub const TxStats = packed struct {
         };
     }
 };
-
-fn tEach(_: void, _: *page.Page, depth: usize) void {
-    std.debug.print("Hello Word: {}\n", .{depth});
-}
-
-// test "forEach" {
-//     const tx = std.testing.allocator.create(TX) catch unreachable;
-//     defer std.testing.allocator.destroy(tx);
-//     tx.forEach(void, {}, 1, 100, tEach);
-// }

@@ -82,31 +82,46 @@ pub const KeyPair = struct {
     }
 };
 
-pub const String = struct {
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
+/// Get the global general purpose allocator.
+pub fn getGpa() *std.heap.GeneralPurposeAllocator {
+    return &gpa;
+}
+
+/// A string with reference counting.
+pub const BufStr = struct {
     _str: []const u8,
     ref: *std.atomic.Value(i64),
-    _allocator: std.mem.Allocator,
+    _allocator: ?std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, str: []const u8) @This() {
-        const refValue = allocator.create(std.atomic.Value(i64)) catch unreachable;
+    /// Init a string.
+    pub fn init(allocator: ?std.mem.Allocator, str: []const u8) @This() {
+        const _allocator = allocator orelse gpa.allocator();
+        const refValue = _allocator.create(std.atomic.Value(i64)) catch unreachable;
         refValue.store(1, .seq_cst);
         return .{ ._str = str, ._allocator = allocator, .ref = refValue };
     }
 
+    /// Deinit a string.
     pub fn deinit(self: *@This()) void {
         const refValue = self.ref.fetchSub(1, .seq_cst);
-        std.debug.print("refValue is {d}\n", .{refValue});
         if (refValue < 1) {
             unreachable;
         }
         if (refValue == 1) {
-            std.debug.print("Free string!", .{});
-            self._allocator.free(self._str);
-            self._allocator.destroy(self.ref);
+            if (self._allocator) |allocator| {
+                allocator.free(self._str);
+                allocator.destroy(self.ref);
+            } else {
+                gpa.allocator().destroy(self.ref);
+                std.debug.print("deinit\n", .{});
+            }
             self.* = undefined;
         }
     }
 
+    /// Clone a string.
     pub fn clone(self: *@This()) @This() {
         _ = self.ref.fetchAdd(1, .seq_cst);
         return .{
@@ -115,13 +130,19 @@ pub const String = struct {
             .ref = self.ref,
         };
     }
+
+    /// Get the string as a slice.
+    pub fn asSlice(self: *@This()) []const u8 {
+        return self._str;
+    }
 };
 
 test "String" {
     var str = try std.testing.allocator.alloc(u8, 3);
+    defer std.testing.allocator.free(str);
     str[0] = 55;
     str[1] = 65;
-    var str1 = String.init(std.testing.allocator, str);
+    var str1 = BufStr.init(null, str);
     defer str1.deinit();
     var str2 = str1.clone();
     defer str2.deinit();
