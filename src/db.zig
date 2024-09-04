@@ -10,6 +10,7 @@ const Error = @import("error.zig").Error;
 const TX = tx.TX;
 const PageFlag = consts.PageFlag;
 const assert = util.assert;
+const Table = consts.Table;
 
 const Page = page.Page;
 // TODO
@@ -402,7 +403,7 @@ pub const DB = struct {
             };
             break :blk metaA;
         };
-        //@panic("bolt.db.meta(): invalid meta pages");
+        maxMeta.print(self.allocator);
         return maxMeta;
     }
 
@@ -842,12 +843,12 @@ pub const Meta = packed struct {
     }
 
     /// Print the meta information
-    pub fn print(self: *const Self) void {
-        std.log.info("\t-meta-\t", .{});
-        std.log.info("\t|magic: {}, version: {}, flags: {}, checksum: {}\t", .{ self.magic, self.version, self.flags, self.check_sum });
-        std.log.info("\t|root: {}, sequence: {}\t", .{ self.root.root, self.root.sequence });
-        std.log.info("\t|freelist: {}, pgid: {}, txid: {}\t", .{ self.freelist, self.pgid, self.txid });
-        std.log.info("\t-end-\t", .{});
+    pub fn print(self: *const Self, allocator: std.mem.Allocator) void {
+        var table = Table.init(allocator, 20, .Blue, "Meta");
+        defer table.deinit();
+        table.addHeader(.{ "Field", "Value" }) catch unreachable;
+        table.addRow(.{ "Megic", self.magic }) catch unreachable;
+        table.print() catch unreachable;
     }
 };
 
@@ -948,8 +949,8 @@ test "DB-Write" {
                 return Error.DatabaseNotOpen;
             }
             const forEach = struct {
-                fn inner(_: []const u8, _: ?*bucket.Bucket) Error!void {
-                    std.log.info("execute forEach!", .{});
+                fn inner(bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
+                    std.log.info("execute forEach, bucket name: {s}", .{bucketName});
                 }
             };
             std.log.info("Execute write transaction: {}", .{trx.getID()});

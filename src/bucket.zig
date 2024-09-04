@@ -17,7 +17,7 @@ pub const Bucket = struct {
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
-    rootNode: ?*Node = null, // materialized node for the root page.
+    rootNode: ?*Node = null, // materialized node for the root page. Same to nodes, if the transaction is onlyRead, it is null.
     page: ?*page.Page = null, // inline page reference
 
     // Sets the thredshold for filling nodes when they split. By default,

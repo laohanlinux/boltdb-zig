@@ -643,7 +643,7 @@ pub const INode = struct {
 
     /// deinit the inode
     pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
-        if (self.isNew) {
+        if (self.isNew) { //
             allocator.free(self.key.?);
             allocator.free(self.value.?);
         }

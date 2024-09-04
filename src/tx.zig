@@ -58,6 +58,8 @@ pub const TX = struct {
         // Copy over the root bucket.
         self.root = bucket.Bucket.init(self);
         self.root._b.? = self.meta.root;
+        assert(self.root._b.?.root == _db.getMeta().root.root, "root is invalid", .{});
+        assert(self.root._b.?.sequence == _db.getMeta().root.sequence, "sequence is invalid", .{});
         // Note: here the root node is not set
         self.root.rootNode = null;
         self.allocator = _db.allocator;
@@ -77,16 +79,17 @@ pub const TX = struct {
 
     /// Print the transaction information.
     pub fn print(self: *const Self) !void {
-        var table = Table.init(self.allocator, 20, .Cyan, "Transaction Information");
+        var table = Table.init(self.allocator, 24, .Cyan, "Transaction Information");
         defer table.deinit();
 
         try table.addHeader(.{ "Field", "Value" });
 
-        var buf: [32]u8 = undefined;
+        var buf: [64]u8 = undefined;
 
         const fields = .{
             .{ "Root.Bucket.root", self.root._b.?.root },
             .{ "Root.Bucket.sequence", self.root._b.?.sequence },
+            .{ "Tx.Page is null", self.root.page == null },
             .{ "meta.Root.Root", self.meta.root.root },
             .{ "meta.Root.Sequence", self.meta.root.sequence },
             .{ "meta.Version", self.meta.version },
@@ -102,6 +105,7 @@ pub const TX = struct {
         inline for (fields) |field| {
             const value = switch (@TypeOf(field[1])) {
                 u64, usize, u8, u16, u32, u128, i64, isize, i8, i16, i32, i128 => try std.fmt.bufPrint(&buf, "{d}", .{field[1]}),
+                bool => try std.fmt.bufPrint(&buf, "{}", .{field[1]}),
                 else => try std.fmt.bufPrint(&buf, "0x{X:0>8}", .{field[1]}),
             };
             try table.addRow(&.{ field[0], value });
@@ -187,7 +191,7 @@ pub const TX = struct {
             return Error.TxNotWriteable;
         }
         const _db = self.getDB();
-        std.log.debug("before commit", .{});
+        std.log.debug("before commit: {any}", .{self.root._b.?});
         self.print() catch |err| {
             std.log.err("Failed to print transaction info: {}", .{err});
         };
