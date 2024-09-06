@@ -403,7 +403,6 @@ pub const DB = struct {
             };
             break :blk metaA;
         };
-        maxMeta.print(self.allocator);
         return maxMeta;
     }
 
@@ -594,10 +593,11 @@ pub const DB = struct {
     /// returned from the update() method.
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
-    pub fn update(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
+    pub fn update(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
+        defer std.debug.print("\n\n", .{});
         const trx = try self.begin(true);
         const trxID = trx.getID();
-        std.log.info("Star a write transaction, txid: {}", .{trxID});
+        std.log.info("Star a write transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer trx.destroy();
         defer std.log.info("End a write transaction, txid: {}", .{trxID});
         // Make sure the transaction rolls back in the event of a panic.
@@ -609,13 +609,14 @@ pub const DB = struct {
         trx.managed = true;
 
         // If an errors is returned from the function then rollback and return error.
-        func(context, trx) catch |err| {
+        execFn(context, trx) catch |err| {
             trx.managed = false;
             trx.rollback() catch {};
             std.log.info("after execute transaction commit handle", .{});
             return err;
         };
         trx.managed = false;
+        std.log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         try trx.commit();
     }
 
@@ -627,6 +628,7 @@ pub const DB = struct {
         const trx = try self.begin(false);
         const trxID = trx.getID();
         std.log.info("Star a read-only transaction, txid: {}", .{trxID});
+        defer std.debug.print("\n\n", .{});
         defer trx.destroy();
         defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
         // Make sure the transaction rolls back in the event of a panic.
@@ -848,6 +850,15 @@ pub const Meta = packed struct {
         defer table.deinit();
         table.addHeader(.{ "Field", "Value" }) catch unreachable;
         table.addRow(.{ "Megic", self.magic }) catch unreachable;
+        table.addRow(.{ "Version", self.version }) catch unreachable;
+        table.addRow(.{ "Page Size", self.pageSize }) catch unreachable;
+        table.addRow(.{ "Flags", self.flags }) catch unreachable;
+        table.addRow(.{ "Root", self.root.root }) catch unreachable;
+        table.addRow(.{ "Sequence", self.root.sequence }) catch unreachable;
+        table.addRow(.{ "Freelist", self.freelist }) catch unreachable;
+        table.addRow(.{ "Pgid", self.pgid }) catch unreachable;
+        table.addRow(.{ "Txid", self.txid }) catch unreachable;
+        table.addRow(.{ "CheckSum", self.check_sum }) catch unreachable;
         table.print() catch unreachable;
     }
 };
@@ -966,6 +977,7 @@ test "DB-Write" {
             std.log.info("txid: {}, execute view!", .{trx.getID()});
         }
     };
+    _ = viewFn; // autofix
 
     {
         // test "DB-update"
@@ -977,7 +989,7 @@ test "DB-Write" {
             assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
             assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
             assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
-            std.log.info("meta: {}", .{meta.*});
+            // std.log.info("meta: {}", .{meta.*});
         }
 
         // Create a bucket
@@ -988,11 +1000,11 @@ test "DB-Write" {
         };
         try kvDB.update({}, updateFn2.update);
         // test "DB-view"
-        for (0..0) |i| {
-            _ = i; // autofix
-            try kvDB.view(kvDB, viewFn.view);
-            // std.debug.print("{any}\n", .{kvDB.getFreelist().ids.items});
-        }
+        // for (0..0) |i| {
+        //     _ = i; // autofix
+        //     try kvDB.view(kvDB, viewFn.view);
+        //     // std.debug.print("{any}\n", .{kvDB.getFreelist().ids.items});
+        // }
         kvDB.close() catch unreachable;
     }
     // test "DB-read" {

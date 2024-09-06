@@ -145,6 +145,7 @@ pub const TX = struct {
     /// Returns an error if the bucket already exists, if th bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucket(self: *Self, name: []const u8) Error!*bucket.Bucket {
+        defer assert(self.root._b.?.root == self.meta.root.root, "root is invalid", .{});
         return self.root.createBucket(name);
     }
 

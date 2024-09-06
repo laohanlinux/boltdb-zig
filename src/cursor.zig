@@ -213,6 +213,7 @@ pub const Cursor = struct {
         }
     }
 
+    // Moves the cursor to the last leaf element under that last page in the stack.
     fn _last(self: *Self) void {
         while (true) {
             // Exit when we hit a leaf page.

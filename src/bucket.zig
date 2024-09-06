@@ -11,9 +11,9 @@ const util = @import("util.zig");
 const Error = @import("error.zig").Error;
 const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 
-// Represents a collection of key/value pairs inside the database.
+/// Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
-    _b: ?_Bucket = null,
+    _b: ?_Bucket = null, // the bucket struct, it is a pointer to the underlying bucket page.
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
@@ -131,13 +131,13 @@ pub const Bucket = struct {
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
         if (self.tx.?.writable) {
-            self._b = _Bucket.init(value).*;
+            child._b = _Bucket.init(value).*;
         } else {
-            self._b = _Bucket.init(value).*;
+            child._b = _Bucket.init(value).*;
         }
 
         // Save a reference to the inline page if the bucket is inline.
-        if (self._b.?.root == 0) {
+        if (child._b.?.root == 0) {
             child.page = page.Page.init(value); // TODO
             std.log.info("Save a reference to the inline page if the bucket is inline, the page is {}", .{child.page.?.id});
         }
@@ -620,7 +620,7 @@ pub const Bucket = struct {
         _bt.* = self._b.?;
 
         // Convert byte slice to a fake page and write the roor node.
-        std.debug.print("{any}, node: {any}\n", .{ _bt.*, n.* });
+        // std.debug.print("{any}, node: {any}\n", .{ _bt.*, n.* });
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
         n.write(p);
         return value;
@@ -746,7 +746,7 @@ pub const Bucket = struct {
 pub const _Bucket = packed struct {
     root: page.PgidType = 0, // page id of the bucket's root-level page, if the Bucket is embedded，it's root is zero.
     sequence: u64 = 0, // montotically incrementing. used by next_sequence().
-
+    /// Init _Bucket with a given slice
     pub fn init(slice: []u8) *_Bucket {
         const ptr: *_Bucket = @ptrCast(@alignCast(slice));
         return ptr;
@@ -756,12 +756,19 @@ pub const _Bucket = packed struct {
         return @sizeOf(_Bucket);
     }
 
-    fn deinit(self: *_Bucket, allocator: std.mem.Allocator) void {
-        _ = self; // autofix
+    /// Init _Bucket with a given allocator. This is used for writable transaction.
+    pub fn initWithAllocator(allocator: std.mem.Allocator) !*_Bucket {
+        const self = try allocator.create(_Bucket);
+        self.root = 0;
+        self.sequence = 0;
+        return self;
+    }
+
+    /// Deinit _Bucket with a given allocator. This is used for writable transaction.
+    pub fn deinit(self: *_Bucket, allocator: std.mem.Allocator) void {
         _ = allocator; // autofix
-        // const slice: [*]u8 = @ptrCast(self);
-        // const buf = slice[0..][0.._Bucket.size()];
-        // allocator.free(buf);
+        // allocator.destroy(self);
+        self.* = undefined;
     }
 };
 

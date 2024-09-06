@@ -205,7 +205,8 @@ pub const Table = struct {
         var rowList = std.ArrayList([]const u8).init(self.allocator);
         inline for (row) |cell| {
             const cellStr = switch (@TypeOf(cell)) {
-                []const u8 => try self.allocator.dupe(u8, cell),
+                u64, usize, i64, isize, u32, i32, u16, i16, u8, i8 => try std.fmt.allocPrint(self.allocator, "{d}", .{cell}),
+                bool => try std.fmt.allocPrint(self.allocator, "{s}", .{if (cell) "true" else "false"}),
                 else => try std.fmt.allocPrint(self.allocator, "{s}", .{cell}),
             };
             try rowList.append(cellStr);
