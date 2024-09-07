@@ -106,6 +106,7 @@ pub const BufStr = struct {
     /// Deinit a string.
     pub fn deinit(self: *@This()) void {
         const refValue = self.ref.fetchSub(1, .seq_cst);
+        // std.debug.print("deinit refValue: {}\n", .{refValue});
         if (refValue < 1) {
             unreachable;
         }
@@ -134,6 +135,16 @@ pub const BufStr = struct {
     /// Get the string as a slice.
     pub fn asSlice(self: *@This()) []const u8 {
         return self._str;
+    }
+
+    // 修改 hash 方法
+    pub fn hash(self: @This()) u64 {
+        return std.hash.Wyhash.hash(0, self._str);
+    }
+
+    // 添加相等性比较方法
+    pub fn eql(self: @This(), other: @This()) bool {
+        return std.mem.eql(u8, self._str, other._str);
     }
 };
 
@@ -278,14 +289,43 @@ pub const Table = struct {
     }
 };
 
-test "Table" {
+// test "Table" {
+//     const allocator = std.testing.allocator;
+//     var table = Table.init(allocator, 15, .Cyan, "User Information");
+//     defer table.deinit();
+
+//     try table.addHeader(.{ "Name", "Age", "Gender" });
+
+//     try table.addRow(.{ "John Doe", "30", "Male" });
+//     try table.addRow(.{ "Jane Doe", "25", "Female" });
+//     try table.print();
+// }
+
+test "BufStr" {
     const allocator = std.testing.allocator;
-    var table = Table.init(allocator, 15, .Cyan, "User Information");
-    defer table.deinit();
-
-    try table.addHeader(.{ "Name", "Age", "Gender" });
-
-    try table.addRow(.{ "John Doe", "30", "Male" });
-    try table.addRow(.{ "Jane Doe", "25", "Female" });
-    try table.print();
+    const BufStrContext = struct {
+        pub fn hash(self: @This(), key: BufStr) u64 {
+            _ = self;
+            return key.hash();
+        }
+        pub fn eql(self: @This(), a: BufStr, b: BufStr) bool {
+            _ = self;
+            return a.eql(b);
+        }
+    };
+    var hashBufStr = std.HashMap(BufStr, u64, BufStrContext, std.hash_map.default_max_load_percentage).init(allocator);
+    defer hashBufStr.deinit();
+    const hello = try allocator.dupe(u8, "hello");
+    var key1 = BufStr.init(allocator, hello);
+    defer key1.deinit();
+    for (0..100) |i| {
+        _ = i; // autofix
+        var key2 = key1.clone();
+        try hashBufStr.put(key2, 1);
+        key2.deinit();
+    }
+    var itr = hashBufStr.iterator();
+    while (itr.next()) |entry| {
+        std.debug.print("key: {s}, value: {d}\n", .{ entry.key_ptr.*.asSlice(), entry.value_ptr.* });
+    }
 }

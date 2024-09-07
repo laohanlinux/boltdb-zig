@@ -10,6 +10,7 @@ const consts = @import("consts.zig");
 const util = @import("util.zig");
 const Error = @import("error.zig").Error;
 const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
+const BufStr = consts.BufStr;
 
 /// Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
