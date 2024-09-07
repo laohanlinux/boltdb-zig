@@ -172,7 +172,15 @@ pub const Node = struct {
         const inodeRef = &self.inodes.items[index];
         inodeRef.*.flags = flags;
         inodeRef.*.pgid = pgid;
-        inodeRef.key = newKey;
+        if (!exact) {
+            inodeRef.key = newKey;
+        } else {
+            if (!std.mem.eql(u8, newKey, inodeRef.key.?)) {
+                // free
+                self.allocator.free(inodeRef.key.?);
+                inodeRef.key = newKey;
+            }
+        }
         inodeRef.value = value;
         inodeRef.isNew = true;
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});

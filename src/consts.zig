@@ -103,6 +103,20 @@ pub const BufStr = struct {
         return .{ ._str = str, ._allocator = allocator, .ref = refValue };
     }
 
+    /// Dupe a string from a slice.
+    pub fn dupeFromSlice(allocator: ?std.mem.Allocator, str: []const u8) @This() {
+        const _allocator = allocator orelse gpa.allocator();
+        const refValue = _allocator.create(std.atomic.Value(i64)) catch unreachable;
+        refValue.store(1, .seq_cst);
+        const newStr = _allocator.dupe(u8, str) catch unreachable;
+        return .{ ._str = newStr, ._allocator = allocator, .ref = refValue };
+    }
+
+    pub fn dupeToSlice(self: *@This(), allocator: ?std.mem.Allocator) []u8 {
+        const _allocator = allocator orelse gpa.allocator();
+        return _allocator.dupe(u8, self._str) catch unreachable;
+    }
+
     /// Deinit a string.
     pub fn deinit(self: *@This()) void {
         const refValue = self.ref.fetchSub(1, .seq_cst);
@@ -120,6 +134,15 @@ pub const BufStr = struct {
             }
             self.* = undefined;
         }
+    }
+
+    /// Create a new string from a slice.
+    pub fn fromSlice(str: []const u8) @This() {
+        var self: @This() = undefined;
+        self._str = str;
+        self.ref = undefined;
+        self._allocator = undefined;
+        return self;
     }
 
     /// Clone a string.

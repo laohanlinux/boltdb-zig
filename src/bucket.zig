@@ -265,7 +265,7 @@ pub const Bucket = struct {
     // Returns an error if the bucket was created from a read-only transaction, if the key is bucket, if the key is too large, or
     // of if the value is too large.
     pub fn put(self: *Self, keyPair: consts.KeyPair) !void {
-        if (self.tx.db == null) {
+        if (self.tx.?.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
             return Error.TxNotWriteable;
@@ -278,19 +278,20 @@ pub const Bucket = struct {
         }
 
         // Move cursor to correct position.
-        const c = self.cursor();
+        var c = self.cursor();
         defer c.deinit();
 
-        const keyPairRef = c._seek(keyPair.key);
+        const keyPairRef = c._seek(keyPair.key.?);
 
         // Return an error if there is an existing key with a bucket value.
-        if (std.mem.eql(keyPair.key, keyPairRef.first) and keyPairRef.third & consts.BucketLeafFlag != 0) {
+        if (keyPairRef.first != null and std.mem.eql(u8, keyPair.key.?, keyPairRef.first.?) and keyPairRef.third & consts.BucketLeafFlag != 0) {
             return Error.IncompactibleValue;
         }
 
         // Insert into node.
-        const cpKey = util.cloneBytes(self.allocator, keyPair.key);
-        c.node().?.put(cpKey, cpKey, keyPair.value, 0, 0);
+        const cpKey = util.cloneBytes(self.allocator, keyPair.key.?);
+        const cpValue = util.cloneBytes(self.allocator, keyPair.value.?);
+        c.node().?.put(cpKey, cpKey, cpValue, 0, 0);
     }
 
     /// Removes a key from the bucket.

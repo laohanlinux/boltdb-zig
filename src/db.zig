@@ -972,9 +972,10 @@ test "DB-Write" {
     const viewFn = struct {
         fn view(_kvDB: ?*DB, trx: *TX) Error!void {
             _ = _kvDB; // autofix
-            const bt = trx.getBucket("Alice");
-            assert(bt == null, "the bucket is not null", .{});
-            std.log.info("txid: {}, execute view!", .{trx.getID()});
+            for (0..10000) |_| {
+                const bt = trx.getBucket("Alice");
+                assert(bt == null, "the bucket is not null", .{});
+            }
         }
     };
     _ = viewFn; // autofix
@@ -989,13 +990,14 @@ test "DB-Write" {
             assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
             assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
             assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
-            // std.log.info("meta: {}", .{meta.*});
         }
 
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                _ = try trx.createBucket("hello");
+                var bt = try trx.createBucket("hello");
+                const res = try bt.put(consts.KeyPair.init("say", "world"));
+                _ = res; // autofix
             }
         };
         try kvDB.update({}, updateFn2.update);
