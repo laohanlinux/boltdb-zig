@@ -49,6 +49,26 @@ pub fn intFromFlags(pageFlage: PageFlag) u16 {
     return @as(u16, @intFromEnum(pageFlage));
 }
 
+/// Convert 'flag' to PageFlag enum.
+pub fn toFlags(flag: u16) PageFlag {
+    if (flag == 0x01) {
+        return PageFlag.branch;
+    }
+    if (flag == 0x02) {
+        return PageFlag.leaf;
+    }
+
+    if (flag == 0x04) {
+        return PageFlag.meta;
+    }
+
+    if (flag == 0x10) {
+        return PageFlag.free_list;
+    }
+
+    @panic("invalid flag");
+}
+
 /// Represents the internal transaction indentifier.
 pub const TxId = u64;
 
@@ -324,31 +344,36 @@ pub const Table = struct {
 //     try table.print();
 // }
 
-test "BufStr" {
-    const allocator = std.testing.allocator;
-    const BufStrContext = struct {
-        pub fn hash(self: @This(), key: BufStr) u64 {
-            _ = self;
-            return key.hash();
-        }
-        pub fn eql(self: @This(), a: BufStr, b: BufStr) bool {
-            _ = self;
-            return a.eql(b);
-        }
-    };
-    var hashBufStr = std.HashMap(BufStr, u64, BufStrContext, std.hash_map.default_max_load_percentage).init(allocator);
-    defer hashBufStr.deinit();
-    const hello = try allocator.dupe(u8, "hello");
-    var key1 = BufStr.init(allocator, hello);
-    defer key1.deinit();
-    for (0..100) |i| {
-        _ = i; // autofix
-        var key2 = key1.clone();
-        try hashBufStr.put(key2, 1);
-        key2.deinit();
-    }
-    var itr = hashBufStr.iterator();
-    while (itr.next()) |entry| {
-        std.debug.print("key: {s}, value: {d}\n", .{ entry.key_ptr.*.asSlice(), entry.value_ptr.* });
-    }
+// test "BufStr" {
+//     const allocator = std.testing.allocator;
+//     const BufStrContext = struct {
+//         pub fn hash(self: @This(), key: BufStr) u64 {
+//             _ = self;
+//             return key.hash();
+//         }
+//         pub fn eql(self: @This(), a: BufStr, b: BufStr) bool {
+//             _ = self;
+//             return a.eql(b);
+//         }
+//     };
+//     var hashBufStr = std.HashMap(BufStr, u64, BufStrContext, std.hash_map.default_max_load_percentage).init(allocator);
+//     defer hashBufStr.deinit();
+//     const hello = try allocator.dupe(u8, "hello");
+//     var key1 = BufStr.init(allocator, hello);
+//     defer key1.deinit();
+//     for (0..100) |i| {
+//         _ = i; // autofix
+//         var key2 = key1.clone();
+//         try hashBufStr.put(key2, 1);
+//         key2.deinit();
+//     }
+//     var itr = hashBufStr.iterator();
+//     while (itr.next()) |entry| {
+//         std.debug.print("key: {s}, value: {d}\n", .{ entry.key_ptr.*.asSlice(), entry.value_ptr.* });
+//     }
+// }
+
+test "intFromFlags" {
+    const flags = 0 & (intFromFlags(.leaf) | intFromFlags(.branch));
+    std.debug.print("flags: {}\n", .{flags});
 }

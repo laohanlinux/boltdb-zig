@@ -845,21 +845,21 @@ pub const Meta = packed struct {
     }
 
     /// Print the meta information
-    pub fn print(self: *const Self, allocator: std.mem.Allocator) void {
+    pub fn print(self: *const Self, allocator: std.mem.Allocator) !void {
         var table = Table.init(allocator, 20, .Blue, "Meta");
         defer table.deinit();
-        table.addHeader(.{ "Field", "Value" }) catch unreachable;
-        table.addRow(.{ "Megic", self.magic }) catch unreachable;
-        table.addRow(.{ "Version", self.version }) catch unreachable;
-        table.addRow(.{ "Page Size", self.pageSize }) catch unreachable;
-        table.addRow(.{ "Flags", self.flags }) catch unreachable;
-        table.addRow(.{ "Root", self.root.root }) catch unreachable;
-        table.addRow(.{ "Sequence", self.root.sequence }) catch unreachable;
-        table.addRow(.{ "Freelist", self.freelist }) catch unreachable;
-        table.addRow(.{ "Pgid", self.pgid }) catch unreachable;
-        table.addRow(.{ "Txid", self.txid }) catch unreachable;
-        table.addRow(.{ "CheckSum", self.check_sum }) catch unreachable;
-        table.print() catch unreachable;
+        try table.addHeader(.{ "Field", "Value" });
+        try table.addRow(.{ "Megic", self.magic });
+        try table.addRow(.{ "Version", self.version });
+        try table.addRow(.{ "Page Size", self.pageSize });
+        try table.addRow(.{ "Flags", self.flags });
+        try table.addRow(.{ "Root", self.root.root });
+        try table.addRow(.{ "Sequence", self.root.sequence });
+        try table.addRow(.{ "Freelist", self.freelist });
+        try table.addRow(.{ "Pgid", self.pgid });
+        try table.addRow(.{ "Txid", self.txid });
+        try table.addRow(.{ "CheckSum", self.check_sum });
+        try table.print();
     }
 };
 
@@ -995,9 +995,11 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                var bt = try trx.createBucket("hello");
-                const res = try bt.put(consts.KeyPair.init("say", "world"));
-                _ = res; // autofix
+                const bt = try trx.createBucket("hello");
+                std.debug.print("create bucket: {s}\n", .{"hello"});
+                try bt.put(consts.KeyPair.init("ping", "pong"));
+                try bt.put(consts.KeyPair.init("echo", "ok"));
+                // _ = res; // autofix
             }
         };
         try kvDB.update({}, updateFn2.update);

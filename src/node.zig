@@ -180,6 +180,10 @@ pub const Node = struct {
                 self.allocator.free(inodeRef.key.?);
                 inodeRef.key = newKey;
             }
+            // Free old value.
+            if (inodeRef.isNew) {
+                self.allocator.free(inodeRef.value.?);
+            }
         }
         inodeRef.value = value;
         inodeRef.isNew = true;
@@ -193,11 +197,6 @@ pub const Node = struct {
         _ = self.inodes.orderedRemove(index);
         // Mark the node as needing rebalancing.
         self.unbalance = true;
-    }
-
-    // For binary search
-    fn createKeyINode(self: *const Self) INode {
-        return INode.init(0, 0, self.key, null);
     }
 
     /// Read initializes the node from a page.
@@ -252,6 +251,7 @@ pub const Node = struct {
         var b = p.getDataSlice();
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
+            std.log.debug("read element: {}, {}", .{ i, @intFromPtr(b.ptr) });
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
             // Write the page element.
             if (self.isLeaf) {

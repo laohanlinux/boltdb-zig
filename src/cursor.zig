@@ -279,9 +279,10 @@ pub const Cursor = struct {
         const pNode = self._bucket.pageNode(pgid);
         const p = pNode.first;
         const n = pNode.second;
-        // std.log.debug("search key: {s}, pgid: {} | {}, {}", .{ key, pgid, p == null, n == null });
-        const condition = p == null or p.?.flags & (consts.intFromFlags(.branch) | consts.intFromFlags(.leaf)) != 0;
-        assert(condition, "invalid page type", .{});
+        if (p != null and (p.?.flags & (consts.intFromFlags(.branch) | consts.intFromFlags(.leaf)) == 0)) {
+            assert(false, "invalid page type, pgid: {}, flags: {}, page: {any}\n", .{ pgid, p.?.flags, p.? });
+        }
+
         const e = ElementRef{ .p = p, .node = n };
         self.stack.append(e) catch unreachable;
         // If we're on a leaf page/node then find the specific node.

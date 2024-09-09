@@ -117,13 +117,15 @@ pub const Bucket = struct {
         // because the keyPairRef.second is a bucket value, so we need to open it.
         const child = self.openBucket(keyPairRef.second.?);
         // cache the bucket
-        self.buckets.put(util.cloneBytes(self.allocator, name), child) catch unreachable;
+        const cpName = util.cloneBytes(self.allocator, name);
+        self.buckets.put(cpName, child) catch unreachable;
         return child;
     }
 
     /// Helper method that re-interprets a sub-bucket value
     /// from a parent into a Bucket
     pub fn openBucket(self: *Self, value: []u8) *Bucket {
+        // std.log.info("openBucket, value: {any}", .{value});
         var child = Bucket.init(self.tx.?);
         // TODO
         // If unaligned load/stores are broken on this arch and value is
@@ -139,10 +141,16 @@ pub const Bucket = struct {
 
         // Save a reference to the inline page if the bucket is inline.
         if (child._b.?.root == 0) {
-            child.page = page.Page.init(value); // TODO
-            std.log.info("Save a reference to the inline page if the bucket is inline, the page is {}", .{child.page.?.id});
+            // Note:
+            // The value is a pointer to the underlying bucket page.
+            // The bucket page is a 16-byte header followed by a 12-byte page body.
+            // So, the bucket page is 28 bytes.
+            // The page is a 12-byte body.
+            child.page = page.Page.init(value[Bucket.bucketHeaderSize()..]);
+            assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
+            assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
+            std.log.info("Save a reference to the inline page if the bucket is inline", .{});
         }
-
         return child;
     }
 
@@ -532,7 +540,7 @@ pub const Bucket = struct {
         defer value.deinit();
         while (itr.next()) |entry| {
             value.resize(0) catch unreachable;
-            std.log.info("Run at bucket spill!", .{});
+            std.log.info("Run at bucket({s}) spill!", .{entry.key_ptr.*});
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
@@ -541,6 +549,7 @@ pub const Bucket = struct {
                 const valBuffer = entry.value_ptr.*.write();
                 value.appendSlice(valBuffer) catch unreachable;
                 self.allocator.free(valBuffer);
+                std.log.info("spill a inlineable bucket({s}) done!", .{entry.key_ptr.*});
             } else {
                 try entry.value_ptr.*.spill();
                 // Update the child bucket header in this bucket.
@@ -552,6 +561,7 @@ pub const Bucket = struct {
             // Skip writing the bucket if there are no matterialized nodes.
             // If we delete a bucket ?
             if (entry.value_ptr.*.rootNode == null) {
+                std.log.debug("the root node is null, skip it.", .{});
                 continue;
             }
 
@@ -559,7 +569,7 @@ pub const Bucket = struct {
             var c = self.cursor();
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.first.?) });
-            assert(keyPairRef.third & consts.BucketLeafFlag == 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});
+            assert(keyPairRef.third & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});
             c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
         }
@@ -683,11 +693,12 @@ pub const Bucket = struct {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b == null or self._b.?.root == 0) {
-            std.log.info("this is a inline bucket, be embedded at page({})", .{id});
+            std.log.info("this is a inline bucket, be embedded at page", .{});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
                 return PageOrNode{ .first = null, .second = rNode };
             }
+            std.log.info("the page is {any}", .{self.page.?});
             return PageOrNode{ .first = self.page, .second = null };
         }
 
@@ -701,8 +712,6 @@ pub const Bucket = struct {
 
     /// Creates a node from a page and associates it with a given parent.
     pub fn node(self: *Self, pgid: page.PgidType, parentNode: ?*Node) *Node {
-        //assert(self.nodes.count() > 0, "nodes map expected!", .{});
-
         // Retrive node if it's already been created.
         if (self.nodes.get(pgid)) |_node| {
             return _node;

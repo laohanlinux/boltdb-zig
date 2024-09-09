@@ -188,6 +188,18 @@ pub const Page = struct {
         return slice[0..(page_size - Self.headerSize())];
     }
 
+    /// Returns the first element key/value local point.
+    pub fn getFirstKeyValePtr(self: *Self) isize {
+        const s = self.getDataPtrInt();
+        _ = s; // autofix
+        switch (consts.toFlags(self.flags)) {
+            .branch => {},
+            .leaf => {},
+            .meta => {},
+            .free_list => {},
+        }
+    }
+
     /// Returns a byte slice of the page data.
     pub fn asSlice(self: *Self) []u8 {
         const slice: [*]u8 = @ptrCast(self);
