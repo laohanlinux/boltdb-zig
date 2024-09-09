@@ -232,8 +232,9 @@ pub const Node = struct {
 
     /// Writes the items into one or more pages.
     pub fn write(self: *Self, p: *page.Page) void {
+        defer std.log.info("succeed to write node into page({})", .{p.id});
         // Initialize page.
-        if (self.pgid == 0) {
+        if (self.isLeaf) {
             p.flags |= consts.intFromFlags(.leaf);
         } else {
             p.flags |= consts.intFromFlags(.branch);
@@ -249,9 +250,11 @@ pub const Node = struct {
         // |e1|e2|e3|b1|b2|b3|
         // Loop over each item and write it to the page.
         var b = p.getDataSlice();
+        // b1
+        b = b[self.pageElementSize() * self.inodes.items.len ..];
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
-            std.log.debug("read element: {}, {}", .{ i, @intFromPtr(b.ptr) });
+            // std.log.debug("read element: {}, {}", .{ i, @intFromPtr(b.ptr) });
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
             // Write the page element.
             if (self.isLeaf) {
@@ -260,6 +263,7 @@ pub const Node = struct {
                 elem.flags = inode.flags;
                 elem.kSize = @as(u32, @intCast(inode.key.?.len));
                 elem.vSize = @as(u32, @intCast(inode.value.?.len));
+                std.log.debug("write element: {any}", .{elem.*});
             } else {
                 const elem = p.branchPageElement(i).?;
                 elem.pos = @as(u32, @intCast(@intFromPtr(b.ptr) - @intFromPtr(elem)));
@@ -273,9 +277,7 @@ pub const Node = struct {
             // See: https://github.com/boltdb/bolt/pull/335
             const kLen = inode.key.?.len;
             const vLen: usize = if (inode.value) |value| value.len else 0;
-            if (b.len < (kLen + vLen)) {
-                @panic("it should be not happen!");
-            }
+            assert(b.len >= (kLen + vLen), "it should be not happen!", .{});
 
             // Write data for the element to the end of the page.
             std.mem.copyForwards(u8, b[0..kLen], inode.key.?);

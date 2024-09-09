@@ -134,6 +134,11 @@ pub const TX = struct {
         return self.stats;
     }
 
+    /// Returns the inner's allocator, it will be use to create KeyPair avoid to `copy` outlive memeory.
+    pub fn getAllocator(self: *const Self) std.mem.Allocator {
+        return self.allocator;
+    }
+
     /// Retrieves a bucket any name.
     /// Returns null if the bucekt does not exist.
     /// The bucket instance is only valid for the lifetime of the transaction.

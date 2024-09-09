@@ -329,7 +329,7 @@ pub const Cursor = struct {
                 return util.cmpBytes(_key, inode.key.?);
             }
         };
-        const index = std.sort.binarySearch(INode, n.inodes.items, key, f.searchFn) orelse (self.stack.items.len - 1);
+        const index = std.sort.binarySearch(INode, n.inodes.items, key, f.searchFn) orelse (n.inodes.items.len - 1);
         // Recursively search to the next node.
         var lastEntry = self.stack.getLast();
         lastEntry.index = index;
@@ -340,7 +340,8 @@ pub const Cursor = struct {
     fn searchPage(self: *Self, key: []const u8, p: *page.Page) void {
         // Binary search for the correct range.
         const inodes = p.branchPageElements().?;
-        const index = std.sort.binarySearch(page.BranchPageElement, inodes, key, cmpBranchElementFn) orelse self.stack.items.len - 1;
+        // std.log.debug("the inodes size: {}", .{inodes.len});
+        const index = std.sort.binarySearch(page.BranchPageElement, inodes, key, cmpBranchElementFn) orelse inodes.len - 1;
         self.getLastElementRef().?.index = index;
         // Recursively search to the next page.
         self.search(key, inodes[index].pgid);
