@@ -252,26 +252,31 @@ pub const Bucket = struct {
     /// Retrives the value for a key in the bucket.
     /// Return a nil value if the key does not exist or if the key is a nested bucket.
     /// The returned value is only valid for the life of the transaction.
-    pub fn get(self: *Self, key: []u8) ?[]u8 {
-        const keyPairRef = self.cursor()._seek(key);
+    pub fn get(self: *Self, key: []const u8) ?[]u8 {
+        var _cursor = self.cursor();
+        defer _cursor.deinit();
+        const keyPairRef = _cursor._seek(key);
+        if (keyPairRef.first == null) {
+            return null;
+        }
         // Return nil if this is a bucket.
         if (keyPairRef.third & consts.BucketLeafFlag != 0) {
             return null;
         }
 
         // If our target node isn't the same key as what's passed in then return nil.
-        if (!std.mem.eql(u8, key, keyPairRef.first)) {
+        if (!std.mem.eql(u8, key, keyPairRef.first.?)) {
             return null;
         }
 
         return keyPairRef.second;
     }
 
-    // Sets the value for a key in the bucket.
-    // If the key exist then its previous value will be overwritten.
-    // Supplied value must remain valid for the life of the transaction.
-    // Returns an error if the bucket was created from a read-only transaction, if the key is bucket, if the key is too large, or
-    // of if the value is too large.
+    /// Sets the value for a key in the bucket.
+    /// If the key exist then its previous value will be overwritten.
+    /// Supplied value must remain valid for the life of the transaction.
+    /// Returns an error if the bucket was created from a read-only transaction, if the key is bucket, if the key is too large, or
+    /// of if the value is too large.
     pub fn put(self: *Self, keyPair: consts.KeyPair) !void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;

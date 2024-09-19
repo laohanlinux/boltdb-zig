@@ -370,6 +370,7 @@ pub const DB = struct {
 
     /// Retrives a page reference from the mmap based on the current page size.
     pub fn pageById(self: *const Self, id: page.PgidType) *Page {
+        std.log.debug("retrive a page by pid: {}", .{id});
         const pos: u64 = id * @as(u64, self.pageSize);
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
         return Page.init(buf);
@@ -968,18 +969,6 @@ test "DB-Write" {
             return trx.forEach(forEach.inner);
         }
     };
-
-    const viewFn = struct {
-        fn view(_kvDB: ?*DB, trx: *TX) Error!void {
-            _ = _kvDB; // autofix
-            for (0..10000) |_| {
-                const bt = trx.getBucket("Alice");
-                assert(bt == null, "the bucket is not null", .{});
-            }
-        }
-    };
-    _ = viewFn; // autofix
-
     {
         // test "DB-update"
         for (0..1) |i| {
@@ -999,16 +988,24 @@ test "DB-Write" {
                 std.debug.print("create bucket: {s}\n", .{"hello"});
                 try bt.put(consts.KeyPair.init("ping", "pong"));
                 try bt.put(consts.KeyPair.init("echo", "ok"));
+                try bt.put(consts.KeyPair.init("Alice", "Bod"));
                 // _ = res; // autofix
             }
         };
         try kvDB.update({}, updateFn2.update);
-        // test "DB-view"
-        // for (0..0) |i| {
-        //     _ = i; // autofix
-        //     try kvDB.view(kvDB, viewFn.view);
-        //     // std.debug.print("{any}\n", .{kvDB.getFreelist().ids.items});
-        // }
+
+        const viewFn = struct {
+            fn view(_: void, trx: *TX) Error!void {
+                for (0..100) |_| {
+                    const bt = trx.getBucket("Alice");
+                    assert(bt == null, "the bucket is not null", .{});
+                }
+                const bt = trx.getBucket("hello").?;
+                const kv = bt.get("not");
+                assert(kv == null, "should be not found the key", .{});
+            }
+        };
+        try kvDB.view({}, viewFn.view);
         kvDB.close() catch unreachable;
     }
     // test "DB-read" {
