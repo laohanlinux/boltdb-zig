@@ -321,6 +321,36 @@ pub const TX = struct {
         }
     }
 
+    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: std.AutoHashMap(consts.PgidType, *Page), freed: std.AutoHashMap(consts.PgidType, bool)) void {
+        _ = self; // autofix
+        // Ignore inline buckets.
+        if (b._b.?.root == 0) {
+            return;
+        }
+
+        // Check every page used by this bucket.
+        b.tx.?.forEachPage(
+            b._b.?.root,
+            0,
+            null,
+            struct {
+                fn inner(context: void, p: *const page.Page, depth: usize) void {
+                    _ = context; // autofix
+                    _ = depth; // autofix
+                    if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
+                        return;
+                    }
+                }
+            }.inner,
+        );
+        if (freed.contains(b._b.?.root)) {
+            return;
+        }
+        if (reachable.contains(b._b.?.root)) {
+            return;
+        }
+    }
+
     // Writes the meta to the disk.
     fn writeMeta(self: *Self) Error!void {
         // Create a tempory buffer for the meta page.

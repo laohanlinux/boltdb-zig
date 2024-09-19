@@ -248,14 +248,14 @@ pub const Node = struct {
         }
         // |e1|e2|e3|b1|b2|b3|
         // Loop over each item and write it to the page.
-        var b = p.getDataSlice();
+        var b = p.getDataSlice()[self.pageElementSize()..];
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
-            std.log.debug("read element: {}, {}", .{ i, @intFromPtr(b.ptr) });
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
             // Write the page element.
             if (self.isLeaf) {
                 const elem = p.leafPageElement(i).?;
+                // std.log.debug("leaf element: {}", .{@intFromPtr(elem)});
                 elem.pos = @as(u32, @intCast(@intFromPtr(b.ptr) - @intFromPtr(elem)));
                 elem.flags = inode.flags;
                 elem.kSize = @as(u32, @intCast(inode.key.?.len));
@@ -284,6 +284,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
+            std.log.info("inode: {s}, key: {s}", .{ inode.key.?, inode.value.? });
         }
 
         // DEBUG ONLY: n.deump()
