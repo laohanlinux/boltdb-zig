@@ -326,8 +326,8 @@ pub const TX = struct {
         }
     }
 
-    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: std.AutoHashMap(consts.PgidType, *Page), freed: std.AutoHashMap(consts.PgidType, bool)) void {
-        _ = self; // autofix
+    // TODO(benbjohnson): This function is not correct. It should be checking.
+    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: std.AutoHashMap(consts.PgidType, *Page), freed: std.AutoHashMap(consts.PgidType, bool)) Error!void {
         // Ignore inline buckets.
         if (b._b.?.root == 0) {
             return;
@@ -337,23 +337,40 @@ pub const TX = struct {
         b.tx.?.forEachPage(
             b._b.?.root,
             0,
-            null,
+            self,
             struct {
-                fn inner(context: void, p: *const page.Page, depth: usize) void {
-                    _ = context; // autofix
-                    _ = depth; // autofix
-                    if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
-                        return;
+                fn inner(context: *Self, p: *const page.Page, _: usize) void {
+                    if (p.id > context.meta.pgid) {
+                        util.panicFmt("page id is out of range: {} > {}", .{ p.id, context.meta.pgid });
+                    }
+                    // Ensure each page is only referenced once.
+                    for (0..p.overflow) |i| {
+                        const id = p.id + i;
+                        if (reachable.contains(id)) {
+                            util.panicFmt("page {}: multiple references to the same page", .{id});
+                        }
+                        reachable.put(id, p) catch unreachable;
+                    }
+                    // We should only encounter un-freed leaf and branch pages.
+                    if (freed.contains(p.id)) {
+                        util.panicFmt("page {}: reachable freed", .{p.id});
+                    } else if ((consts.intFromFlags(.branch) & p.flags == 0 or consts.intFromFlags(.leaf) & p.flags == 0)) {
+                        util.panicFmt("page {}: not a leaf or branch page", .{p.id});
                     }
                 }
             }.inner,
         );
-        if (freed.contains(b._b.?.root)) {
-            return;
-        }
-        if (reachable.contains(b._b.?.root)) {
-            return;
-        }
+
+        // Check each bucket within this bucket.
+        return self.forEach(struct {
+            fn inner(name: []const u8, b1: ?*Bucket) Error!void {
+                const child = b1.?.getBucket(name);
+                if (child) |childBucket| {
+                    try self.checkBucket(childBucket, reachable, freed);
+                }
+                return;
+            }
+        }.inner);
     }
 
     // Writes the meta to the disk.

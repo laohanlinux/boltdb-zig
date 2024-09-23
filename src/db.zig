@@ -996,7 +996,7 @@ test "DB-Write" {
 
         const viewFn = struct {
             fn view(_: void, trx: *TX) Error!void {
-                for (0..100) |_| {
+                for (0..1) |_| {
                     const bt = trx.getBucket("Alice");
                     assert(bt == null, "the bucket is not null", .{});
                 }

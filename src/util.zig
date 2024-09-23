@@ -55,6 +55,14 @@ pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     @panic(s);
 }
 
+pub fn panicFmt(comptime fmt: []const u8, args: anytype) noreturn {
+    const allocator = std.heap.page_allocator;
+    const s = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
+    std.debug.print("{s}\n", .{s});
+    defer allocator.free(s);
+    @panic(s);
+}
+
 pub inline fn isWindows() bool {
     const tag = @import("builtin").os.tag;
     return (tag == .windows);
