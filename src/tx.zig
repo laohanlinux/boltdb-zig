@@ -326,6 +326,54 @@ pub const TX = struct {
         }
     }
 
+    /// Check performs several consistency checks on the database for this transaction.
+    /// An error is returned if any inconsistency is found.
+    ///
+    /// It can be safely run concurrently on a writable transaction. However, this
+    /// incurs a hight cost for large databases and databases with a lot of subbuckets.
+    /// because of caching. This overhead can be removed if running on a read-only
+    /// transaction. however, this is not safe to execute other writer-transactions at
+    /// the same time.
+    pub fn check(self: *Self) Error!void {
+        return self._check();
+    }
+
+    fn _check(self: *Self) Error!void {
+        // Check if any pages are double freed.
+        var reachable = std.AutoHashMap(consts.PgidType, *Page).init(self.allocator);
+        defer reachable.deinit();
+        var freed = std.AutoHashMap(consts.PgidType, bool).init(self.allocator);
+        defer freed.deinit();
+        const all = std.ArrayList(consts.PgidType).init(self.allocator);
+        all.appendNTimes(0, self.db.?.freelist.count()) catch unreachable;
+        self.db.?.freelist.copyAll(all.items);
+        for (all.items) |pgid| {
+            if (freed.contains(pgid)) {
+                util.panicFmt("page {}: already freed", .{pgid});
+            }
+            freed.put(pgid, true) catch unreachable;
+        }
+
+        // Track every reachable page.
+        reachable.put(0, self.getPage(0)) catch unreachable;
+        reachable.put(1, self.getPage(1)) catch unreachable;
+        for (0..self.getPage(self.meta.freelist).overflow) |i| {
+            const id = self.meta.freelist + i;
+            reachable.put(id, self.getPage(self.meta.freelist)) catch unreachable;
+        }
+
+        // Recursively check buckets.
+        try self.checkBucket(self.root, reachable, freed);
+
+        // Ensure all pages below high water mark are either reachable or freed.
+        for (0..self.meta.pgid) |i| {
+            const isReachable = reachable.contains(i);
+            if (!isReachable and !freed.contains(i)) {
+                util.panicFmt("page {}: unreachable unfreed", .{i});
+            }
+        }
+    }
+
     // TODO(benbjohnson): This function is not correct. It should be checking.
     fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: std.AutoHashMap(consts.PgidType, *Page), freed: std.AutoHashMap(consts.PgidType, bool)) Error!void {
         // Ignore inline buckets.
