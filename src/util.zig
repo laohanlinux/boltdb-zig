@@ -13,7 +13,6 @@ pub fn cmpBytes(a: []const u8, b: []const u8) std.math.Order {
         i += 1;
         j += 1;
     }
-
     if (i < a.len) {
         return std.math.Order.gt;
     } else if (j < b.len) {
@@ -172,4 +171,16 @@ test "arm" {
     //
     // // 关闭文件描述符
     // _ = std.posix.close(file_descriptor.handle);
+}
+
+test "lowerBound" {
+    const cmp = struct {
+        fn cmp(findKey: []const u8, b: []const u8) std.math.Order {
+            return cmpBytes(b, findKey);
+        }
+    };
+    const slice = [_][]const u8{ "hello", "helloc" };
+    const key: []const u8 = "hello";
+    const index = std.sort.lowerBound([]const u8, &slice, key, cmp.cmp);
+    assert(index == 0, "index should be 0, but got {}", .{index});
 }

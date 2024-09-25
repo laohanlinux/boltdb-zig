@@ -254,8 +254,9 @@ pub const LeafPageElement = packed struct {
         return buf[0..][(self.pos + self.kSize)..(self.pos + self.kSize + self.vSize)];
     }
 
+    /// Compare the key with the findKey. return the first: self.key() >= findKey
     pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {
-        return cmpBytes(findKey, self.key());
+        return cmpBytes(self.key(), findKey); // self.key() >= findKey
     }
 };
 

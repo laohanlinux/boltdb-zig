@@ -125,7 +125,7 @@ pub const Bucket = struct {
     /// Helper method that re-interprets a sub-bucket value
     /// from a parent into a Bucket
     pub fn openBucket(self: *Self, value: []u8) *Bucket {
-        // std.log.info("openBucket, value: {any}", .{value});
+        std.log.info("openBucket, value: {s}", .{value});
         var child = Bucket.init(self.tx.?);
         // TODO
         // If unaligned load/stores are broken on this arch and value is

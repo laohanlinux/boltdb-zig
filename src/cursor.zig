@@ -99,7 +99,7 @@ pub const Cursor = struct {
     pub fn next(
         self: *Self,
     ) KeyPair {
-        assert(self._bucket.tx.?.db == null, "tx closed", .{});
+        assert(self._bucket.tx.?.db != null, "tx closed", .{});
         const keyValueRet = self._next();
         // Return an error if current value is a bucket.
         if (keyValueRet.third & consts.BucketLeafFlag != 0) {
@@ -365,6 +365,7 @@ pub const Cursor = struct {
         e.index = 0;
         const inodes = p.?.leafPageElements() orelse return;
         const index = std.sort.lowerBound(page.LeafPageElement, inodes, key, page.LeafPageElement.cmp);
+        std.log.debug("inodes: {s}, index: {}", .{ inodes[0].key(), index });
         e.index = index;
     }
 

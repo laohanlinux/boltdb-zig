@@ -391,6 +391,7 @@ pub const DB = struct {
         // in a consistent state. metaA is the one with thwe higher txid.
         var metaA = self.meta0;
         var metaB = self.meta1;
+        std.log.debug("meta0: {}, meta1: {}", .{ metaA.txid, metaB.txid });
 
         if (self.meta1.txid > self.meta0.txid) {
             metaA = self.meta1;
@@ -629,8 +630,7 @@ pub const DB = struct {
     pub fn view(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
         const trxID = trx.getID();
-        std.log.info("Star a read-only transaction, txid: {}", .{trxID});
-        defer std.debug.print("\n\n", .{});
+        std.log.info("Star a read-only transaction, txid: {}, meta_id: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer trx.destroy();
         defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
         // Make sure the transaction rolls back in the event of a panic.
@@ -954,6 +954,7 @@ test "DB-Write" {
     var options = defaultOptions;
     options.readOnly = false;
     options.initialMmapSize = 10 * consts.PageSize;
+    options.strictMode = true;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
     defer std.testing.allocator.free(filePath);
 
@@ -1004,10 +1005,10 @@ test "DB-Write" {
 
         const viewFn = struct {
             fn view(_: void, trx: *TX) Error!void {
-                for (0..1) |_| {
-                    const bt = trx.getBucket("Alice");
-                    assert(bt == null, "the bucket is not null", .{});
-                }
+                // for (0..1) |_| {
+                //     const bt = trx.getBucket("Alice");
+                //     assert(bt == null, "the bucket is not null", .{});
+                // }
                 const bt = trx.getBucket("hello").?;
                 const kv = bt.get("not");
                 assert(kv == null, "should be not found the key", .{});

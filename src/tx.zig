@@ -29,7 +29,7 @@ pub const TX = struct {
     db: ?*DB,
     meta: *Meta,
     root: *Bucket, // the root bucket of the transaction, the bucket root is reference to the meta.root
-    pages: std.AutoHashMap(page.PgidType, *Page),
+    pages: ?*std.AutoHashMap(page.PgidType, *Page),
     stats: TxStats,
 
     _commitHandlers: std.ArrayList(onCommitFn),
@@ -50,7 +50,8 @@ pub const TX = struct {
         const self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
         self.writable = writable;
-        self.pages = std.AutoHashMap(page.PgidType, *Page).init(_db.allocator);
+        self.pages = _db.allocator.create(std.AutoHashMap(consts.PgidType, *Page)) catch unreachable;
+        self.pages.?.* = std.AutoHashMap(consts.PgidType, *Page).init(_db.allocator);
         self.stats = TxStats{};
         // Copy the meta page since it can be changed by the writer.
         self.meta = _db.allocator.create(Meta) catch unreachable;
@@ -233,6 +234,7 @@ pub const TX = struct {
             self._rollback();
             return Error.OutOfMemory;
         };
+        assert(p.id >= 0 and p.flags >= 0, "Santy check!", .{});
         _db.freelist.write(p) catch |err| {
             self._rollback();
             return err;
@@ -288,11 +290,11 @@ pub const TX = struct {
     pub fn write(self: *Self) Error!void {
         std.log.info("ready to write dirty pages into disk", .{});
         // Sort pages by id.
-        var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.count());
+        var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.?.count());
         defer pagesSlice.deinit();
-        var itr = self.pages.valueIterator();
-        while (itr.next()) |pgid| {
-            try pagesSlice.append(pgid.*);
+        var itr = self.pages.?.valueIterator();
+        while (itr.next()) |pg| {
+            try pagesSlice.append(pg.*);
         }
         const asc = struct {
             fn inner(_: void, a: *Page, b: *Page) bool {
@@ -319,10 +321,10 @@ pub const TX = struct {
         }
 
         // Free dirty page.
-        for (pagesSlice.items) |p| {
-            std.log.debug("destroy page: {}, memory size: {}", .{ p.id, p.asSlice().len });
-            self.allocator.free(p.asSlice());
-        }
+        //for (pagesSlice.items) |p| {
+        //   std.log.debug("destroy page: {}, memory size: {}", .{ p.id, p.asSlice().len });
+        //   self.allocator.free(p.asSlice());
+        //  }
     }
 
     /// Check performs several consistency checks on the database for this transaction.
@@ -357,7 +359,9 @@ pub const TX = struct {
         // Track every reachable page.
         reachable.put(0, self.getPage(0)) catch unreachable;
         reachable.put(1, self.getPage(1)) catch unreachable;
-        for (0..self.getPage(self.meta.freelist).overflow) |i| {
+        // free page
+        const freePage = self.getPage(self.meta.freelist);
+        for (0..freePage.overflow + 1) |i| {
             const id = self.meta.freelist + i;
             reachable.put(id, self.getPage(self.meta.freelist)) catch unreachable;
         }
@@ -398,7 +402,7 @@ pub const TX = struct {
                         util.panicFmt("page id is out of range: {} > {}", .{ p.id, context._tx.meta.pgid });
                     }
                     // Ensure each page is only referenced once.
-                    for (0..p.overflow) |i| {
+                    for (0..p.overflow + 1) |i| {
                         const id = p.id + i;
                         if (context.reachable.contains(id)) {
                             util.panicFmt("page {}: multiple references to the same page", .{id});
@@ -408,7 +412,7 @@ pub const TX = struct {
                     // We should only encounter un-freed leaf and branch pages.
                     if (context.freed.contains(p.id)) {
                         util.panicFmt("page {}: reachable freed", .{p.id});
-                    } else if ((consts.intFromFlags(.branch) & p.flags == 0 or consts.intFromFlags(.leaf) & p.flags == 0)) {
+                    } else if ((consts.intFromFlags(.branch) & p.flags == 0 and consts.intFromFlags(.leaf) & p.flags == 0)) {
                         util.panicFmt("page {}: not a leaf or branch page", .{p.id});
                     }
                 }
@@ -422,6 +426,7 @@ pub const TX = struct {
                 if (child) |childBucket| {
                     try childBucket.tx.?.checkBucket(childBucket, context.reachable, context.freed);
                 }
+                std.log.debug(">>>check bucket:[{s}] done<<<", .{name});
                 return;
             }
         }.inner);
@@ -492,7 +497,15 @@ pub const TX = struct {
         // Clear all reference.
         self.allocator.destroy(self.meta);
         self.db = null;
-        self.pages.deinit();
+        if (self.pages) |_pages| {
+            var itr = _pages.valueIterator();
+            while (itr.next()) |p| {
+                self.allocator.free(p.*.asSlice());
+            }
+            _pages.deinit();
+            self.allocator.destroy(_pages);
+            self.pages = null;
+        }
         self.root.deinit();
 
         // Execute commit handlers now that the locks have been removed.
@@ -523,7 +536,8 @@ pub const TX = struct {
     /// If page has been written to then a temporary buffered page is returned.
     pub fn getPage(self: *Self, id: page.PgidType) *page.Page {
         // Check the dirty pages first.
-        if (self.pages.get(id)) |p| {
+        if (self.pages.?.get(id)) |p| {
+            std.log.debug("get page from pages cache: {}", .{id});
             return p;
         }
         // Otherwise return directly form the mmap.
@@ -547,7 +561,7 @@ pub const TX = struct {
     pub fn allocate(self: *Self, count: usize) !*page.Page {
         const p = try self.db.?.allocatePage(count);
         // Save to our page cache.
-        self.pages.put(p.id, p) catch unreachable;
+        self.pages.?.put(p.id, p) catch unreachable;
         // Update statistics.
         self.stats.pageCount += 1;
         self.stats.pageAlloc += count * self.db.?.pageSize;
