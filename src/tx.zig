@@ -170,14 +170,14 @@ pub const TX = struct {
     /// Executes a function for each bucket in the root.
     /// If the provided function returns an error then the iteration is stopped and
     /// the error is returned to the caller.
-    pub fn forEach(self: *Self, f: fn (name: []const u8, b: ?*Bucket) Error!void) Error!void {
+    pub fn forEach(self: *Self, context: anytype, f: fn (@TypeOf(context), name: []const u8, b: ?*Bucket) Error!void) Error!void {
         const travel = struct {
-            fn inner(trx: *Self, key: []const u8, _: ?[]const u8) Error!void {
-                const b = trx.getBucket(key);
-                return f(key, b);
+            fn inner(ctx: @TypeOf(context), key: []const u8, _: ?[]const u8) Error!void {
+                const b = ctx._tx.getBucket(key);
+                return f(ctx, key, b);
             }
         };
-        return self.root.forEachKeyValue(self, travel.inner);
+        return self.root.forEachKeyValue(context, travel.inner);
     }
 
     /// Adds a handler function to be executed after the transaction successfully commits.
@@ -257,10 +257,9 @@ pub const TX = struct {
 
         // If strict mode is enabled then perform a consistency check.
         // Only the first consistency error is reported in the panic.
-        // if (self.db.?.strict_mode) {
-        //     // TODO
-        // }
-        //
+        if (_db.strictMode) {
+            self.check() catch |err| util.panicFmt("consistency check failed: {any}", .{err});
+        }
         // Write meta to disk.
         self.writeMeta() catch |err| {
             self._rollback();
@@ -340,11 +339,12 @@ pub const TX = struct {
 
     fn _check(self: *Self) Error!void {
         // Check if any pages are double freed.
-        var reachable = std.AutoHashMap(consts.PgidType, *Page).init(self.allocator);
+        var reachable = std.AutoHashMap(consts.PgidType, *const page.Page).init(self.allocator);
         defer reachable.deinit();
         var freed = std.AutoHashMap(consts.PgidType, bool).init(self.allocator);
         defer freed.deinit();
-        const all = std.ArrayList(consts.PgidType).init(self.allocator);
+        var all = std.ArrayList(consts.PgidType).init(self.allocator);
+        defer all.deinit();
         all.appendNTimes(0, self.db.?.freelist.count()) catch unreachable;
         self.db.?.freelist.copyAll(all.items);
         for (all.items) |pgid| {
@@ -363,7 +363,7 @@ pub const TX = struct {
         }
 
         // Recursively check buckets.
-        try self.checkBucket(self.root, reachable, freed);
+        try self.checkBucket(self.root, &reachable, &freed);
 
         // Ensure all pages below high water mark are either reachable or freed.
         for (0..self.meta.pgid) |i| {
@@ -375,32 +375,38 @@ pub const TX = struct {
     }
 
     // TODO(benbjohnson): This function is not correct. It should be checking.
-    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: std.AutoHashMap(consts.PgidType, *Page), freed: std.AutoHashMap(consts.PgidType, bool)) Error!void {
+    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: *std.AutoHashMap(consts.PgidType, *const Page), freed: *std.AutoHashMap(consts.PgidType, bool)) Error!void {
         // Ignore inline buckets.
         if (b._b.?.root == 0) {
             return;
         }
 
         // Check every page used by this bucket.
+        const Context = struct {
+            reachable: *std.AutoHashMap(consts.PgidType, *const Page),
+            freed: *std.AutoHashMap(consts.PgidType, bool),
+            _tx: *Self,
+        };
+        const ctx = Context{ .reachable = reachable, .freed = freed, ._tx = self };
         b.tx.?.forEachPage(
             b._b.?.root,
             0,
-            self,
+            ctx,
             struct {
-                fn inner(context: *Self, p: *const page.Page, _: usize) void {
-                    if (p.id > context.meta.pgid) {
-                        util.panicFmt("page id is out of range: {} > {}", .{ p.id, context.meta.pgid });
+                fn inner(context: Context, p: *const page.Page, _: usize) void {
+                    if (p.id > context._tx.meta.pgid) {
+                        util.panicFmt("page id is out of range: {} > {}", .{ p.id, context._tx.meta.pgid });
                     }
                     // Ensure each page is only referenced once.
                     for (0..p.overflow) |i| {
                         const id = p.id + i;
-                        if (reachable.contains(id)) {
+                        if (context.reachable.contains(id)) {
                             util.panicFmt("page {}: multiple references to the same page", .{id});
                         }
-                        reachable.put(id, p) catch unreachable;
+                        context.reachable.put(id, p) catch unreachable;
                     }
                     // We should only encounter un-freed leaf and branch pages.
-                    if (freed.contains(p.id)) {
+                    if (context.freed.contains(p.id)) {
                         util.panicFmt("page {}: reachable freed", .{p.id});
                     } else if ((consts.intFromFlags(.branch) & p.flags == 0 or consts.intFromFlags(.leaf) & p.flags == 0)) {
                         util.panicFmt("page {}: not a leaf or branch page", .{p.id});
@@ -410,11 +416,11 @@ pub const TX = struct {
         );
 
         // Check each bucket within this bucket.
-        return self.forEach(struct {
-            fn inner(name: []const u8, b1: ?*Bucket) Error!void {
+        return self.forEach(ctx, struct {
+            fn inner(context: Context, name: []const u8, b1: ?*Bucket) Error!void {
                 const child = b1.?.getBucket(name);
                 if (child) |childBucket| {
-                    try self.checkBucket(childBucket, reachable, freed);
+                    try childBucket.tx.?.checkBucket(childBucket, context.reachable, context.freed);
                 }
                 return;
             }

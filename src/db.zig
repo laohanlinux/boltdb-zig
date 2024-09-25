@@ -25,7 +25,7 @@ pub const DB = struct {
     // When enabled, the database will perform a check() after every commit.
     // A painic if issued if the database is in an inconsistent stats. This
     // flag has a large performance impact so it should only be used for debugging purposes.
-    strict_mode: bool,
+    strictMode: bool = false,
 
     // Setting the no_sync flag will cause the database to skip fsync()
     // calls after each commit. This can be useful when bulk loading data
@@ -157,6 +157,7 @@ pub const DB = struct {
         db.txs = std.ArrayList(*TX).init(allocator);
         db.stats = Stats{};
         db.readOnly = options.readOnly;
+        db.strictMode = options.strictMode;
 
         // Open data file and separate sync handler for metadata writes.
         db._path = util.cloneBytes(db.allocator, filePath);
@@ -718,6 +719,9 @@ pub const Options = packed struct {
     // grab a shared lock (UNIX).
     readOnly: bool = false,
 
+    // Sets the DB.strict_mode flag before memory mapping the file.
+    strictMode: bool = false,
+
     // Sets the DB.mmap_flags before memory mapping the file.
     mmapFlags: isize = 0,
 
@@ -960,13 +964,17 @@ test "DB-Write" {
             if (_kvDB == null) {
                 return Error.DatabaseNotOpen;
             }
+            const Context = struct {
+                _tx: *TX,
+            };
+            const ctx = Context{ ._tx = trx };
             const forEach = struct {
-                fn inner(bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
+                fn inner(_: Context, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
                     std.log.info("execute forEach, bucket name: {s}", .{bucketName});
                 }
             };
             std.log.info("Execute write transaction: {}", .{trx.getID()});
-            return trx.forEach(forEach.inner);
+            return trx.forEach(ctx, forEach.inner);
         }
     };
     {
