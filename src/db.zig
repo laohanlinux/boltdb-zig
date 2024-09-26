@@ -597,7 +597,6 @@ pub const DB = struct {
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
     pub fn update(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
-        defer std.debug.print("\n\n", .{});
         const trx = try self.begin(true);
         const trxID = trx.getID();
         std.log.info("Star a write transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
@@ -1012,6 +1011,7 @@ test "DB-Write" {
                 const bt = trx.getBucket("hello").?;
                 const kv = bt.get("not");
                 assert(kv == null, "should be not found the key", .{});
+                bt.deinit();
             }
         };
         try kvDB.view({}, viewFn.view);

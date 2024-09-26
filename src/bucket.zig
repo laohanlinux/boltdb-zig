@@ -14,12 +14,15 @@ const BufStr = consts.BufStr;
 
 /// Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
-    _b: ?_Bucket = null, // the bucket struct, it is a pointer to the underlying bucket page.
+    isInittialized: bool = false,
+    //_b: ?_Bucket = null, // the bucket struct, it is a pointer to the underlying bucket page.
+    _b: ?_Bucket align(@alignOf(_Bucket)) = null,
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
     rootNode: ?*Node = null, // materialized node for the root page. Same to nodes, if the transaction is onlyRead, it is null.
     page: ?*page.Page = null, // inline page reference
+    alignedValue: std.ArrayList([]u8),
 
     // Sets the thredshold for filling nodes when they split. By default,
     // the bucket will fill to 50% but it can be useful to increase this
@@ -35,8 +38,10 @@ pub const Bucket = struct {
     /// Initializes a new bucket.
     pub fn init(_tx: *tx.TX) *Bucket {
         const b = _tx.db.?.allocator.create(Self) catch unreachable;
+        b.isInittialized = true;
         b._b = _Bucket{};
         b.tx = _tx;
+        util.assert(b.tx != null, "tx has closed", .{});
         b.allocator = _tx.db.?.allocator;
         // Note:
         // If the transaction is writable, then the b.buckets and b.nodes will be initialized.
@@ -51,15 +56,19 @@ pub const Bucket = struct {
         b.page = null;
         // set the fill percent
         b.fillPercent = consts.DefaultFillPercent;
+        b.alignedValue = std.ArrayList([]u8).init(b.allocator);
         return b;
     }
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
+        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
+        assert(self.isInittialized, "the bucket is not initialized", .{});
+        self.isInittialized = false;
         var btIter = self.buckets.iterator();
         while (btIter.next()) |nextBucket| {
-            self.allocator.free(nextBucket.key_ptr.*);
             nextBucket.value_ptr.*.deinit();
+            // self.allocator.destroy(nextBucket.value_ptr.*);
         }
         self.buckets.deinit();
 
@@ -71,10 +80,16 @@ pub const Bucket = struct {
 
         std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         if (self.tx.?.writable) {
-            if (self._b != null) {
-                self._b.?.deinit(self.allocator);
+            if (self._b) |iBucket| {
+                iBucket.deinit(self.allocator);
             }
         }
+
+        for (self.alignedValue.items) |item| {
+            self.allocator.free(item);
+        }
+        self.alignedValue.deinit();
+
         self.allocator.destroy(self);
     }
 
@@ -125,18 +140,29 @@ pub const Bucket = struct {
     /// Helper method that re-interprets a sub-bucket value
     /// from a parent into a Bucket
     pub fn openBucket(self: *Self, value: []u8) *Bucket {
-        std.log.info("openBucket, value: {s}", .{value});
+        // std.log.info("openBucket, value: {any}", .{value});
         var child = Bucket.init(self.tx.?);
         // TODO
         // If unaligned load/stores are broken on this arch and value is
         // unaligned simply clone to an aligned byte array.
-
+        const alignment = std.math.ceilPowerOfTwo(usize, @alignOf(_Bucket)) catch @alignOf(usize);
+        var alignedValue: []u8 = undefined;
+        const isAligned = @intFromPtr(value.ptr) % alignment == 0;
+        if (!isAligned) {
+            alignedValue = self.allocator.alloc(u8, value.len) catch unreachable;
+            @memcpy(alignedValue, value);
+            self.alignedValue.append(alignedValue) catch unreachable;
+            std.log.warn("unaligned memory, align size: {}", .{alignedValue.len});
+        } else {
+            alignedValue = value;
+        }
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
+        // TODO Opz the code.
         if (self.tx.?.writable) {
-            child._b = _Bucket.init(value).*;
+            child._b = _Bucket.init(alignedValue).*;
         } else {
-            child._b = _Bucket.init(value).*;
+            child._b = _Bucket.init(alignedValue).*;
         }
 
         // Save a reference to the inline page if the bucket is inline.
@@ -146,7 +172,7 @@ pub const Bucket = struct {
             // The bucket page is a 16-byte header followed by a 12-byte page body.
             // So, the bucket page is 28 bytes.
             // The page is a 12-byte body.
-            child.page = page.Page.init(value[Bucket.bucketHeaderSize()..]);
+            child.page = page.Page.init(alignedValue[Bucket.bucketHeaderSize()..]);
             assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
             assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
@@ -190,7 +216,7 @@ pub const Bucket = struct {
         // Insert into node
         const cpKey = util.cloneBytes(self.allocator, key);
         c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
-        std.log.info("create a new bucket: {s}", .{cpKey});
+        std.log.info("create a new bucket: {s}, value: {any}", .{ cpKey, value });
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
         // to be treated as regular, non-inline bucket for the rest of the tx.
@@ -442,7 +468,7 @@ pub const Bucket = struct {
                 used += page.LeafPageElement.headerSize() * @as(usize, p.count - 1); // TODO why -1.
 
                 // Add all element key, value sizes.
-                // The computation takes advantage of the fact that the position
+                // The computation takes advantages of the fact that the position
                 // of the last element's key/value equals to the total of the sizes.
                 // of all previous elements' keys and values.
                 // It also includes the last element's header.
@@ -462,7 +488,8 @@ pub const Bucket = struct {
                 // Collect stats from sub-buckets.
                 // Do that by iterating over all element headers
                 // looking for the ones with the bucketLeafFlag.
-                for (p.leafPageElements().?) |elem| {
+                for (0..p.count) |i| {
+                    const elem = p.leafPageElement(i).?;
                     if (elem.flags & consts.BucketLeafFlag != 0) {
                         // For any bucket elements. open the element value
                         // and recursively call Stats on the contained bucket.
@@ -526,7 +553,8 @@ pub const Bucket = struct {
         // Recursively loop over children.
         if (pNode.first) |p| {
             if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
-                for (p.branchPageElements().?) |elem| {
+                for (0..p.count) |i| {
+                    const elem = p.branchPageElementPtr(i);
                     self._forEachPageNode(context, elem.pgid, depth + 1, travel);
                 }
             }
@@ -764,7 +792,14 @@ pub const _Bucket = packed struct {
     sequence: u64 = 0, // montotically incrementing. used by next_sequence().
     /// Init _Bucket with a given slice
     pub fn init(slice: []u8) *_Bucket {
-        const ptr: *_Bucket = @ptrCast(@alignCast(slice));
+        // util.assert(slice.len >= _Bucket.size(), "slice is too short to init _Bucket", .{});
+        // const isAligned = @intFromPtr(slice.ptr) % @alignOf(_Bucket);
+        // util.assert(isAligned == 0, "slice is not aligned", .{});
+
+        // const ptr: *_Bucket = @ptrCast(@alignCast(slice));
+        // return ptr;
+        const aligned_slice: []align(@alignOf(_Bucket)) u8 = @alignCast(slice);
+        const ptr: *_Bucket = @ptrCast(aligned_slice.ptr);
         return ptr;
     }
 
@@ -780,11 +815,16 @@ pub const _Bucket = packed struct {
         return self;
     }
 
+    pub fn mustAligned(value: []const u8) void {
+        const alignment = std.math.ceilPowerOfTwo(usize, @alignOf(_Bucket)) catch @alignOf(usize);
+        const isAligned = @intFromPtr(value.ptr) % alignment == 0;
+        util.assert(isAligned, "the value buffer is not aligned", .{});
+    }
+
     /// Deinit _Bucket with a given allocator. This is used for writable transaction.
-    pub fn deinit(self: *_Bucket, allocator: std.mem.Allocator) void {
-        _ = allocator; // autofix
+    pub fn deinit(_: _Bucket, _: std.mem.Allocator) void {
         // allocator.destroy(self);
-        self.* = undefined;
+        //self.* = undefined;
     }
 };
 

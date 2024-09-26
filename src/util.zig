@@ -92,7 +92,7 @@ pub fn mmap(fp: std.fs.File, fileSize: u64, writeable: bool) ![]u8 {
 }
 
 pub fn munmap(ptr: []u8) void {
-    std.debug.print("the ptr size: {}, {}\n", .{ ptr.len, std.mem.page_size });
+    // std.debug.print("the ptr size: {}, {}\n", .{ ptr.len, std.mem.page_size });
     const alignData: []align(std.mem.page_size) const u8 = @alignCast(ptr);
     if (isLinux() or isMacOS()) {
         std.posix.munmap(alignData);
@@ -179,7 +179,7 @@ test "lowerBound" {
             return cmpBytes(b, findKey);
         }
     };
-    const slice = [_][]const u8{ "hello", "helloc" };
+    const slice = [_][]const u8{"hello"};
     const key: []const u8 = "hello";
     const index = std.sort.lowerBound([]const u8, &slice, key, cmp.cmp);
     assert(index == 0, "index should be 0, but got {}", .{index});

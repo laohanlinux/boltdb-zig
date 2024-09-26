@@ -91,16 +91,6 @@ pub const Page = struct {
         return @ptrCast(@alignCast(ptr));
     }
 
-    /// Retrives a list of branch nodes.
-    pub fn branchPageElements(self: *Self) ?[]BranchPageElement {
-        if (self.count == 0) {
-            return null;
-        }
-        const firstPtr = self.branchPageElementPtr(0);
-        var elements: [*]BranchPageElement = @ptrCast(firstPtr);
-        return elements[0..self.count];
-    }
-
     /// Returns the pointer of index's branch elements
     pub fn branchPageElementPtr(self: *Self, index: usize) *BranchPageElement {
         if (self.count <= index) {
@@ -198,6 +188,42 @@ pub const Page = struct {
             return slice[0..@as(usize, page_size)];
         }
     }
+
+    /// find the key in the leaf page elements, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
+    pub fn searchLeafElements(self: *Self, key: []const u8) struct { index: usize, exact: bool } {
+        var left: usize = 0;
+        var right: usize = self.count;
+
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const element = self.leafPageElementPtr(mid);
+            const cmp = std.mem.order(u8, element.key(), key);
+            switch (cmp) {
+                .eq => return .{ .index = mid, .exact = true },
+                .lt => left = mid + 1,
+                .gt => right = mid,
+            }
+        }
+        // if not found, return the position of the first element that is greater than the key
+        return .{ .index = left, .exact = false };
+    }
+
+    /// find the key in the branch page elements, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
+    pub fn searchBranchElements(self: *Self, key: []const u8) struct { index: usize, pgid: PgidType, exact: bool } {
+        var left: usize = 0;
+        var right: usize = self.count;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const element = self.branchPageElementPtr(mid);
+            const cmp = std.mem.order(u8, element.key(), key);
+            switch (cmp) {
+                .eq => return .{ .index = mid, .pgid = element.pgid, .exact = true },
+                .lt => left = mid + 1,
+                .gt => right = mid,
+            }
+        }
+        return .{ .index = left, .pgid = 0, .exact = false };
+    }
 };
 
 /// A branch page element.
@@ -249,14 +275,14 @@ pub const LeafPageElement = packed struct {
     }
 
     /// Returns a byte slice of the node value.
-    pub fn value(self: *Self) []u8 {
-        const buf: [*]u8 = @ptrCast(self);
+    pub fn value(self: *const Self) []u8 {
+        const buf: [*]u8 = @as([*]u8, @ptrCast(@constCast(self)));
         return buf[0..][(self.pos + self.kSize)..(self.pos + self.kSize + self.vSize)];
     }
 
-    /// Compare the key with the findKey. return the first: self.key() >= findKey
-    pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {
-        return cmpBytes(self.key(), findKey); // self.key() >= findKey
+    /// Pretty print the leaf page element.
+    pub fn pretty(self: *const Self) void {
+        std.log.debug("key: {s}, value: {s}", .{ self.key(), self.value() });
     }
 };
 

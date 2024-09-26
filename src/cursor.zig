@@ -339,12 +339,11 @@ pub const Cursor = struct {
     // Search key from pages
     fn searchPage(self: *Self, key: []const u8, p: *page.Page) void {
         // Binary search for the correct range.
-        const inodes = p.branchPageElements().?;
-        // std.log.debug("the inodes size: {}", .{inodes.len});
-        const index = std.sort.binarySearch(page.BranchPageElement, inodes, key, cmpBranchElementFn) orelse inodes.len - 1;
-        self.getLastElementRef().?.index = index;
+        const leafElements = p.searchBranchElements(key);
+        assert(leafElements.exact == true, "leafElements.exact should be true", .{});
+        self.getLastElementRef().?.index = leafElements.index;
         // Recursively search to the next page.
-        self.search(key, inodes[index].pgid);
+        self.search(key, leafElements.pgid);
     }
 
     // Searches the leaf node on the top of the stack for a key
@@ -362,10 +361,7 @@ pub const Cursor = struct {
         }
 
         // If we have a page then search its leaf elements.
-        e.index = 0;
-        const inodes = p.?.leafPageElements() orelse return;
-        const index = std.sort.lowerBound(page.LeafPageElement, inodes, key, page.LeafPageElement.cmp);
-        std.log.debug("inodes: {s}, index: {}", .{ inodes[0].key(), index });
+        const index = p.?.searchLeafElements(key).index;
         e.index = index;
     }
 
@@ -385,8 +381,8 @@ pub const Cursor = struct {
         }
 
         // Or retrieve value from page.
-        const elem = ref.p.?.leafPageElement(ref.index);
-        return KeyValueRef{ .first = elem.?.key(), .second = elem.?.value(), .third = elem.?.flags };
+        const elem = ref.p.?.leafPageElement(ref.index).?;
+        return KeyValueRef{ .first = elem.key(), .second = elem.value(), .third = elem.flags };
     }
 
     /// Returns the node that the cursor is currently positioned on.
