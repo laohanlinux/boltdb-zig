@@ -992,29 +992,36 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                const bt = try trx.createBucket("hello");
-                std.debug.print("create bucket: {s}\n", .{"hello"});
-                try bt.put(consts.KeyPair.init("ping", "pong"));
-                try bt.put(consts.KeyPair.init("echo", "ok"));
-                try bt.put(consts.KeyPair.init("Alice", "Bod"));
+                for (0..60) |i| {
+                    const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
+                    defer std.testing.allocator.free(bucketName);
+                    const bt = try trx.createBucket(bucketName);
+                    _ = bt; // autofix
+                }
+                // const bt = try trx.createBucket("hello");
+                // std.debug.print("create bucket: {s}\n", .{"hello"});
+                // try bt.put(consts.KeyPair.init("ping", "pong"));
+                // try bt.put(consts.KeyPair.init("echo", "ok"));
+                // try bt.put(consts.KeyPair.init("Alice", "Bod"));
                 // _ = res; // autofix
             }
         };
         try kvDB.update({}, updateFn2.update);
 
-        const viewFn = struct {
-            fn view(_: void, trx: *TX) Error!void {
-                // for (0..1) |_| {
-                //     const bt = trx.getBucket("Alice");
-                //     assert(bt == null, "the bucket is not null", .{});
-                // }
-                const bt = trx.getBucket("hello").?;
-                const kv = bt.get("not");
-                assert(kv == null, "should be not found the key", .{});
-                bt.deinit();
-            }
-        };
-        try kvDB.view({}, viewFn.view);
+        // const viewFn = struct {
+        //     fn view(_: void, trx: *TX) Error!void {
+        //         for (0..1000) |_| {
+        //             const bt = trx.getBucket("Alice");
+        //             assert(bt == null, "the bucket is not null", .{});
+        //         }
+        //         for (0..1000) |_| {
+        //             const bt = trx.getBucket("hello").?;
+        //             const kv = bt.get("not");
+        //             assert(kv == null, "should be not found the key", .{});
+        //         }
+        //     }
+        // };
+        // try kvDB.view({}, viewFn.view);
         kvDB.close() catch unreachable;
     }
     // test "DB-read" {

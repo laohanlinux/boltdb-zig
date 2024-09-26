@@ -67,6 +67,7 @@ pub const Bucket = struct {
         self.isInittialized = false;
         var btIter = self.buckets.iterator();
         while (btIter.next()) |nextBucket| {
+            self.allocator.free(nextBucket.key_ptr.*);
             nextBucket.value_ptr.*.deinit();
             // self.allocator.destroy(nextBucket.value_ptr.*);
         }
@@ -78,7 +79,6 @@ pub const Bucket = struct {
         }
         self.nodes.deinit();
 
-        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         if (self.tx.?.writable) {
             if (self._b) |iBucket| {
                 iBucket.deinit(self.allocator);

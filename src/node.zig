@@ -181,7 +181,7 @@ pub const Node = struct {
                 inodeRef.key = newKey;
             }
             // Free old value.
-            if (inodeRef.isNew) {
+            if (inodeRef.isNew and inodeRef.value != null) {
                 self.allocator.free(inodeRef.value.?);
             }
         }
