@@ -731,7 +731,7 @@ pub const Bucket = struct {
             if (self.rootNode) |rNode| {
                 return PageOrNode{ .first = null, .second = rNode };
             }
-            std.log.info("the page is {any}", .{self.page.?});
+            // std.log.info("the page is {any}", .{self.page.?});
             return PageOrNode{ .first = self.page, .second = null };
         }
 

@@ -85,11 +85,23 @@ pub const TX = struct {
 
         try table.addHeader(.{ "Field", "Value" });
 
-        var buf: [64]u8 = undefined;
+        var buf: [1024]u8 = undefined;
+
+        var nodesKeys = std.ArrayList(u8).init(self.allocator);
+        defer nodesKeys.deinit();
+        try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "count:{}\t", .{self.root.nodes.count()}));
+        var nodesItr = self.root.nodes.iterator();
+        while (nodesItr.next()) |kv| {
+            try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "pid:{d}\t", .{kv.key_ptr.*}));
+            if (kv.value_ptr.*.key) |key| {
+                try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "key:{s}\t", .{key}));
+            }
+        }
 
         const fields = .{
             .{ "Root.Bucket.root", self.root._b.?.root },
             .{ "Root.Bucket.sequence", self.root._b.?.sequence },
+            .{ "Root.Bucket.nodes", nodesKeys.items },
             .{ "Tx.Page is null", self.root.page == null },
             .{ "meta.Root.Root", self.meta.root.root },
             .{ "meta.Root.Sequence", self.meta.root.sequence },
@@ -107,6 +119,8 @@ pub const TX = struct {
             const value = switch (@TypeOf(field[1])) {
                 u64, usize, u8, u16, u32, u128, i64, isize, i8, i16, i32, i128 => try std.fmt.bufPrint(&buf, "{d}", .{field[1]}),
                 bool => try std.fmt.bufPrint(&buf, "{}", .{field[1]}),
+                []u8 => try std.fmt.bufPrint(&buf, "{s}", .{field[1]}),
+                []const u8 => try std.fmt.bufPrint(&buf, "{s}", .{field[1]}),
                 else => try std.fmt.bufPrint(&buf, "0x{X:0>8}", .{field[1]}),
             };
             try table.addRow(&.{ field[0], value });

@@ -303,6 +303,8 @@ pub const Node = struct {
             if (b == null) {
                 std.log.info("the node is not need to split", .{});
                 break;
+            } else {
+                std.log.info("the node is need to split", .{});
             }
 
             // Set node to be so it gets split on the next function.
@@ -444,7 +446,7 @@ pub const Node = struct {
                 node.key = node.inodes.items[0].key;
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
-            }
+            } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
 
             // Update the statistics.
             _tx.stats.spill += 1;

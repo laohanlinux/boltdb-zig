@@ -244,7 +244,7 @@ pub const Cursor = struct {
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
             var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
-            std.log.info("the i is {}", .{i});
+            // std.log.info("the i is {}", .{i});
             while (i >= 0) : (i -= 1) {
                 const elem = &self.stack.items[@as(usize, @intCast(i))];
                 if ((elem.index + 1) < elem.count()) {
