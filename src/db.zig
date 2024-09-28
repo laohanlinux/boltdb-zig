@@ -992,7 +992,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                for (0..60) |i| {
+                for (0..80) |i| {
                     const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
                     defer std.testing.allocator.free(bucketName);
                     const bt = try trx.createBucket(bucketName);

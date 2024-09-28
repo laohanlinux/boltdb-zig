@@ -266,7 +266,7 @@ pub const Node = struct {
                 elem.pos = @as(u32, @intCast(@intFromPtr(b.ptr) - @intFromPtr(elem)));
                 elem.kSize = @as(u32, @intCast(inode.key.?.len));
                 elem.pgid = inode.pgid;
-                assert(inode.pgid != elem.pgid, "write: circulay dependency occuerd", .{});
+                assert(inode.pgid == elem.pgid, "write: circulay dependency occuerd", .{});
             }
             // If the length of key+value is larger than the max allocation size
             // then we need to reallocate the byte array pointer
@@ -283,7 +283,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            std.log.info("inode: {s}, key: {s}", .{ inode.key.?, inode.value.? });
+            //std.log.info("inode: {s}, key: {s}", .{ inode.key.?, inode.value.? });
         }
 
         // DEBUG ONLY: n.deump()
@@ -304,7 +304,7 @@ pub const Node = struct {
                 std.log.info("the node is not need to split", .{});
                 break;
             } else {
-                std.log.info("the node is need to split", .{});
+                std.log.info("the node[{any}] is need to split", .{b});
             }
 
             // Set node to be so it gets split on the next function.

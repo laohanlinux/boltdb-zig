@@ -191,11 +191,12 @@ pub const Bucket = struct {
         } else if (key.len == 0) {
             return Error.BucketNameRequired;
         }
-
+        const cpKey = self.allocator.alloc(u8, key.len) catch unreachable;
+        @memcpy(cpKey, cpKey);
         // Move cursor to correct position.
         var c = self.cursor();
         defer c.deinit();
-        const keyPairRef = c._seek(key);
+        const keyPairRef = c._seek(cpKey);
 
         // Return an error if there is an existing key.
         if (keyPairRef.first != null and std.mem.eql(u8, key, keyPairRef.first.?)) {

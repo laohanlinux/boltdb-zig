@@ -132,6 +132,7 @@ pub const BufStr = struct {
         return .{ ._str = newStr, ._allocator = allocator, .ref = refValue };
     }
 
+    /// Dupe a string to a slice.
     pub fn dupeToSlice(self: *@This(), allocator: ?std.mem.Allocator) []u8 {
         const _allocator = allocator orelse gpa.allocator();
         return _allocator.dupe(u8, self._str) catch unreachable;
@@ -154,6 +155,11 @@ pub const BufStr = struct {
             }
             self.* = undefined;
         }
+    }
+
+    /// Destroy a string.
+    pub fn destroy(self: *@This()) void {
+        self.deinit();
     }
 
     /// Create a new string from a slice.
@@ -180,17 +186,18 @@ pub const BufStr = struct {
         return self._str;
     }
 
-    // 修改 hash 方法
+    /// Hash a string.
     pub fn hash(self: @This()) u64 {
         return std.hash.Wyhash.hash(0, self._str);
     }
 
-    // 添加相等性比较方法
+    /// Compare two strings.
     pub fn eql(self: @This(), other: @This()) bool {
         return std.mem.eql(u8, self._str, other._str);
     }
 };
 
+/// A color.
 pub const Color = enum {
     Red,
     Green,
@@ -200,6 +207,7 @@ pub const Color = enum {
     Cyan,
     White,
 
+    /// Get the ANSI code for a color.
     pub fn ansiCode(self: Color) []const u8 {
         return switch (self) {
             .Red => "\x1b[31m",
@@ -213,8 +221,10 @@ pub const Color = enum {
     }
 };
 
-const ResetColor = "\x1b[0m";
+/// Reset color.
+pub const ResetColor = "\x1b[0m";
 
+/// A table.
 pub const Table = struct {
     headers: std.ArrayList([]const u8),
     rows: std.ArrayList(std.ArrayList([]const u8)),
@@ -223,6 +233,7 @@ pub const Table = struct {
     headerColor: Color,
     name: []const u8,
 
+    /// Init a table.
     pub fn init(allocator: std.mem.Allocator, columnWidth: usize, headerColor: Color, name: []const u8) @This() {
         return .{
             .headers = std.ArrayList([]const u8).init(allocator),
@@ -234,6 +245,7 @@ pub const Table = struct {
         };
     }
 
+    /// Deinit a table.
     pub fn deinit(self: *@This()) void {
         for (self.headers.items) |header| {
             self.allocator.free(header);
@@ -248,6 +260,7 @@ pub const Table = struct {
         self.rows.deinit();
     }
 
+    /// Add a header to a table.
     pub fn addHeader(self: *@This(), comptime header: anytype) !void {
         inline for (header) |cell| {
             const cp = try self.allocator.dupe(u8, cell);
@@ -255,6 +268,7 @@ pub const Table = struct {
         }
     }
 
+    /// Add a row to a table.
     pub fn addRow(self: *@This(), row: anytype) !void {
         var rowList = std.ArrayList([]const u8).init(self.allocator);
         inline for (row) |cell| {
@@ -268,10 +282,11 @@ pub const Table = struct {
         try self.rows.append(rowList);
     }
 
+    /// Print a table.
     pub fn print(self: @This()) !void {
         const writer = std.io.getStdOut().writer();
 
-        // 打印表格名称
+        // calculate the total width of the table
         const totalWidth = self.columnWidth * self.headers.items.len + self.headers.items.len + 1;
         const nameLen = self.name.len;
         const leftPadding = if (totalWidth > nameLen) (totalWidth - nameLen) / 2 else 0;
@@ -282,24 +297,24 @@ pub const Table = struct {
         try writer.writeByteNTimes('-', rightPadding);
         try writer.print("\n", .{});
 
-        // 打印顶部分隔线
+        // print the top separator
         try self.printSeparator(writer);
 
-        // 打印表头（带颜色）
+        // print the header (with color)
         try writer.print("{s}", .{self.headerColor.ansiCode()});
         try self.printRow(writer, self.headers.items);
         try writer.print("{s}\n", .{ResetColor});
 
-        // 打印表头和数据之间的分隔线
+        // print the separator between the header and the data
         try self.printSeparator(writer);
 
-        // 打印数据行
+        // print the data rows
         for (self.rows.items) |row| {
             try self.printRow(writer, row.items);
             try writer.print("\n", .{});
         }
 
-        // 打印底部分隔线
+        // print the bottom separator
         try self.printSeparator(writer);
     }
 
