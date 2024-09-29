@@ -11,6 +11,7 @@ const TX = tx.TX;
 const PageFlag = consts.PageFlag;
 const assert = util.assert;
 const Table = consts.Table;
+const PgidType = consts.PgidType;
 
 const Page = page.Page;
 // TODO
@@ -160,7 +161,7 @@ pub const DB = struct {
         db.strictMode = options.strictMode;
 
         // Open data file and separate sync handler for metadata writes.
-        db._path = util.cloneBytes(db.allocator, filePath);
+        db._path = db.allocator.dupe(u8, filePath) catch unreachable;
         if (options.readOnly) {
             db.file = try std.fs.cwd().openFile(db._path, std.fs.File.OpenFlags{
                 .lock = .shared,
@@ -240,8 +241,8 @@ pub const DB = struct {
         const buf = try self.allocator.alloc(u8, self.pageSize * 4);
         defer self.allocator.free(buf);
         for (0..2) |i| {
-            const p = self.pageInBuffer(buf, @as(page.PgidType, i));
-            p.id = @as(page.PgidType, i);
+            const p = self.pageInBuffer(buf, @as(PgidType, i));
+            p.id = @as(PgidType, i);
             p.flags = consts.intFromFlags(consts.PageFlag.meta);
             p.overflow = 0;
             p.count = 0;
@@ -370,7 +371,7 @@ pub const DB = struct {
     }
 
     /// Retrives a page reference from the mmap based on the current page size.
-    pub fn pageById(self: *const Self, id: page.PgidType) *Page {
+    pub fn pageById(self: *const Self, id: consts.PgidType) *Page {
         std.log.debug("retrive a page by pid: {}", .{id});
         const pos: u64 = id * @as(u64, self.pageSize);
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
@@ -378,7 +379,7 @@ pub const DB = struct {
     }
 
     /// Retrives a page reference from a given byte array based on the current page size.
-    pub fn pageInBuffer(self: *Self, buffer: []u8, id: page.PgidType) *page.Page {
+    pub fn pageInBuffer(self: *Self, buffer: []u8, id: consts.PgidType) *page.Page {
         const pos: u64 = id * @as(u64, self.pageSize);
         const buf = buffer[pos..(pos + self.pageSize)];
         return Page.init(buf);
@@ -437,7 +438,7 @@ pub const DB = struct {
         }
 
         // Move the page id high water mark.
-        self.rwtx.?.meta.pgid += @as(page.PgidType, count);
+        self.rwtx.?.meta.pgid += @as(PgidType, count);
         std.log.debug("update the meta page, pgid: {}", .{self.rwtx.?.meta.pgid});
         return p;
     }
@@ -794,9 +795,9 @@ pub const Meta = packed struct {
     // the root bucket
     root: bucket._Bucket = bucket._Bucket{ .root = 0, .sequence = 0 },
     // the freelist page id
-    freelist: page.PgidType = 0,
+    freelist: consts.PgidType = 0,
     // the max page id
-    pgid: page.PgidType = 0,
+    pgid: consts.PgidType = 0,
     // the transaction id
     txid: consts.TxId = 0,
     // the checksum
@@ -838,7 +839,7 @@ pub const Meta = packed struct {
         assert(self.root.root < self.pgid, "root page id is invalid, self's pgid: {}", .{self.pgid});
         assert(self.freelist < self.pgid, "freelist page id is invalid, self's pgid: {}", .{self.pgid});
         // Page id is either going to be 0 or 1 which we can determine by the transaction ID.
-        p.id = @as(page.PgidType, self.txid & 0b1);
+        p.id = @as(PgidType, self.txid & 0b1);
         p.flags |= consts.intFromFlags(consts.PageFlag.meta);
         // Calculate the checksum.
         self.check_sum = self.sum64();
@@ -992,7 +993,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                for (0..80) |i| {
+                for (0..200) |i| {
                     const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
                     defer std.testing.allocator.free(bucketName);
                     const bt = try trx.createBucket(bucketName);

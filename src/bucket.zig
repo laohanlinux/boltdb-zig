@@ -11,6 +11,7 @@ const util = @import("util.zig");
 const Error = @import("error.zig").Error;
 const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 const BufStr = consts.BufStr;
+const PgidType = consts.PgidType;
 
 /// Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
@@ -19,7 +20,7 @@ pub const Bucket = struct {
     _b: ?_Bucket align(@alignOf(_Bucket)) = null,
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
-    nodes: std.AutoHashMap(page.PgidType, *Node), // node cache
+    nodes: std.AutoHashMap(PgidType, *Node), // node cache
     rootNode: ?*Node = null, // materialized node for the root page. Same to nodes, if the transaction is onlyRead, it is null.
     page: ?*page.Page = null, // inline page reference
     alignedValue: std.ArrayList([]u8),
@@ -50,7 +51,7 @@ pub const Bucket = struct {
         // So, if the transaction is readonly, travel all the bucket and nodes by underlaying page.
         // don't load the bucket and node into memory.
         b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
-        b.nodes = std.AutoHashMap(page.PgidType, *Node).init(b.allocator);
+        b.nodes = std.AutoHashMap(PgidType, *Node).init(b.allocator);
         // init the rootNode and page to null.
         b.rootNode = null;
         b.page = null;
@@ -132,7 +133,7 @@ pub const Bucket = struct {
         // because the keyPairRef.second is a bucket value, so we need to open it.
         const child = self.openBucket(keyPairRef.second.?);
         // cache the bucket
-        const cpName = util.cloneBytes(self.allocator, name);
+        const cpName = self.allocator.dupe(u8, name) catch unreachable;
         self.buckets.put(cpName, child) catch unreachable;
         return child;
     }
@@ -191,8 +192,7 @@ pub const Bucket = struct {
         } else if (key.len == 0) {
             return Error.BucketNameRequired;
         }
-        const cpKey = self.allocator.alloc(u8, key.len) catch unreachable;
-        @memcpy(cpKey, cpKey);
+        const cpKey = self.allocator.dupe(u8, key) catch unreachable;
         // Move cursor to correct position.
         var c = self.cursor();
         defer c.deinit();
@@ -215,7 +215,6 @@ pub const Bucket = struct {
 
         const value = newBucket.write();
         // Insert into node
-        const cpKey = util.cloneBytes(self.allocator, key);
         c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
         std.log.info("create a new bucket: {s}, value: {any}", .{ cpKey, value });
         // Since subbuckets are not allowed on inline buckets, we need to
@@ -223,7 +222,6 @@ pub const Bucket = struct {
         // to be treated as regular, non-inline bucket for the rest of the tx.
         // FIXME: why
         self.page = null;
-
         return self.getBucket(key) orelse return Error.BucketNotFound;
     }
 
@@ -329,8 +327,8 @@ pub const Bucket = struct {
         }
 
         // Insert into node.
-        const cpKey = util.cloneBytes(self.allocator, keyPair.key.?);
-        const cpValue = util.cloneBytes(self.allocator, keyPair.value.?);
+        const cpKey = self.allocator.dupe(u8, keyPair.key.?);
+        const cpValue = self.allocator.dupe(u8, keyPair.value.?);
         c.node().?.put(cpKey, cpKey, cpValue, 0, 0);
     }
 
@@ -545,7 +543,7 @@ pub const Bucket = struct {
     }
 
     // Recursively iterates over every page or node in a bucket and its nested buckets.
-    fn _forEachPageNode(self: *Self, context: anytype, pgid: page.PgidType, depth: usize, travel: fn (@TypeOf(context), p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
+    fn _forEachPageNode(self: *Self, context: anytype, pgid: PgidType, depth: usize, travel: fn (@TypeOf(context), p: ?*const page.Page, n: ?*Node, depth: usize) void) void {
         const pNode = self.pageNode(pgid);
 
         // Execute function.
@@ -723,7 +721,7 @@ pub const Bucket = struct {
 
     /// Returns the in-memory node, if it exists.
     /// Otherwise returns the underlying page.
-    pub fn pageNode(self: *Self, id: page.PgidType) PageOrNode {
+    pub fn pageNode(self: *Self, id: PgidType) PageOrNode {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b == null or self._b.?.root == 0) {
@@ -745,7 +743,7 @@ pub const Bucket = struct {
     }
 
     /// Creates a node from a page and associates it with a given parent.
-    pub fn node(self: *Self, pgid: page.PgidType, parentNode: ?*Node) *Node {
+    pub fn node(self: *Self, pgid: PgidType, parentNode: ?*Node) *Node {
         // Retrive node if it's already been created.
         if (self.nodes.get(pgid)) |_node| {
             return _node;
@@ -789,7 +787,7 @@ pub const Bucket = struct {
 // then its root page can be stored inline in the "value", after the bucket
 // header, In the case of inline buckets, the "root" will be 0.
 pub const _Bucket = packed struct {
-    root: page.PgidType = 0, // page id of the bucket's root-level page, if the Bucket is embedded，it's root is zero.
+    root: PgidType = 0, // page id of the bucket's root-level page, if the Bucket is embedded，it's root is zero.
     sequence: u64 = 0, // montotically incrementing. used by next_sequence().
     /// Init _Bucket with a given slice
     pub fn init(slice: []u8) *_Bucket {

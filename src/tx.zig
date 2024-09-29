@@ -14,6 +14,7 @@ const Bucket = bucket.Bucket;
 const onCommitFn = util.Closure(usize);
 const assert = @import("assert.zig").assert;
 const Table = consts.Table;
+const PgidType = consts.PgidType;
 
 /// Represent a read-only or read/write transaction on the database.
 /// Read-only transactions can be used for retriving values for keys and creating cursors.
@@ -29,7 +30,7 @@ pub const TX = struct {
     db: ?*DB,
     meta: *Meta,
     root: *Bucket, // the root bucket of the transaction, the bucket root is reference to the meta.root
-    pages: ?*std.AutoHashMap(page.PgidType, *Page),
+    pages: ?*std.AutoHashMap(PgidType, *Page),
     stats: TxStats,
 
     _commitHandlers: std.ArrayList(onCommitFn),
@@ -50,8 +51,8 @@ pub const TX = struct {
         const self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
         self.writable = writable;
-        self.pages = _db.allocator.create(std.AutoHashMap(consts.PgidType, *Page)) catch unreachable;
-        self.pages.?.* = std.AutoHashMap(consts.PgidType, *Page).init(_db.allocator);
+        self.pages = _db.allocator.create(std.AutoHashMap(PgidType, *Page)) catch unreachable;
+        self.pages.?.* = std.AutoHashMap(PgidType, *Page).init(_db.allocator);
         self.stats = TxStats{};
         // Copy the meta page since it can be changed by the writer.
         self.meta = _db.allocator.create(Meta) catch unreachable;
@@ -355,11 +356,11 @@ pub const TX = struct {
 
     fn _check(self: *Self) Error!void {
         // Check if any pages are double freed.
-        var reachable = std.AutoHashMap(consts.PgidType, *const page.Page).init(self.allocator);
+        var reachable = std.AutoHashMap(PgidType, *const page.Page).init(self.allocator);
         defer reachable.deinit();
-        var freed = std.AutoHashMap(consts.PgidType, bool).init(self.allocator);
+        var freed = std.AutoHashMap(PgidType, bool).init(self.allocator);
         defer freed.deinit();
-        var all = std.ArrayList(consts.PgidType).init(self.allocator);
+        var all = std.ArrayList(PgidType).init(self.allocator);
         defer all.deinit();
         all.appendNTimes(0, self.db.?.freelist.count()) catch unreachable;
         self.db.?.freelist.copyAll(all.items);
@@ -393,7 +394,7 @@ pub const TX = struct {
     }
 
     // TODO(benbjohnson): This function is not correct. It should be checking.
-    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: *std.AutoHashMap(consts.PgidType, *const Page), freed: *std.AutoHashMap(consts.PgidType, bool)) Error!void {
+    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: *std.AutoHashMap(PgidType, *const Page), freed: *std.AutoHashMap(consts.PgidType, bool)) Error!void {
         // Ignore inline buckets.
         if (b._b.?.root == 0) {
             return;
@@ -401,8 +402,8 @@ pub const TX = struct {
 
         // Check every page used by this bucket.
         const Context = struct {
-            reachable: *std.AutoHashMap(consts.PgidType, *const Page),
-            freed: *std.AutoHashMap(consts.PgidType, bool),
+            reachable: *std.AutoHashMap(PgidType, *const Page),
+            freed: *std.AutoHashMap(PgidType, bool),
             _tx: *Self,
         };
         const ctx = Context{ .reachable = reachable, .freed = freed, ._tx = self };
@@ -530,7 +531,7 @@ pub const TX = struct {
     }
 
     /// Iterates over every page within a given page and executes a function.
-    pub fn forEachPage(self: *Self, pgid: page.PgidType, depth: usize, context: anytype, comptime travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
+    pub fn forEachPage(self: *Self, pgid: PgidType, depth: usize, context: anytype, comptime travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         const p = self.getPage(pgid);
 
         // Execute function.
@@ -549,7 +550,7 @@ pub const TX = struct {
 
     /// Returns a reference to the page with a given id.
     /// If page has been written to then a temporary buffered page is returned.
-    pub fn getPage(self: *Self, id: page.PgidType) *page.Page {
+    pub fn getPage(self: *Self, id: PgidType) *page.Page {
         // Check the dirty pages first.
         if (self.pages.?.get(id)) |p| {
             std.log.debug("get page from pages cache: {}", .{id});

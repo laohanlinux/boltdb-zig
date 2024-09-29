@@ -8,6 +8,7 @@ const page = @import("page.zig");
 const util = @import("util.zig");
 const assert = util.assert;
 const consts = @import("consts.zig");
+const PgidType = consts.PgidType;
 const Tuple = consts.Tuple;
 const KeyPair = consts.KeyPair;
 const KeyValueRef = consts.Tuple.t3(?[]const u8, ?[]u8, u32);
@@ -202,7 +203,7 @@ pub const Cursor = struct {
                 break;
             }
             // Keep adding pages pointing to the first element to the stack.
-            var pgid: page.PgidType = 0;
+            var pgid: PgidType = 0;
             if (ref.node) |n| {
                 pgid = n.pgid;
             } else {
@@ -223,7 +224,7 @@ pub const Cursor = struct {
             }
 
             // Keep adding pages pointing to the last element in the stack.
-            var pgid: page.PgidType = 0;
+            var pgid: PgidType = 0;
             if (ref.node) |_node| {
                 pgid = _node.pgid;
             } else {
@@ -275,7 +276,7 @@ pub const Cursor = struct {
     }
 
     /// Search recursively performs a binary search against a given page/node until it finds a given key.
-    pub fn search(self: *Self, key: []const u8, pgid: page.PgidType) void {
+    pub fn search(self: *Self, key: []const u8, pgid: PgidType) void {
         const pNode = self._bucket.pageNode(pgid);
         const p = pNode.first;
         const n = pNode.second;

@@ -4,6 +4,7 @@ const bucket = @import("bucket.zig");
 const tx = @import("tx.zig");
 const util = @import("util.zig");
 const consts = @import("consts.zig");
+const PgidType = consts.PgidType;
 const assert = @import("assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
@@ -13,7 +14,7 @@ pub const Node = struct {
     unbalance: bool,
     spilled: bool,
     key: ?[]const u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
-    pgid: page.PgidType, // The node's page id
+    pgid: PgidType, // The node's page id
     parent: ?*Node, // At memory
     children: Nodes, // the is a soft reference to the children of the node, so the children should not be free.
     // The inodes for this node. If the node is a leaf, the inodes are key/value pairs.
@@ -153,7 +154,7 @@ pub const Node = struct {
     }
 
     /// Inserts a key/value.
-    pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: page.PgidType, flags: u32) void {
+    pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: PgidType, flags: u32) void {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
         } else if (oldKey.len <= 0) {
@@ -319,7 +320,7 @@ pub const Node = struct {
     fn splitTwo(self: *Self, pageSize: usize) [2]?*Node {
         // Ignore the split if the page doesn't have a least enough nodes for
         // two pages or if the nodes can fit in a single page.
-        if (self.inodes.items.len <= page.min_keys_page * 2 or self.sizeLessThan(pageSize)) {
+        if (self.inodes.items.len <= consts.MinKeysPage * 2 or self.sizeLessThan(pageSize)) {
             return [2]?*Node{ self, null };
         }
 
@@ -365,7 +366,7 @@ pub const Node = struct {
     /// This is only be called from split().
     fn splitIndex(self: *Self, threshold: usize) [2]usize {
         var sz = page.page_size;
-        if (self.inodes.items.len <= page.min_keys_page) {
+        if (self.inodes.items.len <= consts.MinKeysPage) {
             return [2]usize{ 0, sz };
         }
         // Loop until we only have the minmum number of keys required for the second page.
@@ -631,7 +632,7 @@ pub const Node = struct {
 pub const INode = struct {
     flags: u32 = 0,
     // If the pgid is 0 then it's a leaf node, if it's greater than 0 then it's a branch node, and the value is the pgid of the child.
-    pgid: page.PgidType = 0,
+    pgid: PgidType = 0,
     // The key is the first key in the inodes. the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
     // so the key should not be free. it will be free when the page is free.
     key: ?[]const u8 = null,
@@ -642,7 +643,7 @@ pub const INode = struct {
     const Self = @This();
 
     /// Initializes a node.
-    pub fn init(flags: u32, pgid: page.PgidType, key: ?[]const u8, value: ?[]u8) Self {
+    pub fn init(flags: u32, pgid: PgidType, key: ?[]const u8, value: ?[]u8) Self {
         return .{ .flags = flags, .pgid = pgid, .key = key, .value = value };
     }
 

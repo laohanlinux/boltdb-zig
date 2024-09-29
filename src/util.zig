@@ -22,12 +22,6 @@ pub fn cmpBytes(a: []const u8, b: []const u8) std.math.Order {
     }
 }
 
-pub fn cloneBytes(allocator: std.mem.Allocator, b: []const u8) []u8 {
-    const dest = allocator.alloc(u8, b.len) catch unreachable;
-    @memcpy(dest, b[0..]);
-    return dest;
-}
-
 /// Returns true if `a` is less than `b`.
 pub fn lessThan(a: []const u8, b: []const u8) bool {
     return cmpBytes(a, b) == std.math.Order.lt;

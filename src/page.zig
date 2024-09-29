@@ -1,10 +1,9 @@
 const std = @import("std");
 const db = @import("db.zig");
 const consts = @import("consts.zig");
+const PgidType = consts.PgidType;
+const PgIds = consts.PgIds;
 const cmpBytes = @import("util.zig").cmpBytes;
-
-/// The minimum number of keys in a page.
-pub const min_keys_page: usize = 2;
 
 /// The size of a branch page element.
 pub const branchPageElementSize = BranchPageElement.headerSize();
@@ -12,10 +11,6 @@ pub const branchPageElementSize = BranchPageElement.headerSize();
 pub const leafPageElementSize = LeafPageElement.headerSize();
 /// The bucket leaf flag.
 pub const bucket_leaf_flag: u32 = 0x01;
-/// The type of a page identifier.
-pub const PgidType = u64;
-/// A slice of page identifiers.
-pub const PgIds = []PgidType;
 /// The size of a page.
 pub const page_size: usize = std.mem.page_size;
 /// A page.
@@ -240,11 +235,8 @@ pub const BranchPageElement = packed struct {
     pub inline fn headerSize() usize {
         return @sizeOf(Self);
     }
+
     /// Returns a byte slice of the node key.
-    // pub fn key(self: *Self) []u8 {
-    //     const buf: [*]u8 = @ptrCast(self);
-    //     return buf[0..][self.pos..(self.pos + self.kSize)];
-    // }
     pub fn key(self: *const Self) []const u8 {
         const ptr = @as([*]u8, @ptrCast(@constCast(self)));
         return ptr[self.pos .. self.pos + self.kSize];

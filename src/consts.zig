@@ -28,6 +28,9 @@ pub const MaxValueSize: usize = (1 << 32) - 2;
 /// This value can be changed by setting Bucket.FillPercent.
 pub const DefaultFillPercent = 0.5;
 
+/// The minimum number of keys in a page.
+pub const MinKeysPage: usize = 2;
+
 /// A page flag.
 pub const PageFlag = enum(u8) {
     branch = 0x01,
