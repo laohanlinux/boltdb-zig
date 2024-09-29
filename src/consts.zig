@@ -126,6 +126,16 @@ pub const BufStr = struct {
         return .{ ._str = str, ._allocator = allocator, .ref = refValue };
     }
 
+    /// Increment the reference count.
+    pub fn incrRef(self: *@This()) void {
+        _ = self.ref.fetchAdd(1, .seq_cst);
+    }
+
+    /// Subtract the reference count.
+    pub fn subRef(self: *@This()) void {
+        _ = self.ref.fetchSub(1, .seq_cst);
+    }
+
     /// Dupe a string from a slice.
     pub fn dupeFromSlice(allocator: ?std.mem.Allocator, str: []const u8) @This() {
         const _allocator = allocator orelse gpa.allocator();
@@ -142,7 +152,7 @@ pub const BufStr = struct {
     }
 
     /// Deinit a string.
-    pub fn deinit(self: *@This()) void {
+    pub fn deinit(self: *const @This()) void {
         const refValue = self.ref.fetchSub(1, .seq_cst);
         // std.debug.print("deinit refValue: {}\n", .{refValue});
         if (refValue < 1) {
@@ -156,7 +166,7 @@ pub const BufStr = struct {
                 gpa.allocator().destroy(self.ref);
                 std.debug.print("deinit\n", .{});
             }
-            self.* = undefined;
+            // self.* = undefined;
         }
     }
 
@@ -185,8 +195,13 @@ pub const BufStr = struct {
     }
 
     /// Get the string as a slice.
-    pub fn asSlice(self: *@This()) []const u8 {
+    pub fn asSlice(self: *const @This()) []const u8 {
         return self._str;
+    }
+
+    /// Get the length of the string.
+    pub fn len(self: *@This()) usize {
+        return self._str.len;
     }
 
     /// Hash a string.

@@ -5,6 +5,7 @@ const tx = @import("tx.zig");
 const util = @import("util.zig");
 const consts = @import("consts.zig");
 const PgidType = consts.PgidType;
+const BufStr = consts.BufStr;
 const assert = @import("assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
@@ -13,7 +14,8 @@ pub const Node = struct {
     isLeaf: bool,
     unbalance: bool,
     spilled: bool,
-    key: ?[]const u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
+    //key: ?[]const u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
+    key: ?BufStr,
     pgid: PgidType, // The node's page id
     parent: ?*Node, // At memory
     children: Nodes, // the is a soft reference to the children of the node, so the children should not be free.
@@ -116,7 +118,7 @@ pub const Node = struct {
 
     // Returns the index of a given child node.
     fn childIndex(self: *Self, child: *Node) usize {
-        const index = std.sort.lowerBound(INode, self.inodes.items, child.key.?, INode.lowerBoundFn);
+        const index = std.sort.lowerBound(INode, self.inodes.items, child.key.?.asSlice(), INode.lowerBoundFn);
         return index;
     }
 
@@ -223,8 +225,10 @@ pub const Node = struct {
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            self.key = self.inodes.items[0].key.?;
-            assert(self.key.?.len > 0, "key is null", .{});
+            // self.key = self.inodes.items[0].key.?;
+            self.key = BufStr.init(self.allocator, self.inodes.items[0].key.?);
+            self.key.?.incrRef();
+            assert(self.key.?.len() > 0, "key is null", .{});
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
@@ -406,7 +410,7 @@ pub const Node = struct {
         // the children size on every loop iteration.
         const lessFn = struct {
             fn less(_: void, a: *Node, b: *Node) bool {
-                return std.mem.order(u8, a.key.?, b.key.?) == .lt;
+                return std.mem.order(u8, a.key.?.asSlice(), b.key.?.asSlice()) == .lt;
             }
         }.less;
         std.mem.sort(
@@ -443,14 +447,22 @@ pub const Node = struct {
             node.write(p);
             node.spilled = true;
 
-            // Insert into parent inodes.
+            // Insert into parent inodes. TODO
             if (node.parent) |parent| {
-                const key = node.key orelse node.inodes.items[0].key.?;
+                var key: []const u8 = undefined;
+                if (node.key) |_key| {
+                    key = _key.asSlice();
+                } else {
+                    key = node.inodes.items[0].key.?;
+                }
                 const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 parent.put(key, newKey, null, node.pgid, 0);
-                node.key = node.inodes.items[0].key;
-                assert(node.key.?.len > 0, "spill: zero-length node key", .{});
-                std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
+                if (node.key) |_key| {
+                    _key.deinit();
+                }
+                node.key = consts.BufStr.init(self.allocator, node.inodes.items[0].key.?);
+                assert(node.key.?.len() > 0, "spill: zero-length node key", .{});
+                std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.?.asSlice() });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
 
             // Update the statistics.
@@ -518,7 +530,7 @@ pub const Node = struct {
 
         // If node has no keys then just remove it.
         if (self.numChildren() == 0) {
-            self.parent.?.del(self.key.?);
+            self.parent.?.del(self.key.?.asSlice());
             self.parent.?.removeChild(self);
             const exists = self.bucket.?.nodes.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
@@ -552,7 +564,7 @@ pub const Node = struct {
 
             // Copy over inodes from target and remove target.
             self.inodes.appendSlice(target.?.inodes.items) catch unreachable;
-            self.parent.?.del(target.?.key.?);
+            self.parent.?.del(target.?.key.?.asSlice());
             _ = self.bucket.?.nodes.remove(target.?.pgid);
             target.?.free();
         } else {
@@ -567,7 +579,7 @@ pub const Node = struct {
 
             // Copy over inodes to target and remove node.
             target.?.inodes.appendSlice(self.inodes.items) catch unreachable;
-            self.parent.?.del(self.key.?);
+            self.parent.?.del(self.key.?.asSlice());
             self.parent.?.removeChild(self);
             _ = self.bucket.?.nodes.remove(self.pgid);
             self.free();
@@ -592,11 +604,15 @@ pub const Node = struct {
     // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
     pub fn dereference(self: *Self) void {
         // TODO: meybe we should not free the key, because it was referennce same to first inode.
-        if (self.key != null) {
-            const _key = self.allocator.alloc(u8, self.key.?.len) catch unreachable;
-            std.mem.copyForwards(u8, _key, self.key.?);
-            self.key = _key;
-            assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
+        // if (self.key != null) {
+        //     const _key = self.allocator.alloc(u8, self.key.?.len()) catch unreachable;
+        //     std.mem.copyForwards(u8, _key, self.key.?.asSlice());
+        //     self.key = _key;
+        //     assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
+        // }
+        if (self.key) |_key| {
+            _key.deinit();
+            assert(self.pgid == 0 or self.key != null and self.key.?.len() > 0, "deference: zero-length node key on existing node", .{});
         }
 
         for (self.inodes.items) |*inode| {
