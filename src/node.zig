@@ -292,12 +292,12 @@ pub const Node = struct {
 
     /// Split breaks up a node into multiple smaller nodes, If appropriate.
     /// This should only be called from the spill() function.
-    fn split(self: *Self, pageSize: usize) []*Node {
+    fn split(self: *Self, _pageSize: usize) []*Node {
         var nodes = std.ArrayList(*Node).init(self.allocator);
         var curNode = self;
         while (true) {
             // Split node into two.
-            const a, const b = self.splitTwo(pageSize);
+            const a, const b = self.splitTwo(_pageSize);
             nodes.append(a.?) catch unreachable;
 
             // If we can't split then exit the loop.
@@ -317,10 +317,10 @@ pub const Node = struct {
 
     /// Breaks up a node into two smaller nodes, if approprivate.
     /// This should only be called from the split() function.
-    fn splitTwo(self: *Self, pageSize: usize) [2]?*Node {
+    fn splitTwo(self: *Self, _pageSize: usize) [2]?*Node {
         // Ignore the split if the page doesn't have a least enough nodes for
         // two pages or if the nodes can fit in a single page.
-        if (self.inodes.items.len <= consts.MinKeysPage * 2 or self.sizeLessThan(pageSize)) {
+        if (self.inodes.items.len <= consts.MinKeysPage * 2 or self.sizeLessThan(_pageSize)) {
             return [2]?*Node{ self, null };
         }
 
@@ -332,7 +332,7 @@ pub const Node = struct {
             fillPercent = consts.MaxFillPercent;
         }
 
-        const fPageSize: f64 = @floatFromInt(pageSize);
+        const fPageSize: f64 = @floatFromInt(_pageSize);
         const threshold = @as(usize, @intFromFloat(fPageSize * fillPercent));
 
         // Determin split position and sizes of the two pages.
@@ -365,7 +365,7 @@ pub const Node = struct {
     /// It returns the index as well as the size of the first page.
     /// This is only be called from split().
     fn splitIndex(self: *Self, threshold: usize) [2]usize {
-        var sz = page.page_size;
+        var sz = self.bucket.?.tx.?.db.?.pageSize;
         if (self.inodes.items.len <= consts.MinKeysPage) {
             return [2]usize{ 0, sz };
         }
@@ -639,6 +639,8 @@ pub const INode = struct {
     // If the value is nil then it's a branch node.
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
     value: ?[]u8 = null,
+    // if the inode is new, then the inode will be free when the page is free.
+    // TODO use BufStr instead of the isNew flag.
     isNew: bool = false,
     const Self = @This();
 

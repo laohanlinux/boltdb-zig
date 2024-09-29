@@ -12,7 +12,7 @@ pub const leafPageElementSize = LeafPageElement.headerSize();
 /// The bucket leaf flag.
 pub const bucket_leaf_flag: u32 = 0x01;
 /// The size of a page.
-pub const page_size: usize = std.mem.page_size;
+const pageSize = consts.PageSize;
 /// A page.
 pub const Page = struct {
     // The page identifier.
@@ -170,17 +170,17 @@ pub const Page = struct {
     pub fn getDataSlice(self: *Self) []u8 {
         const ptr = self.getDataPtrInt();
         const slice: [*]u8 = @ptrFromInt(ptr);
-        return slice[0..(page_size - Self.headerSize())];
+        return slice[0..(pageSize - Self.headerSize())];
     }
 
     /// Returns a byte slice of the page data.
     pub fn asSlice(self: *Self) []u8 {
         const slice: [*]u8 = @ptrCast(self);
         if (self.count == 0xFFFF) {
-            const end = @as(usize, self.overflow + 1) * @as(usize, page_size);
+            const end = @as(usize, self.overflow + 1) * @as(usize, pageSize);
             return slice[0..@as(usize, end)];
         } else {
-            return slice[0..@as(usize, page_size)];
+            return slice[0..@as(usize, pageSize)];
         }
     }
 
