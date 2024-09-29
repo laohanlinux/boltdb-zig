@@ -325,12 +325,12 @@ pub const Cursor = struct {
 
     // Search key from nodes.
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
-        const f = struct {
+        const searchFn = struct {
             fn searchFn(_key: []const u8, inode: INode) std.math.Order {
-                return util.cmpBytes(_key, inode.key.?);
+                return std.mem.order(u8, _key, inode.key.?);
             }
-        };
-        const index = std.sort.binarySearch(INode, n.inodes.items, key, f.searchFn) orelse (n.inodes.items.len - 1);
+        }.searchFn;
+        const index = std.sort.binarySearch(INode, n.inodes.items, key, searchFn) orelse (n.inodes.items.len - 1);
         // Recursively search to the next node.
         var lastEntry = self.stack.getLast();
         lastEntry.index = index;
@@ -355,7 +355,7 @@ pub const Cursor = struct {
 
         // If we have a node then search its inodes.
         if (n) |_node| {
-            const index = std.sort.lowerBound(INode, _node.inodes.items, key, INode.cmp);
+            const index = std.sort.lowerBound(INode, _node.inodes.items, key, INode.lowerBoundFn);
             e.index = index;
             // std.log.debug("nsearch: {s}, inodes: {s}", .{ key, _node.inodes.items[index].key.? });
             return;

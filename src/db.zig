@@ -993,7 +993,10 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                for (0..200) |i| {
+                var buf: [200]u8 = undefined;
+                randomBuf(buf[0..]);
+                std.log.info("random: {any}\n", .{buf});
+                for (buf) |i| {
                     const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
                     defer std.testing.allocator.free(bucketName);
                     const bt = try trx.createBucket(bucketName);
@@ -1027,4 +1030,17 @@ test "DB-Write" {
     }
     // test "DB-read" {
     {}
+}
+
+fn randomBuf(buf: []u8) void {
+    var prng = std.Random.DefaultPrng.init(buf.len);
+    var random = prng.random();
+    for (0..buf.len) |i| {
+        buf[i] = @intCast(i);
+    }
+    var i: usize = buf.len - 1;
+    while (i > 0) : (i -= 1) {
+        const j = random.intRangeAtMost(usize, 0, i);
+        std.mem.swap(u8, &buf[i], &buf[j]);
+    }
 }

@@ -116,7 +116,7 @@ pub const Node = struct {
 
     // Returns the index of a given child node.
     fn childIndex(self: *Self, child: *Node) usize {
-        const index = std.sort.lowerBound(INode, self.inodes.items, child.key.?, INode.cmp);
+        const index = std.sort.lowerBound(INode, self.inodes.items, child.key.?, INode.lowerBoundFn);
         return index;
     }
 
@@ -163,7 +163,7 @@ pub const Node = struct {
             assert(false, "put: zero-length new key", .{});
         }
         // Find insertion index.
-        const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.cmp);
+        const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?));
         if (!exact) {
             // not found, allocate previous a new memory
@@ -194,7 +194,7 @@ pub const Node = struct {
     /// Removes a key from the node.
     pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
-        const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.cmp) orelse return;
+        const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) orelse return;
         _ = self.inodes.orderedRemove(index);
         // Mark the node as needing rebalancing.
         self.unbalance = true;
@@ -405,14 +405,14 @@ pub const Node = struct {
         // the children size on every loop iteration.
         const lessFn = struct {
             fn less(_: void, a: *Node, b: *Node) bool {
-                return util.cmpBytes(a.key.?, b.key.?) == .lt;
+                return std.mem.order(u8, a.key.?, b.key.?) == .lt;
             }
-        };
+        }.less;
         std.mem.sort(
             *Node,
             self.children.items,
             {},
-            lessFn.less,
+            lessFn,
         );
         for (self.children.items) |child| {
             try child.spill();
@@ -640,7 +640,7 @@ pub const INode = struct {
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
     value: ?[]u8 = null,
     // if the inode is new, then the inode will be free when the page is free.
-    // TODO use BufStr instead of the isNew flag.
+    // TODO use BufStr instead of the isNew flag
     isNew: bool = false,
     const Self = @This();
 
@@ -649,17 +649,22 @@ pub const INode = struct {
         return .{ .flags = flags, .pgid = pgid, .key = key, .value = value };
     }
 
-    /// compare the key
-    pub fn cmp(findKey: []const u8, self: @This()) std.math.Order {
-        return util.cmpBytes(findKey, self.key.?);
-    }
-
     /// deinit the inode
     pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
         if (self.isNew) { //
             allocator.free(self.key.?);
             allocator.free(self.value.?);
         }
+    }
+
+    /// binary search function
+    pub fn binarySearchFn(context: []const u8, item: @This()) std.math.Order {
+        return std.mem.order(u8, item.key.?, context);
+    }
+
+    /// lower bound of the key
+    pub fn lowerBoundFn(context: []const u8, item: @This()) std.math.Order {
+        return std.mem.order(u8, item.key.?, context);
     }
 };
 
