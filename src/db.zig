@@ -993,7 +993,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                var buf: [200]u8 = undefined;
+                var buf: [290]usize = undefined;
                 randomBuf(buf[0..]);
                 std.log.info("random: {any}\n", .{buf});
                 for (buf) |i| {
@@ -1032,7 +1032,7 @@ test "DB-Write" {
     {}
 }
 
-fn randomBuf(buf: []u8) void {
+fn randomBuf(buf: []usize) void {
     var prng = std.Random.DefaultPrng.init(buf.len);
     var random = prng.random();
     for (0..buf.len) |i| {
@@ -1041,6 +1041,6 @@ fn randomBuf(buf: []u8) void {
     var i: usize = buf.len - 1;
     while (i > 0) : (i -= 1) {
         const j = random.intRangeAtMost(usize, 0, i);
-        std.mem.swap(u8, &buf[i], &buf[j]);
+        std.mem.swap(usize, &buf[i], &buf[j]);
     }
 }

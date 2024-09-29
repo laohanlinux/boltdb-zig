@@ -315,8 +315,8 @@ pub const Node = struct {
         return nodes.toOwnedSlice() catch unreachable;
     }
 
-    /// Breaks up a node into two smaller nodes, if approprivate.
-    /// This should only be called from the split() function.
+    // Breaks up a node into two smaller nodes, if approprivate.
+    // This should only be called from the split() function.
     fn splitTwo(self: *Self, _pageSize: usize) [2]?*Node {
         // Ignore the split if the page doesn't have a least enough nodes for
         // two pages or if the nodes can fit in a single page.
@@ -349,10 +349,11 @@ pub const Node = struct {
         const next = Node.init(self.allocator);
         next.bucket = self.bucket;
         next.isLeaf = self.isLeaf;
-        next.parent = next.parent;
+        next.parent = self.parent;
 
         // Split inodes across two nodes.
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
+        // shrink self.inodes to _splitIndex
         self.inodes.resize(_splitIndex) catch unreachable;
 
         // Update the statistics.
@@ -428,11 +429,13 @@ pub const Node = struct {
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
+                // TODO why free the page
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 node.pgid = 0;
             }
 
             // Allocate contiguous space for the node.(COW: Copy on Write)
+            // TODO why +1
             const allocateSize: usize = node.size() / _db.pageSize + 1;
             const p = try _tx.allocate(allocateSize);
             assert(p.id < _tx.meta.pgid, "pgid ({}) above high water mark ({})", .{ p.id, _tx.meta.pgid });
@@ -443,7 +446,8 @@ pub const Node = struct {
             // Insert into parent inodes.
             if (node.parent) |parent| {
                 const key = node.key orelse node.inodes.items[0].key.?;
-                parent.put(key, node.inodes.items[0].key.?, null, node.pgid, 0);
+                const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+                parent.put(key, newKey, null, node.pgid, 0);
                 node.key = node.inodes.items[0].key;
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });

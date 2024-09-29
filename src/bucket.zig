@@ -63,7 +63,7 @@ pub const Bucket = struct {
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
-        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
+        // std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
         self.isInittialized = false;
         var btIter = self.buckets.iterator();
