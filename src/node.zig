@@ -44,14 +44,13 @@ pub const Node = struct {
     }
 
     /// free the node memory
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: Self) void {
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (self.inodes.items) |inode| {
             inode.deinit(self.allocator);
         }
         self.inodes.deinit();
         self.children.deinit();
-        self.allocator.destroy(self);
     }
 
     /// Returns the top-level node this node is attached to.
@@ -76,8 +75,8 @@ pub const Node = struct {
         var sz = page.Page.headerSize();
         const elsz = self.pageElementSize();
         for (self.inodes.items) |item| {
-            const vLen: usize = if (item.value) |value| value.len else 0;
-            sz += elsz + item.key.?.len + vLen;
+            const vLen: usize = if (item.value) |value| value.len() else 0;
+            sz += elsz + item.key.?.len() + vLen;
         }
         return sz;
     }
@@ -92,8 +91,8 @@ pub const Node = struct {
         const elsz = self.pageElementSize();
         for (self.inodes.items) |item| {
             // page element size + key size + value size, if the page is branch node, the value is pgid
-            const vLen: usize = if (item.value) |value| value.len else 0;
-            sz += elsz + item.key.?.len + vLen;
+            const vLen: usize = if (item.value) |value| value.len() else 0;
+            sz += elsz + item.key.?.len() + vLen;
             if (sz >= v) {
                 return false;
             }
@@ -118,7 +117,7 @@ pub const Node = struct {
 
     // Returns the index of a given child node.
     fn childIndex(self: *Self, child: *Node) usize {
-        const index = std.sort.lowerBound(INode, self.inodes.items, child.key.?.asSlice(), INode.lowerBoundFn);
+        const index = std.sort.lowerBound(INode, self.inodes.items, child.key.?.asSlice().?, INode.lowerBoundFn);
         return index;
     }
 
@@ -166,7 +165,7 @@ pub const Node = struct {
         }
         // Find insertion index.
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
-        const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?));
+        const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?.asSlice().?));
         if (!exact) {
             // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
@@ -176,21 +175,21 @@ pub const Node = struct {
         inodeRef.*.flags = flags;
         inodeRef.*.pgid = pgid;
         if (!exact) {
-            inodeRef.key = newKey;
+            inodeRef.key = BufStr.init(self.allocator, newKey);
         } else {
-            if (!std.mem.eql(u8, newKey, inodeRef.key.?)) {
+            if (!std.mem.eql(u8, newKey, inodeRef.key.?.asSlice().?)) {
                 // free
                 self.allocator.free(inodeRef.key.?);
-                inodeRef.key = newKey;
+                inodeRef.key = BufStr.init(self.allocator, newKey);
             }
             // Free old value.
             if (inodeRef.isNew and inodeRef.value != null) {
-                self.allocator.free(inodeRef.value.?);
+                self.allocator.free(inodeRef.value.?.asSlice());
             }
         }
-        inodeRef.value = value;
+        inodeRef.value = BufStr.init(self.allocator, value);
         inodeRef.isNew = true;
-        assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
+        assert(inodeRef.key.?.len() > 0, "put: zero-length inode key", .{});
     }
 
     /// Removes a key from the node.
@@ -212,21 +211,24 @@ pub const Node = struct {
             if (self.isLeaf) {
                 const elem = p.leafPageElementPtr(i);
                 inode.flags = elem.flags;
-                inode.key = elem.key();
-                inode.value = elem.value();
+                inode.key = BufStr.init(self.allocator, elem.key());
+                inode.key.?.incrRef();
+                inode.value = BufStr.init(self.allocator, elem.value());
+                inode.value.?.incrRef();
             } else {
                 const elem = p.branchPageElementPtr(i);
                 inode.pgid = elem.pgid;
-                inode.key = elem.key();
+                inode.key = BufStr.init(self.allocator, elem.key());
+                inode.key.?.incrRef();
             }
-            assert(inode.key.?.len > 0, "key is null", .{});
+            assert(inode.key.?.len() > 0, "key is null", .{});
             self.inodes.append(inode) catch unreachable;
         }
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
             // self.key = self.inodes.items[0].key.?;
-            self.key = BufStr.init(self.allocator, self.inodes.items[0].key.?);
+            self.key = BufStr.init(self.allocator, self.inodes.items[0].key.?.asSlice());
             self.key.?.incrRef();
             assert(self.key.?.len() > 0, "key is null", .{});
         } else {
@@ -258,18 +260,18 @@ pub const Node = struct {
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             // std.log.debug("read element: {}, {}", .{ i, @intFromPtr(b.ptr) });
-            assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
+            assert(inode.key.?.len() > 0, "write: zero-length inode key", .{});
             // Write the page element.
             if (self.isLeaf) {
                 const elem = p.leafPageElement(i).?;
                 elem.pos = @as(u32, @intCast(@intFromPtr(b.ptr) - @intFromPtr(elem)));
                 elem.flags = inode.flags;
-                elem.kSize = @as(u32, @intCast(inode.key.?.len));
-                elem.vSize = @as(u32, @intCast(inode.value.?.len));
+                elem.kSize = @as(u32, @intCast(inode.key.?.len()));
+                elem.vSize = @as(u32, @intCast(inode.value.?.len()));
             } else {
                 const elem = p.branchPageElement(i).?;
                 elem.pos = @as(u32, @intCast(@intFromPtr(b.ptr) - @intFromPtr(elem)));
-                elem.kSize = @as(u32, @intCast(inode.key.?.len));
+                elem.kSize = @as(u32, @intCast(inode.key.?.len()));
                 elem.pgid = inode.pgid;
                 assert(inode.pgid == elem.pgid, "write: circulay dependency occuerd", .{});
             }
@@ -277,15 +279,15 @@ pub const Node = struct {
             // then we need to reallocate the byte array pointer
             //
             // See: https://github.com/boltdb/bolt/pull/335
-            const kLen = inode.key.?.len;
-            const vLen: usize = if (inode.value) |value| value.len else 0;
+            const kLen = inode.key.?.len();
+            const vLen: usize = if (inode.value) |value| value.len() else 0;
             assert(b.len >= (kLen + vLen), "it should be not happen!", .{});
 
             // Write data for the element to the end of the page.
-            std.mem.copyForwards(u8, b[0..kLen], inode.key.?);
+            std.mem.copyForwards(u8, b[0..kLen], inode.key.?.asSlice().?);
             b = b[kLen..];
             if (inode.value) |value| {
-                std.mem.copyForwards(u8, b[0..vLen], value);
+                std.mem.copyForwards(u8, b[0..vLen], value.asSlice().?);
                 b = b[vLen..];
             }
             //std.log.info("inode: {s}, key: {s}", .{ inode.key.?, inode.value.? });
@@ -379,9 +381,9 @@ pub const Node = struct {
         // Loop until we only have the minmum number of keys required for the second page.
         var inodeIndex: usize = 0;
         for (self.inodes.items, 0..) |inode, i| {
-            var elsize = self.pageElementSize() + inode.key.?.len;
+            var elsize = self.pageElementSize() + inode.key.?.len();
             if (inode.value) |value| {
-                elsize += value.len;
+                elsize += value.len();
             }
             inodeIndex = i;
 
@@ -412,7 +414,7 @@ pub const Node = struct {
         // the children size on every loop iteration.
         const lessFn = struct {
             fn less(_: void, a: *Node, b: *Node) bool {
-                return std.mem.order(u8, a.key.?.asSlice(), b.key.?.asSlice()) == .lt;
+                return std.mem.order(u8, a.key.?.asSlice().?, b.key.?.asSlice().?) == .lt;
             }
         }.less;
         std.mem.sort(
@@ -430,9 +432,9 @@ pub const Node = struct {
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
         defer self.allocator.free(nodes);
-        // defer for (nodes) |node| {
-        //     node.deinit();
-        // };
+        defer for (nodes) |node| {
+            node.deinit();
+        };
 
         for (nodes, 0..) |node, i| {
             _ = i; // autofix
@@ -457,11 +459,11 @@ pub const Node = struct {
             if (node.parent) |parent| {
                 var key: []const u8 = undefined;
                 if (node.key) |_key| {
-                    key = _key.asSlice();
+                    key = _key.asSlice().?;
                 } else {
-                    key = node.inodes.items[0].key.?;
+                    key = node.inodes.items[0].key.?.asSlice().?;
                 }
-                const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+                const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?.asSlice().?) catch unreachable;
                 parent.put(key, newKey, null, node.pgid, 0);
                 if (node.key) |_key| {
                     _key.deinit();
@@ -536,7 +538,7 @@ pub const Node = struct {
 
         // If node has no keys then just remove it.
         if (self.numChildren() == 0) {
-            self.parent.?.del(self.key.?.asSlice());
+            self.parent.?.del(self.key.?.asSlice().?);
             self.parent.?.removeChild(self);
             const exists = self.bucket.?.nodes.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
@@ -570,7 +572,7 @@ pub const Node = struct {
 
             // Copy over inodes from target and remove target.
             self.inodes.appendSlice(target.?.inodes.items) catch unreachable;
-            self.parent.?.del(target.?.key.?.asSlice());
+            self.parent.?.del(target.?.key.?.asSlice().?);
             _ = self.bucket.?.nodes.remove(target.?.pgid);
             target.?.free();
         } else {
@@ -585,7 +587,7 @@ pub const Node = struct {
 
             // Copy over inodes to target and remove node.
             target.?.inodes.appendSlice(self.inodes.items) catch unreachable;
-            self.parent.?.del(self.key.?.asSlice());
+            self.parent.?.del(self.key.?.asSlice().?);
             self.parent.?.removeChild(self);
             _ = self.bucket.?.nodes.remove(self.pgid);
             self.free();
@@ -624,12 +626,16 @@ pub const Node = struct {
         }
 
         for (self.inodes.items) |*inode| {
-            inode.key = self.allocator.dupe(u8, inode.key.?) catch unreachable;
-            assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", .{});
+            const newKey = inode.key.?.copy();
+            inode.key.?.deinit();
+            inode.key = newKey;
+            assert(inode.key != null and inode.key.?.len() > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
-                inode.value = self.allocator.dupe(u8, value) catch unreachable;
-                assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", .{});
+                const newValue = value.copy();
+                value.deinit();
+                inode.value = newValue;
+                assert(inode.value != null and inode.value.?.len() > 0, "deference: zero-length inode value on existing node", .{});
             }
         }
 
@@ -659,39 +665,51 @@ pub const INode = struct {
     pgid: PgidType = 0,
     // The key is the first key in the inodes. the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
     // so the key should not be free. it will be free when the page is free.
-    key: ?[]const u8 = null,
+    // key: ?[]const u8 = null,
+    key: ?BufStr,
     // If the value is nil then it's a branch node.
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
-    value: ?[]u8 = null,
+    value: ?BufStr = null,
     // if the inode is new, then the inode will be free when the page is free.
     // TODO use BufStr instead of the isNew flag
     isNew: bool = false,
     const Self = @This();
 
     /// Initializes a node.
-    pub fn init(flags: u32, pgid: PgidType, key: ?[]const u8, value: ?[]u8) Self {
+    pub fn init(flags: u32, pgid: PgidType, key: ?BufStr, value: ?BufStr) Self {
         return .{ .flags = flags, .pgid = pgid, .key = key, .value = value };
     }
 
+    /// keyLen returns the length of the key.
+    pub fn keyLen(self: Self) usize {
+        const sz = self.key orelse return 0;
+        return sz.len();
+    }
+
+    /// valueLen returns the length of the value.
+    pub fn valueLen(self: Self) usize {
+        const sz = self.value orelse return 0;
+        return sz.len();
+    }
+
     /// deinit the inode
-    pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: Self, _: std.mem.Allocator) void {
         if (self.isNew) { //
-            allocator.free(self.key.?);
+            self.key.?.deinit();
             if (self.value) |value| {
-                //_ = value; // autofix
-                allocator.free(value);
+                value.deinit();
             }
         }
     }
 
     /// binary search function
     pub fn binarySearchFn(context: []const u8, item: @This()) std.math.Order {
-        return std.mem.order(u8, item.key.?, context);
+        return std.mem.order(u8, item.key.?.asSlice().?, context);
     }
 
     /// lower bound of the key
     pub fn lowerBoundFn(context: []const u8, item: @This()) std.math.Order {
-        return std.mem.order(u8, item.key.?, context);
+        return std.mem.order(u8, item.key.?.asSlice().?, context);
     }
 };
 

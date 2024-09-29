@@ -635,9 +635,9 @@ pub const Bucket = struct {
         // our threshold for inline bucket size.
         var size = page.Page.headerSize();
         for (n.?.inodes.items) |inode| {
-            size += page.LeafPageElement.headerSize() + inode.key.?.len;
+            size += page.LeafPageElement.headerSize() + inode.key.?.len();
             if (inode.value) |value| {
-                size += value.len;
+                size += value.len();
             }
             if (inode.flags & consts.BucketLeafFlag != 0) {
                 return false;

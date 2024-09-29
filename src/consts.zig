@@ -114,12 +114,12 @@ pub fn getGpa() *std.heap.GeneralPurposeAllocator {
 
 /// A string with reference counting.
 pub const BufStr = struct {
-    _str: []const u8,
+    _str: ?[]const u8,
     ref: *std.atomic.Value(i64),
     _allocator: ?std.mem.Allocator,
 
     /// Init a string.
-    pub fn init(allocator: ?std.mem.Allocator, str: []const u8) @This() {
+    pub fn init(allocator: ?std.mem.Allocator, str: ?[]const u8) @This() {
         const _allocator = allocator orelse gpa.allocator();
         const refValue = _allocator.create(std.atomic.Value(i64)) catch unreachable;
         refValue.store(1, .seq_cst);
@@ -137,18 +137,24 @@ pub const BufStr = struct {
     }
 
     /// Dupe a string from a slice.
-    pub fn dupeFromSlice(allocator: ?std.mem.Allocator, str: []const u8) @This() {
+    pub fn dupeFromSlice(allocator: ?std.mem.Allocator, str: ?[]const u8) @This() {
         const _allocator = allocator orelse gpa.allocator();
         const refValue = _allocator.create(std.atomic.Value(i64)) catch unreachable;
         refValue.store(1, .seq_cst);
-        const newStr = _allocator.dupe(u8, str) catch unreachable;
+        if (str == null) {
+            return .{ ._str = null, ._allocator = allocator, .ref = refValue };
+        }
+        const newStr = _allocator.dupe(u8, str.?) catch unreachable;
         return .{ ._str = newStr, ._allocator = allocator, .ref = refValue };
     }
 
     /// Dupe a string to a slice.
-    pub fn dupeToSlice(self: *@This(), allocator: ?std.mem.Allocator) []u8 {
+    pub fn dupeToSlice(self: *@This(), allocator: ?std.mem.Allocator) ?[]u8 {
+        if (self._str == null) {
+            return null;
+        }
         const _allocator = allocator orelse gpa.allocator();
-        return _allocator.dupe(u8, self._str) catch unreachable;
+        return _allocator.dupe(u8, self._str.?) catch unreachable;
     }
 
     /// Deinit a string.
@@ -160,9 +166,14 @@ pub const BufStr = struct {
         }
         if (refValue == 1) {
             if (self._allocator) |allocator| {
-                allocator.free(self._str);
+                if (self._str) |str| {
+                    allocator.free(str);
+                }
                 allocator.destroy(self.ref);
             } else {
+                if (self._str) |str| {
+                    gpa.allocator().free(str);
+                }
                 gpa.allocator().destroy(self.ref);
             }
             std.log.debug("deinit BufStr\n", .{});
@@ -175,14 +186,14 @@ pub const BufStr = struct {
         self.deinit();
     }
 
-    /// Create a new string from a slice.
-    pub fn fromSlice(str: []const u8) @This() {
-        var self: @This() = undefined;
-        self._str = str;
-        self.ref = undefined;
-        self._allocator = undefined;
-        return self;
-    }
+    // /// Create a new string from a slice.
+    // pub fn fromSlice(str: ?[]const u8) @This() {
+    //     var self: @This() = undefined;
+    //     self._str = str;
+    //     self.ref = undefined;
+    //     self._allocator = undefined;
+    //     return self;
+    // }
 
     /// Clone a string.
     pub fn clone(self: *@This()) @This() {
@@ -195,34 +206,62 @@ pub const BufStr = struct {
     }
 
     /// Copy a string.
-    pub fn copy(self: *@This()) @This() {
+    pub fn copy(self: @This()) @This() {
         const _ref = self._allocator.?.create(std.atomic.Value(i64)) catch unreachable;
         _ref.store(1, .seq_cst);
+        if (self._str == null) {
+            return .{
+                ._allocator = self._allocator,
+                ._str = null,
+                .ref = _ref,
+            };
+        }
         return .{
             ._allocator = self._allocator,
-            ._str = self._allocator.?.dupe(u8, self._str) catch unreachable,
+            ._str = self._allocator.?.dupe(u8, self._str.?) catch unreachable,
             .ref = _ref,
         };
     }
 
     /// Get the string as a slice.
-    pub fn asSlice(self: *const @This()) []const u8 {
+    pub fn asSlice(self: *const @This()) ?[]const u8 {
         return self._str;
     }
 
+    /// Get the string as a slice.
+    pub fn asSliceZ(self: *const @This()) ?[]u8 {
+        if (self._str == null) {
+            return null;
+        }
+        const str = self._str.?;
+        return @constCast(str);
+    }
+
     /// Get the length of the string.
-    pub fn len(self: *@This()) usize {
-        return self._str.len;
+    pub fn len(self: *const @This()) usize {
+        if (self._str == null) {
+            return 0;
+        }
+        return self._str.?.len;
     }
 
     /// Hash a string.
     pub fn hash(self: @This()) u64 {
-        return std.hash.Wyhash.hash(0, self._str);
+        if (self._str == null) {
+            return 0;
+        }
+        return std.hash.Wyhash.hash(0, self._str.?);
     }
 
     /// Compare two strings.
     pub fn eql(self: @This(), other: @This()) bool {
-        return std.mem.eql(u8, self._str, other._str);
+        if (self._str == null) {
+            return other._str == null;
+        }
+        if (other._str == null) {
+            return false;
+        }
+        return std.mem.eql(u8, self._str.?, other._str.?);
     }
 };
 

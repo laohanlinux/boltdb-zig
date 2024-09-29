@@ -327,7 +327,7 @@ pub const Cursor = struct {
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
         const searchFn = struct {
             fn searchFn(_key: []const u8, inode: INode) std.math.Order {
-                return std.mem.order(u8, _key, inode.key.?);
+                return std.mem.order(u8, _key, inode.key.?.asSlice().?);
             }
         }.searchFn;
         const index = std.sort.binarySearch(INode, n.inodes.items, key, searchFn) orelse (n.inodes.items.len - 1);
@@ -378,7 +378,10 @@ pub const Cursor = struct {
         // Retrieve value from node.
         if (ref.node) |refNode| {
             const inode = refNode.inodes.items[ref.index];
-            return KeyValueRef{ .first = inode.key, .second = inode.value, .third = inode.flags };
+            if (inode.value) |value| {
+                return KeyValueRef{ .first = inode.key.?.asSlice().?, .second = value.asSliceZ(), .third = inode.flags };
+            }
+            return KeyValueRef{ .first = inode.key.?.asSlice().?, .second = null, .third = inode.flags };
         }
 
         // Or retrieve value from page.
