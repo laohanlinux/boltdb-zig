@@ -164,8 +164,8 @@ pub const BufStr = struct {
                 allocator.destroy(self.ref);
             } else {
                 gpa.allocator().destroy(self.ref);
-                std.debug.print("deinit\n", .{});
             }
+            std.log.debug("deinit BufStr\n", .{});
             // self.* = undefined;
         }
     }
@@ -191,6 +191,17 @@ pub const BufStr = struct {
             ._allocator = self._allocator,
             ._str = self._str,
             .ref = self.ref,
+        };
+    }
+
+    /// Copy a string.
+    pub fn copy(self: *@This()) @This() {
+        const _ref = self._allocator.?.create(std.atomic.Value(i64)) catch unreachable;
+        _ref.store(1, .seq_cst);
+        return .{
+            ._allocator = self._allocator,
+            ._str = self._allocator.?.dupe(u8, self._str) catch unreachable,
+            .ref = _ref,
         };
     }
 

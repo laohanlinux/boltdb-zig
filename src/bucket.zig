@@ -201,8 +201,10 @@ pub const Bucket = struct {
         // Return an error if there is an existing key.
         if (keyPairRef.first != null and std.mem.eql(u8, key, keyPairRef.first.?)) {
             if (keyPairRef.third & consts.BucketLeafFlag != 0) {
+                self.allocator.free(cpKey);
                 return Error.BucketExists;
             }
+            self.allocator.free(cpKey);
             return Error.IncompactibleValue;
         }
 

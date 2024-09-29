@@ -343,6 +343,8 @@ pub const Node = struct {
         const _splitIndex, _ = self.splitIndex(threshold);
 
         // Split node into two separate nodes.
+        // if the node is the root node, then create a new node as the parent node
+        // and set the current node as the child node
         if (self.parent == null) {
             self.parent = Node.init(self.allocator);
             self.parent.?.bucket = self.bucket;
@@ -428,8 +430,12 @@ pub const Node = struct {
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
         defer self.allocator.free(nodes);
+        // defer for (nodes) |node| {
+        //     node.deinit();
+        // };
 
-        for (nodes) |node| {
+        for (nodes, 0..) |node, i| {
+            _ = i; // autofix
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
@@ -460,7 +466,7 @@ pub const Node = struct {
                 if (node.key) |_key| {
                     _key.deinit();
                 }
-                node.key = consts.BufStr.init(self.allocator, node.inodes.items[0].key.?);
+                node.key = consts.BufStr.dupeFromSlice(self.allocator, newKey);
                 assert(node.key.?.len() > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.?.asSlice() });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
@@ -611,20 +617,18 @@ pub const Node = struct {
         //     assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
         // }
         if (self.key) |_key| {
+            const cpKey = self.key.?.copy();
+            self.key = cpKey;
             _key.deinit();
             assert(self.pgid == 0 or self.key != null and self.key.?.len() > 0, "deference: zero-length node key on existing node", .{});
         }
 
         for (self.inodes.items) |*inode| {
-            var _key = self.allocator.alloc(u8, inode.key.?.len) catch unreachable;
-            std.mem.copyForwards(u8, _key, inode.key.?);
-            inode.key = _key[0..];
+            inode.key = self.allocator.dupe(u8, inode.key.?) catch unreachable;
             assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
-                const _value = self.allocator.alloc(u8, value.len) catch unreachable;
-                std.mem.copyForwards(u8, _value, value);
-                inode.value = _value;
+                inode.value = self.allocator.dupe(u8, value) catch unreachable;
                 assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", .{});
             }
         }
@@ -673,7 +677,10 @@ pub const INode = struct {
     pub fn deinit(self: Self, allocator: std.mem.Allocator) void {
         if (self.isNew) { //
             allocator.free(self.key.?);
-            allocator.free(self.value.?);
+            if (self.value) |value| {
+                //_ = value; // autofix
+                allocator.free(value);
+            }
         }
     }
 
