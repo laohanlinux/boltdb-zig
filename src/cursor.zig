@@ -377,11 +377,8 @@ pub const Cursor = struct {
 
         // Retrieve value from node.
         if (ref.node) |refNode| {
-            const inode = refNode.inodes.items[ref.index];
-            if (inode.value) |value| {
-                return KeyValueRef{ .first = inode.key.?.asSlice().?, .second = value.asSliceZ(), .third = inode.flags };
-            }
-            return KeyValueRef{ .first = inode.key.?.asSlice().?, .second = null, .third = inode.flags };
+            const inode = &refNode.inodes.items[ref.index];
+            return KeyValueRef{ .first = inode.getKey(), .second = inode.getValue(), .third = inode.flags };
         }
 
         // Or retrieve value from page.
@@ -458,17 +455,5 @@ const ElementRef = struct {
         return @as(usize, self.p.?.count);
     }
 };
-
-// find the key in the branch page.
-fn findEqualBranchElementFn(findKey: []const u8, a: page.BranchPageElement, b: page.BranchPageElement) bool {
-    const order = cmpBranchElementFn(findKey, a, b);
-    return order == std.math.Order.eq;
-}
-
-// find the key in the branch page.
-fn cmpBranchElementFn(findKey: []const u8, elementRef: page.BranchPageElement) std.math.Order {
-    const order = util.cmpBytes(findKey, elementRef.key());
-    return order;
-}
 
 test "cursor" {}

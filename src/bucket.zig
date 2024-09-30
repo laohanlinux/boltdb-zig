@@ -666,7 +666,6 @@ pub const Bucket = struct {
         _bt.* = self._b.?;
 
         // Convert byte slice to a fake page and write the roor node.
-        // std.debug.print("{any}, node: {any}\n", .{ _bt.*, n.* });
         const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
         n.write(p);
         return value;
@@ -794,11 +793,6 @@ pub const _Bucket = packed struct {
     /// Init _Bucket with a given slice
     pub fn init(slice: []u8) *_Bucket {
         // util.assert(slice.len >= _Bucket.size(), "slice is too short to init _Bucket", .{});
-        // const isAligned = @intFromPtr(slice.ptr) % @alignOf(_Bucket);
-        // util.assert(isAligned == 0, "slice is not aligned", .{});
-
-        // const ptr: *_Bucket = @ptrCast(@alignCast(slice));
-        // return ptr;
         const aligned_slice: []align(@alignOf(_Bucket)) u8 = @alignCast(slice);
         const ptr: *_Bucket = @ptrCast(aligned_slice.ptr);
         return ptr;

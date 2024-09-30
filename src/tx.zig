@@ -95,7 +95,7 @@ pub const TX = struct {
         while (nodesItr.next()) |kv| {
             try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "pid:{d}\t", .{kv.key_ptr.*}));
             if (kv.value_ptr.*.key) |key| {
-                try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "key:{s}\t", .{key.asSlice()}));
+                try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "key:{s}\t", .{key.asSlice().?}));
             }
         }
 
@@ -213,9 +213,10 @@ pub const TX = struct {
             return Error.TxNotWriteable;
         }
         const _db = self.getDB();
+        _ = _db; // autofix
         std.log.debug("before commit: {any}", .{self.root._b.?});
         self.print() catch |err| {
-            std.log.err("Failed to print transaction info: {}", .{err});
+            std.log.err("Failed to print transaction info: {any}", .{err});
         };
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
@@ -227,68 +228,67 @@ pub const TX = struct {
 
         // spill data onto dirty pages.
         startTime = std.time.Timer.start() catch unreachable;
-        // During splitting (for example, merging two nodes at 90% and 30% will become 120% after merging, so merging first and then splitting is no problem)
+        // // During splitting (for example, merging two nodes at 90% and 30% will become 120% after merging, so merging first and then splitting is no problem)
         self.root.spill() catch |err| {
             self._rollback();
             return err;
         };
-        std.log.debug("after commit root spill", .{});
-        self.stats.spill_time += startTime.lap();
+        // std.log.debug("after commit root spill", .{});
+        // self.stats.spill_time += startTime.lap();
 
-        // Free the old root bucket.
-        self.meta.root.root = self.root._b.?.root;
-        const opgid = self.meta.pgid;
+        // // Free the old root bucket.
+        // self.meta.root.root = self.root._b.?.root;
+        // const opgid = self.meta.pgid;
+        // _ = opgid; // autofix
 
         // Free the freelist and allocate new pages for it. This will overestimate
         // the size of the freelist but not underestimate the size (wich would be bad).
-        _db.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
-        std.log.debug("after freelist free transaction dirty pages", .{});
-        const allocatePageCount = _db.freelist.size() / _db.pageSize + 1;
-        const p = self.allocate(allocatePageCount) catch |err| {
-            std.log.err("failed to allocate memory: {}", .{err});
-            self._rollback();
-            return Error.OutOfMemory;
-        };
-        assert(p.id >= 0 and p.flags >= 0, "Santy check!", .{});
-        _db.freelist.write(p) catch |err| {
-            self._rollback();
-            return err;
-        };
-        self.meta.freelist = p.id;
+        // _db.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
+        // std.log.debug("after freelist free transaction dirty pages", .{});
+        // const allocatePageCount = _db.freelist.size() / _db.pageSize + 1;
+        // const p = self.allocate(allocatePageCount) catch |err| {
+        //     std.log.err("failed to allocate memory: {}", .{err});
+        //     self._rollback();
+        //     return Error.OutOfMemory;
+        // };
+        // assert(p.id >= 0 and p.flags >= 0, "Santy check!", .{});
+        // _db.freelist.write(p) catch |err| {
+        //     self._rollback();
+        //     return err;
+        // };
+        // self.meta.freelist = p.id;
 
         // If the high water mark has moved up then attempt to grow the database.
-        if (self.meta.pgid > opgid) {
-            const growSize = @as(usize, (self.meta.pgid + 1)) * self.db.?.pageSize;
-            _db.grow(growSize) catch |err| {
-                self._rollback();
-                return err;
-            };
-        }
+        // if (self.meta.pgid > opgid) {
+        //     const growSize = @as(usize, (self.meta.pgid + 1)) * self.db.?.pageSize;
+        //     _db.grow(growSize) catch |err| {
+        //         self._rollback();
+        //         return err;
+        //     };
+        // }
 
         // Write dirty pages to disk.
-        startTime = std.time.Timer.start() catch unreachable;
-        self.write() catch |err| {
-            self._rollback();
-            return err;
-        };
+        // startTime = std.time.Timer.start() catch unreachable;
+        // self.write() catch |err| {
+        //     self._rollback();
+        //     return err;
+        // };
 
         // If strict mode is enabled then perform a consistency check.
         // Only the first consistency error is reported in the panic.
-        if (_db.strictMode) {
-            self.check() catch |err| util.panicFmt("consistency check failed: {any}", .{err});
-        }
-        // Write meta to disk.
-        self.writeMeta() catch |err| {
-            self._rollback();
-            return err;
-        };
-        self.stats.writeTime += startTime.lap();
-        std.log.info("write cost time: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
-        //self.print();
-        // Finalize the transaction.
-        self.close();
-        std.log.debug("after close transaction.", .{});
-        // ok
+        // if (_db.strictMode) {
+        //     self.check() catch |err| util.panicFmt("consistency check failed: {any}", .{err});
+        // }
+        // // Write meta to disk.
+        // self.writeMeta() catch |err| {
+        //     self._rollback();
+        //     return err;
+        // };
+        // self.stats.writeTime += startTime.lap();
+        // std.log.info("write cost time: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
+        // // Finalize the transaction.
+        // self.close();
+        // std.log.debug("after close transaction.", .{});
     }
 
     /// Closes the transaction and ignores all previous updates. Read-only

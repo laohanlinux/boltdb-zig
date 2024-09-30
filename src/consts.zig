@@ -1,5 +1,5 @@
 const std = @import("std");
-
+const assert = @import("util.zig").assert;
 /// Represents a marker value to indicate that a file is a Bolt DB.
 pub const Magic = 0xED0CDAED;
 /// The data file format verison.
@@ -105,7 +105,8 @@ pub const KeyPair = struct {
     }
 };
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+// global general purpose allocator
+const gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 /// Get the global general purpose allocator.
 pub fn getGpa() *std.heap.GeneralPurposeAllocator {
@@ -116,11 +117,11 @@ pub fn getGpa() *std.heap.GeneralPurposeAllocator {
 pub const BufStr = struct {
     _str: ?[]const u8,
     ref: *std.atomic.Value(i64),
-    _allocator: ?std.mem.Allocator,
+    _allocator: std.mem.Allocator,
 
     /// Init a string.
-    pub fn init(allocator: ?std.mem.Allocator, str: ?[]const u8) @This() {
-        const _allocator = allocator orelse gpa.allocator();
+    pub fn init(allocator: std.mem.Allocator, str: ?[]const u8) @This() {
+        const _allocator = allocator;
         const refValue = _allocator.create(std.atomic.Value(i64)) catch unreachable;
         refValue.store(1, .seq_cst);
         return .{ ._str = str, ._allocator = allocator, .ref = refValue };
@@ -137,14 +138,13 @@ pub const BufStr = struct {
     }
 
     /// Dupe a string from a slice.
-    pub fn dupeFromSlice(allocator: ?std.mem.Allocator, str: ?[]const u8) @This() {
-        const _allocator = allocator orelse gpa.allocator();
-        const refValue = _allocator.create(std.atomic.Value(i64)) catch unreachable;
+    pub fn dupeFromSlice(allocator: std.mem.Allocator, str: ?[]const u8) @This() {
+        const refValue = allocator.create(std.atomic.Value(i64)) catch unreachable;
         refValue.store(1, .seq_cst);
         if (str == null) {
             return .{ ._str = null, ._allocator = allocator, .ref = refValue };
         }
-        const newStr = _allocator.dupe(u8, str.?) catch unreachable;
+        const newStr = allocator.dupe(u8, str.?) catch unreachable;
         return .{ ._str = newStr, ._allocator = allocator, .ref = refValue };
     }
 
@@ -158,26 +158,15 @@ pub const BufStr = struct {
     }
 
     /// Deinit a string.
-    pub fn deinit(self: *const @This()) void {
+    pub fn deinit(self: *@This()) void {
         const refValue = self.ref.fetchSub(1, .seq_cst);
-        // std.debug.print("deinit refValue: {}\n", .{refValue});
-        if (refValue < 1) {
-            unreachable;
-        }
+        assert(refValue > 0, "reference count is less than 1, refValue: {d}", .{refValue});
         if (refValue == 1) {
-            if (self._allocator) |allocator| {
-                if (self._str) |str| {
-                    allocator.free(str);
-                }
-                allocator.destroy(self.ref);
-            } else {
-                if (self._str) |str| {
-                    gpa.allocator().free(str);
-                }
-                gpa.allocator().destroy(self.ref);
+            if (self._str) |str| {
+                self._allocator.free(str);
             }
             std.log.debug("deinit BufStr\n", .{});
-            // self.* = undefined;
+            self.* = undefined;
         }
     }
 
@@ -185,15 +174,6 @@ pub const BufStr = struct {
     pub fn destroy(self: *@This()) void {
         self.deinit();
     }
-
-    // /// Create a new string from a slice.
-    // pub fn fromSlice(str: ?[]const u8) @This() {
-    //     var self: @This() = undefined;
-    //     self._str = str;
-    //     self.ref = undefined;
-    //     self._allocator = undefined;
-    //     return self;
-    // }
 
     /// Clone a string.
     pub fn clone(self: *@This()) @This() {
@@ -206,19 +186,19 @@ pub const BufStr = struct {
     }
 
     /// Copy a string.
-    pub fn copy(self: @This()) @This() {
-        const _ref = self._allocator.?.create(std.atomic.Value(i64)) catch unreachable;
+    pub fn copy(self: @This(), allocator: std.mem.Allocator) @This() {
+        const _ref = allocator.create(std.atomic.Value(i64)) catch unreachable;
         _ref.store(1, .seq_cst);
         if (self._str == null) {
             return .{
-                ._allocator = self._allocator,
+                ._allocator = allocator,
                 ._str = null,
                 .ref = _ref,
             };
         }
         return .{
-            ._allocator = self._allocator,
-            ._str = self._allocator.?.dupe(u8, self._str.?) catch unreachable,
+            ._allocator = allocator,
+            ._str = allocator.dupe(u8, self._str.?) catch unreachable,
             .ref = _ref,
         };
     }

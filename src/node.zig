@@ -10,14 +10,14 @@ const assert = @import("assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
-    bucket: ?*bucket.Bucket, // If the node is top root node, the key is null, but here ?
-    isLeaf: bool,
-    unbalance: bool,
-    spilled: bool,
+    bucket: ?*bucket.Bucket = null, // If the node is top root node, the key is null, but here ?
+    isLeaf: bool = false,
+    unbalance: bool = false,
+    spilled: bool = false,
     //key: ?[]const u8, // The key is reference to the key in the inodes that bytes slice is reference to the key in the page. It is the first key (min)
-    key: ?BufStr,
-    pgid: PgidType, // The node's page id
-    parent: ?*Node, // At memory
+    key: ?BufStr = null,
+    pgid: PgidType = 0, // The node's page id
+    parent: ?*Node = null, // At memory
     children: Nodes, // the is a soft reference to the children of the node, so the children should not be free.
     // The inodes for this node. If the node is a leaf, the inodes are key/value pairs.
     // If the node is a branch, the inodes are child page ids. The inodes are kept in sorted order.
@@ -30,24 +30,19 @@ pub const Node = struct {
     /// init a node with allocator.
     pub fn init(allocator: std.mem.Allocator) *Self {
         const self = allocator.create(Self) catch unreachable;
-        self.allocator = allocator;
-        self.bucket = null;
-        self.isLeaf = false;
-        self.unbalance = false;
-        self.spilled = false;
-        self.key = null;
-        self.pgid = 0;
-        self.parent = null;
-        self.children = std.ArrayList(*Node).init(self.allocator);
-        self.inodes = std.ArrayList(INode).init(self.allocator);
+        self.* = .{
+            .allocator = allocator,
+            .children = std.ArrayList(*Node).init(allocator),
+            .inodes = std.ArrayList(INode).init(allocator),
+        };
         return self;
     }
 
     /// free the node memory
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
-        for (self.inodes.items) |inode| {
-            inode.deinit(self.allocator);
+        for (0..self.inodes.items.len) |i| {
+            self.inodes.items[i].deinit(self.allocator);
         }
         self.inodes.deinit();
         self.children.deinit();
@@ -155,6 +150,7 @@ pub const Node = struct {
     }
 
     /// Inserts a key/value.
+    /// *Note*: the oldKey, newKey will be stored in the node, so the oldKey, newKey will not be freed
     pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: PgidType, flags: u32) void {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
@@ -165,7 +161,7 @@ pub const Node = struct {
         }
         // Find insertion index.
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
-        const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].key.?.asSlice().?));
+        const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].getKey().?));
         if (!exact) {
             // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
@@ -175,20 +171,20 @@ pub const Node = struct {
         inodeRef.*.flags = flags;
         inodeRef.*.pgid = pgid;
         if (!exact) {
+            // not found, allocate a new memory
             inodeRef.key = BufStr.init(self.allocator, newKey);
         } else {
             if (!std.mem.eql(u8, newKey, inodeRef.key.?.asSlice().?)) {
                 // free
-                self.allocator.free(inodeRef.key.?);
+                self.allocator.free(inodeRef.getKey().?);
                 inodeRef.key = BufStr.init(self.allocator, newKey);
             }
             // Free old value.
-            if (inodeRef.isNew and inodeRef.value != null) {
-                self.allocator.free(inodeRef.value.?.asSlice());
+            if (inodeRef.value != null) {
+                inodeRef.value.?.deinit();
             }
         }
         inodeRef.value = BufStr.init(self.allocator, value);
-        inodeRef.isNew = true;
         assert(inodeRef.key.?.len() > 0, "put: zero-length inode key", .{});
     }
 
@@ -259,7 +255,6 @@ pub const Node = struct {
         var b = p.getDataSlice()[self.pageElementSize() * self.inodes.items.len ..];
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
-            // std.log.debug("read element: {}, {}", .{ i, @intFromPtr(b.ptr) });
             assert(inode.key.?.len() > 0, "write: zero-length inode key", .{});
             // Write the page element.
             if (self.isLeaf) {
@@ -311,7 +306,7 @@ pub const Node = struct {
                 std.log.info("the node is not need to split", .{});
                 break;
             } else {
-                std.log.info("the node[{any}] is need to split", .{b});
+                std.log.info("the node[{any}] is need to split", .{b.?});
             }
 
             // Set node to be so it gets split on the next function.
@@ -465,12 +460,12 @@ pub const Node = struct {
                 }
                 const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?.asSlice().?) catch unreachable;
                 parent.put(key, newKey, null, node.pgid, 0);
-                if (node.key) |_key| {
-                    _key.deinit();
+                if (node.key != null) {
+                    node.key.?.deinit();
                 }
                 node.key = consts.BufStr.dupeFromSlice(self.allocator, newKey);
                 assert(node.key.?.len() > 0, "spill: zero-length node key", .{});
-                std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.?.asSlice() });
+                // std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.?.asSlice().? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
 
             // Update the statistics.
@@ -618,22 +613,23 @@ pub const Node = struct {
         //     self.key = _key;
         //     assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
         // }
-        if (self.key) |_key| {
-            const cpKey = self.key.?.copy();
+
+        if (self.key != null) {
+            const cpKey = self.key.?.copy(self.allocator);
+            self.key.?.deinit();
             self.key = cpKey;
-            _key.deinit();
             assert(self.pgid == 0 or self.key != null and self.key.?.len() > 0, "deference: zero-length node key on existing node", .{});
         }
 
         for (self.inodes.items) |*inode| {
-            const newKey = inode.key.?.copy();
+            const newKey = inode.key.?.copy(self.allocator);
             inode.key.?.deinit();
             inode.key = newKey;
             assert(inode.key != null and inode.key.?.len() > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
-                const newValue = value.copy();
-                value.deinit();
+                const newValue = value.copy(self.allocator);
+                inode.value.?.deinit(); // deinit the old value
                 inode.value = newValue;
                 assert(inode.value != null and inode.value.?.len() > 0, "deference: zero-length inode value on existing node", .{});
             }
@@ -666,13 +662,11 @@ pub const INode = struct {
     // The key is the first key in the inodes. the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
     // so the key should not be free. it will be free when the page is free.
     // key: ?[]const u8 = null,
-    key: ?BufStr,
+    key: ?BufStr = null,
     // If the value is nil then it's a branch node.
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
     value: ?BufStr = null,
-    // if the inode is new, then the inode will be free when the page is free.
-    // TODO use BufStr instead of the isNew flag
-    isNew: bool = false,
+
     const Self = @This();
 
     /// Initializes a node.
@@ -692,13 +686,25 @@ pub const INode = struct {
         return sz.len();
     }
 
+    /// getKey returns the key of the inode.
+    pub fn getKey(self: Self) ?[]const u8 {
+        const sz = self.key orelse return null;
+        return sz.asSlice().?;
+    }
+
+    /// getValue returns the value of the inode.
+    pub fn getValue(self: Self) ?[]u8 {
+        const sz = self.value orelse return null;
+        return sz.asSliceZ().?;
+    }
+
     /// deinit the inode
-    pub fn deinit(self: Self, _: std.mem.Allocator) void {
-        if (self.isNew) { //
+    pub fn deinit(self: *Self, _: std.mem.Allocator) void {
+        if (self.key != null) {
             self.key.?.deinit();
-            if (self.value) |value| {
-                value.deinit();
-            }
+        }
+        if (self.value != null) {
+            self.value.?.deinit();
         }
     }
 
@@ -709,7 +715,7 @@ pub const INode = struct {
 
     /// lower bound of the key
     pub fn lowerBoundFn(context: []const u8, item: @This()) std.math.Order {
-        return std.mem.order(u8, item.key.?.asSlice().?, context);
+        return std.mem.order(u8, item.getKey().?, context);
     }
 };
 
@@ -762,3 +768,5 @@ const Nodes = std.ArrayList(*Node);
 //     //       std.debug.print("\n{any}\n", .{inode.key.?});
 //     //   }
 // }
+
+test "bufstr" {}
