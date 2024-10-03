@@ -95,7 +95,7 @@ pub const TX = struct {
         while (nodesItr.next()) |kv| {
             try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "pid:{d}\t", .{kv.key_ptr.*}));
             if (kv.value_ptr.*.key) |key| {
-                try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "key:{s}\t", .{key.asSlice().?}));
+                try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "key:{s}\t", .{key}));
             }
         }
 
