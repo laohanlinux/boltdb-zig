@@ -556,7 +556,7 @@ pub const DB = struct {
         // Obtain writer lock. This released by the transaction when it closes.
         // This is enforces only one writer transaction at a time.
         self.rwlock.lock();
-        std.log.debug("lock rwlock!", .{});
+        // std.log.debug("lock rwlock!", .{});
 
         // Once we have the writer lock then we can lock the meta pages so that
         // we can set up the transaction.
@@ -583,6 +583,7 @@ pub const DB = struct {
             }
         }
 
+        // Release the pages associated with closed read-only transactions.
         if (minid > 0) {
             self.freelist.release(minid - 1) catch unreachable;
         }
@@ -960,49 +961,48 @@ test "DB-Write" {
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
 
-    // const updateFn = struct {
-    //     fn update(_kvDB: ?*DB, trx: *TX) Error!void {
-    //         if (_kvDB == null) {
-    //             return Error.DatabaseNotOpen;
-    //         }
-    //         const Context = struct {
-    //             _tx: *TX,
-    //         };
-    //         const ctx = Context{ ._tx = trx };
-    //         const forEach = struct {
-    //             fn inner(_: Context, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
-    //                 std.log.info("execute forEach, bucket name: {s}", .{bucketName});
-    //             }
-    //         };
-    //         std.log.info("Execute write transaction: {}", .{trx.getID()});
-    //         return trx.forEach(ctx, forEach.inner);
-    //     }
-    // };
+    const updateFn = struct {
+        fn update(_kvDB: ?*DB, trx: *TX) Error!void {
+            if (_kvDB == null) {
+                return Error.DatabaseNotOpen;
+            }
+            const Context = struct {
+                _tx: *TX,
+            };
+            const ctx = Context{ ._tx = trx };
+            const forEach = struct {
+                fn inner(_: Context, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
+                    std.log.info("execute forEach, bucket name: {s}", .{bucketName});
+                }
+            };
+            std.log.info("Execute write transaction: {}", .{trx.getID()});
+            return trx.forEach(ctx, forEach.inner);
+        }
+    }.update;
     {
         // test "DB-update"
-        // for (0..1) |i| {
-        //     _ = i; // autofix
-        //     try kvDB.update(kvDB, updateFn.update);
-        //     const meta = kvDB.getMeta();
-        //     // because only freelist page is used, so the max pgid is 5
-        //     assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
-        //     assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
-        //     assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
-        // }
+        for (0..1) |i| {
+            _ = i; // autofix
+            try kvDB.update(kvDB, updateFn);
+            const meta = kvDB.getMeta();
+            // because only freelist page is used, so the max pgid is 5
+            assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
+            assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
+            assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
+        }
 
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                _ = trx; // autofix
-                // var buf: [10]usize = undefined;
-                // randomBuf(buf[0..]);
-                // std.log.info("random: {any}\n", .{buf});
-                // for (buf) |i| {
-                //     const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
-                //     defer std.testing.allocator.free(bucketName);
-                //     const bt = try trx.createBucket(bucketName);
-                //     _ = bt; // autofix
-                // }
+                var buf: [1]usize = undefined;
+                randomBuf(buf[0..]);
+                std.log.info("random: {any}\n", .{buf});
+                for (buf) |i| {
+                    const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
+                    defer std.testing.allocator.free(bucketName);
+                    const bt = try trx.createBucket(bucketName);
+                    _ = bt; // autofix
+                }
                 // const bt = try trx.createBucket("hello");
                 // std.debug.print("create bucket: {s}\n", .{"hello"});
                 // try bt.put(consts.KeyPair.init("ping", "pong"));
@@ -1010,8 +1010,8 @@ test "DB-Write" {
                 // try bt.put(consts.KeyPair.init("Alice", "Bod"));
                 // _ = res; // autofix
             }
-        };
-        try kvDB.update({}, updateFn2.update);
+        }.update;
+        try kvDB.update({}, updateFn2);
 
         // const viewFn = struct {
         //     fn view(_: void, trx: *TX) Error!void {

@@ -188,7 +188,7 @@ pub const Page = struct {
     pub fn searchLeafElements(self: *Self, key: []const u8) struct { index: usize, exact: bool } {
         var left: usize = 0;
         var right: usize = self.count;
-
+        std.log.debug("searchLeafElements: {s}, count: {d}", .{ key, self.count });
         while (left < right) {
             const mid = left + (right - left) / 2;
             const element = self.leafPageElementPtr(mid);
@@ -262,6 +262,8 @@ pub const LeafPageElement = packed struct {
 
     /// Returns a byte slice of the node key.
     pub fn key(self: *const Self) []const u8 {
+        std.log.info("{any}", .{self});
+        std.log.info("{}, {}", .{ self.pos, self.kSize });
         const buf = @as([*]u8, @ptrCast(@constCast(self)));
         return buf[0..][self.pos..(self.pos + self.kSize)];
     }

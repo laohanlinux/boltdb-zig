@@ -13,6 +13,17 @@ const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 const BufStr = consts.BufStr;
 const PgidType = consts.PgidType;
 
+const AutoFreeObject = struct {
+    alignedValue: std.ArrayList([]u8),
+    tmpBuf: std.ArrayList(BufStr),
+    autoFreeNodes: std.ArrayList(*Node),
+    pub fn addNode(self: *AutoFreeObject, node: *Node) void {
+        const ptr = @intFromPtr(node);
+        std.log.info("addNode: {} (address: 0x{x})", .{ node.pgid, ptr });
+        self.autoFreeNodes.append(node) catch unreachable;
+    }
+};
+
 /// Represents a collection of key/value pairs inside the database.
 pub const Bucket = struct {
     isInittialized: bool = false,
@@ -23,7 +34,6 @@ pub const Bucket = struct {
     nodes: std.AutoHashMap(PgidType, *Node), // node cache
     rootNode: ?*Node = null, // materialized node for the root page. Same to nodes, if the transaction is onlyRead, it is null.
     page: ?*page.Page = null, // inline page reference
-    alignedValue: std.ArrayList([]u8),
 
     // Sets the thredshold for filling nodes when they split. By default,
     // the bucket will fill to 50% but it can be useful to increase this
@@ -33,6 +43,8 @@ pub const Bucket = struct {
     fillPercent: f64 = consts.DefaultFillPercent,
 
     allocator: std.mem.Allocator,
+
+    autoFreeObject: AutoFreeObject,
 
     const Self = @This();
 
@@ -57,40 +69,60 @@ pub const Bucket = struct {
         b.page = null;
         // set the fill percent
         b.fillPercent = consts.DefaultFillPercent;
-        b.alignedValue = std.ArrayList([]u8).init(b.allocator);
+        b.autoFreeObject = .{
+            .alignedValue = std.ArrayList([]u8).init(b.allocator),
+            .tmpBuf = std.ArrayList(BufStr).init(b.allocator),
+            .autoFreeNodes = std.ArrayList(*Node).init(b.allocator),
+        };
         return b;
     }
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
-        // std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
+        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
         self.isInittialized = false;
         var btIter = self.buckets.iterator();
         while (btIter.next()) |nextBucket| {
             self.allocator.free(nextBucket.key_ptr.*);
             nextBucket.value_ptr.*.deinit();
-            // self.allocator.destroy(nextBucket.value_ptr.*);
         }
         self.buckets.deinit();
-
-        var nodesItr = self.nodes.valueIterator();
-        while (nodesItr.next()) |nextNode| {
-            nextNode.*.deinit();
-        }
-        self.nodes.deinit();
 
         if (self.tx.?.writable) {
             if (self._b) |iBucket| {
                 iBucket.deinit(self.allocator);
             }
         }
-
-        for (self.alignedValue.items) |item| {
-            self.allocator.free(item);
+        {
+            var nodeIter = self.nodes.iterator();
+            while (nodeIter.next()) |nextNode| {
+                nextNode.value_ptr.*.deinit();
+            }
+            self.nodes.deinit();
         }
-        self.alignedValue.deinit();
 
+        // Free autoFreeObject
+        {
+            for (0..self.autoFreeObject.alignedValue.items.len) |i| {
+                self.allocator.free(self.autoFreeObject.alignedValue.items[i]);
+            }
+            self.autoFreeObject.alignedValue.deinit();
+
+            for (0..self.autoFreeObject.autoFreeNodes.items.len) |i| {
+                std.log.info("autoFreeObject.autoFreeNodes.items[{}]: {any}", .{ i, self.autoFreeObject.autoFreeNodes.items[i].key });
+                self.autoFreeObject.autoFreeNodes.items[i].deinit();
+            }
+            for (0..self.autoFreeObject.autoFreeNodes.items.len) |i| {
+                self.autoFreeObject.autoFreeNodes.items[i].destroy();
+            }
+            self.autoFreeObject.autoFreeNodes.deinit();
+
+            for (0..self.autoFreeObject.tmpBuf.items.len) |i| {
+                self.autoFreeObject.tmpBuf.items[i].deinit();
+            }
+            self.autoFreeObject.tmpBuf.deinit();
+        }
         self.allocator.destroy(self);
     }
 
@@ -142,7 +174,7 @@ pub const Bucket = struct {
     /// from a parent into a Bucket
     pub fn openBucket(self: *Self, value: []u8) *Bucket {
         // std.log.info("openBucket, value: {any}", .{value});
-        var child = Bucket.init(self.tx.?);
+        const child = Bucket.init(self.tx.?);
         // TODO
         // If unaligned load/stores are broken on this arch and value is
         // unaligned simply clone to an aligned byte array.
@@ -152,10 +184,11 @@ pub const Bucket = struct {
         if (!isAligned) {
             alignedValue = self.allocator.alloc(u8, value.len) catch unreachable;
             @memcpy(alignedValue, value);
-            self.alignedValue.append(alignedValue) catch unreachable;
+            self.autoFreeObject.alignedValue.append(alignedValue) catch unreachable;
             std.log.warn("unaligned memory, align size: {}", .{alignedValue.len});
         } else {
             alignedValue = value;
+            std.log.warn("aligned memory, align size: {}, value: {any}", .{ alignedValue.len, alignedValue });
         }
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
@@ -192,7 +225,9 @@ pub const Bucket = struct {
         } else if (key.len == 0) {
             return Error.BucketNameRequired;
         }
+        // copy the key, avoid the key be freed by the caller.
         const cpKey = self.allocator.dupe(u8, key) catch unreachable;
+        errdefer self.allocator.free(cpKey);
         // Move cursor to correct position.
         var c = self.cursor();
         defer c.deinit();
@@ -201,10 +236,8 @@ pub const Bucket = struct {
         // Return an error if there is an existing key.
         if (keyPairRef.first != null and std.mem.eql(u8, key, keyPairRef.first.?)) {
             if (keyPairRef.third & consts.BucketLeafFlag != 0) {
-                self.allocator.free(cpKey);
                 return Error.BucketExists;
             }
-            self.allocator.free(cpKey);
             return Error.IncompactibleValue;
         }
 
@@ -212,8 +245,8 @@ pub const Bucket = struct {
         const newBucket = Bucket.init(self.tx.?);
         defer newBucket.deinit();
         newBucket.rootNode = Node.init(self.allocator);
-        defer newBucket.rootNode.?.deinit();
         newBucket.rootNode.?.isLeaf = true;
+        self.autoFreeObject.addNode(newBucket.rootNode.?);
 
         const value = newBucket.write();
         // Insert into node
@@ -266,7 +299,7 @@ pub const Bucket = struct {
         const child = self.getBucket(key).?;
         try child.forEach(traveBucket);
 
-        // Remove cached copy.
+        // Remove cached copy. TODO memory leak
         _ = self.buckets.remove(key);
 
         // Release all bucket pages to the freelist.
@@ -639,9 +672,11 @@ pub const Bucket = struct {
             if (inode.value) |value| {
                 size += value.len();
             }
+            // include the bucket leaf flag
             if (inode.flags & consts.BucketLeafFlag != 0) {
                 return false;
             } else if (size > self.maxInlineBucketSize()) {
+                // the size of the bucket is greater than the maximum inline bucket size
                 return false;
             }
         }
@@ -702,8 +737,10 @@ pub const Bucket = struct {
     // Recursively frees all pages in the bucket.
     fn freeTravel(trx: *tx.TX, p: ?*const page.Page, n: ?*Node, _: usize) void {
         if (p) |_p| {
+            // free the page
             trx.db.?.freelist.free(trx.meta.txid, _p) catch unreachable;
         } else {
+            // free the node
             n.?.free();
         }
     }
@@ -767,6 +804,7 @@ pub const Bucket = struct {
         // Read the page into the node and cacht it.
         n.read(p.?);
         self.nodes.put(pgid, n) catch unreachable;
+        self.autoFreeObject.autoFreeNodes.append(n) catch unreachable;
 
         // Update statistic.
         self.tx.?.stats.nodeCount += 1;
@@ -792,7 +830,7 @@ pub const _Bucket = packed struct {
     sequence: u64 = 0, // montotically incrementing. used by next_sequence().
     /// Init _Bucket with a given slice
     pub fn init(slice: []u8) *_Bucket {
-        // util.assert(slice.len >= _Bucket.size(), "slice is too short to init _Bucket", .{});
+        util.assert(slice.len >= _Bucket.size(), "slice is too short to init _Bucket", .{});
         const aligned_slice: []align(@alignOf(_Bucket)) u8 = @alignCast(slice);
         const ptr: *_Bucket = @ptrCast(aligned_slice.ptr);
         return ptr;

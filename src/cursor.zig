@@ -378,6 +378,7 @@ pub const Cursor = struct {
         // Retrieve value from node.
         if (ref.node) |refNode| {
             const inode = &refNode.inodes.items[ref.index];
+            // std.log.info("keyValue: {any}", .{inode});
             return KeyValueRef{ .first = inode.getKey(), .second = inode.getValue(), .third = inode.flags };
         }
 

@@ -23,6 +23,7 @@ pub const Node = struct {
     // If the node is a branch, the inodes are child page ids. The inodes are kept in sorted order.
     // The inodes are reference to the inodes in the page, so the inodes should not be free.
     inodes: INodes,
+    isFreed: bool = false,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -40,12 +41,23 @@ pub const Node = struct {
 
     /// free the node memory
     pub fn deinit(self: *Self) void {
+        if (self.isFreed) {
+            return;
+        }
+        assert(self.isFreed == false, "the node is already freed", .{});
+        self.isFreed = true;
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (0..self.inodes.items.len) |i| {
             self.inodes.items[i].deinit(self.allocator);
         }
         self.inodes.deinit();
         self.children.deinit();
+    }
+
+    /// Destroy the node.
+    pub fn destroy(self: *Self) void {
+        self.deinit();
+        self.allocator.destroy(self);
     }
 
     /// Returns the top-level node this node is attached to.
@@ -166,6 +178,7 @@ pub const Node = struct {
             // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
             self.inodes.insert(index, insertINode) catch unreachable;
+            self.bucket.?.autoFreeObject.addNode(self);
         }
         const inodeRef = &self.inodes.items[index];
         inodeRef.*.flags = flags;
@@ -185,6 +198,7 @@ pub const Node = struct {
             }
         }
         inodeRef.value = BufStr.init(self.allocator, value);
+        std.log.info("put: {s}, {any}", .{ newKey, value.? });
         assert(inodeRef.key.?.len() > 0, "put: zero-length inode key", .{});
     }
 
@@ -207,25 +221,30 @@ pub const Node = struct {
             if (self.isLeaf) {
                 const elem = p.leafPageElementPtr(i);
                 inode.flags = elem.flags;
-                inode.key = BufStr.init(self.allocator, elem.key());
-                inode.key.?.incrRef();
-                inode.value = BufStr.init(self.allocator, elem.value());
-                inode.value.?.incrRef();
+                // inode.key = BufStr.init(self.allocator, elem.key());
+                // inode.key.?.incrRef();
+                // inode.value = BufStr.init(self.allocator, elem.value());
+                // inode.value.?.incrRef();
+
+                inode.key = BufStr.init(self.allocator, self.allocator.dupe(u8, elem.key()) catch unreachable);
+                inode.value = BufStr.init(self.allocator, self.allocator.dupe(u8, elem.value()) catch unreachable);
             } else {
                 const elem = p.branchPageElementPtr(i);
                 inode.pgid = elem.pgid;
-                inode.key = BufStr.init(self.allocator, elem.key());
-                inode.key.?.incrRef();
+                // inode.key = BufStr.init(self.allocator, elem.key());
+                // inode.key.?.incrRef();
+                inode.key = BufStr.init(self.allocator, self.allocator.dupe(u8, elem.key()) catch unreachable);
             }
             assert(inode.key.?.len() > 0, "key is null", .{});
             self.inodes.append(inode) catch unreachable;
+            self.bucket.?.autoFreeObject.addNode(self);
         }
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            // self.key = self.inodes.items[0].key.?;
+            // self.key = BufStr.init(self.allocator, self.inodes.items[0].key.?.asSlice());
+            // self.key.?.incrRef();
             self.key = BufStr.init(self.allocator, self.inodes.items[0].key.?.asSlice());
-            self.key.?.incrRef();
             assert(self.key.?.len() > 0, "key is null", .{});
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
@@ -285,7 +304,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value.asSlice().?);
                 b = b[vLen..];
             }
-            //std.log.info("inode: {s}, key: {s}", .{ inode.key.?, inode.value.? });
+            std.log.info("inode: {s}, value: {any}", .{ inode.key.?.asSlice().?, inode.value.?.asSlice().? });
         }
 
         // DEBUG ONLY: n.deump()
@@ -346,6 +365,7 @@ pub const Node = struct {
             self.parent = Node.init(self.allocator);
             self.parent.?.bucket = self.bucket;
             self.children.append(self) catch unreachable; // children also is you!
+            self.bucket.?.autoFreeObject.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
@@ -356,6 +376,7 @@ pub const Node = struct {
 
         // Split inodes across two nodes.
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
+        self.bucket.?.autoFreeObject.addNode(next);
         // shrink self.inodes to _splitIndex
         self.inodes.resize(_splitIndex) catch unreachable;
 
@@ -427,9 +448,6 @@ pub const Node = struct {
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
         defer self.allocator.free(nodes);
-        defer for (nodes) |node| {
-            node.deinit();
-        };
 
         for (nodes, 0..) |node, i| {
             _ = i; // autofix
@@ -465,7 +483,7 @@ pub const Node = struct {
                 }
                 node.key = consts.BufStr.dupeFromSlice(self.allocator, newKey);
                 assert(node.key.?.len() > 0, "spill: zero-length node key", .{});
-                // std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.?.asSlice().? });
+                std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.?.asSlice().? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
 
             // Update the statistics.
@@ -702,9 +720,11 @@ pub const INode = struct {
     pub fn deinit(self: *Self, _: std.mem.Allocator) void {
         if (self.key != null) {
             self.key.?.deinit();
+            self.key = null;
         }
         if (self.value != null) {
             self.value.?.deinit();
+            self.value = null;
         }
     }
 
