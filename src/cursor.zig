@@ -327,7 +327,7 @@ pub const Cursor = struct {
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
         const searchFn = struct {
             fn searchFn(_key: []const u8, inode: INode) std.math.Order {
-                return std.mem.order(u8, _key, inode.key.?.asSlice().?);
+                return std.mem.order(u8, _key, inode.key.?);
             }
         }.searchFn;
         const index = std.sort.binarySearch(INode, n.inodes.items, key, searchFn) orelse (n.inodes.items.len - 1);

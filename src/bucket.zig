@@ -18,9 +18,11 @@ const AutoFreeObject = struct {
     tmpBuf: std.ArrayList(BufStr),
     autoFreeNodes: std.ArrayList(*Node),
     pub fn addNode(self: *AutoFreeObject, node: *Node) void {
-        const ptr = @intFromPtr(node);
-        std.log.info("addNode: {} (address: 0x{x})", .{ node.pgid, ptr });
-        self.autoFreeNodes.append(node) catch unreachable;
+        _ = self; // autofix
+        _ = node; // autofix
+        // const ptr = @intFromPtr(node);
+        // std.log.info("addNode: {} (address: 0x{x})", .{ node.pgid, ptr });
+        // self.autoFreeNodes.append(node) catch unreachable;
     }
 };
 
@@ -122,6 +124,10 @@ pub const Bucket = struct {
                 self.autoFreeObject.tmpBuf.items[i].deinit();
             }
             self.autoFreeObject.tmpBuf.deinit();
+        }
+        if (self.rootNode) |_node| {
+            self.allocator.destroy(_node);
+            self.rootNode = null;
         }
         self.allocator.destroy(self);
     }
@@ -246,7 +252,6 @@ pub const Bucket = struct {
         defer newBucket.deinit();
         newBucket.rootNode = Node.init(self.allocator);
         newBucket.rootNode.?.isLeaf = true;
-        self.autoFreeObject.addNode(newBucket.rootNode.?);
 
         const value = newBucket.write();
         // Insert into node
@@ -668,9 +673,9 @@ pub const Bucket = struct {
         // our threshold for inline bucket size.
         var size = page.Page.headerSize();
         for (n.?.inodes.items) |inode| {
-            size += page.LeafPageElement.headerSize() + inode.key.?.len();
+            size += page.LeafPageElement.headerSize() + inode.key.?.len;
             if (inode.value) |value| {
-                size += value.len();
+                size += value.len;
             }
             // include the bucket leaf flag
             if (inode.flags & consts.BucketLeafFlag != 0) {
@@ -804,7 +809,6 @@ pub const Bucket = struct {
         // Read the page into the node and cacht it.
         n.read(p.?);
         self.nodes.put(pgid, n) catch unreachable;
-        self.autoFreeObject.autoFreeNodes.append(n) catch unreachable;
 
         // Update statistic.
         self.tx.?.stats.nodeCount += 1;
