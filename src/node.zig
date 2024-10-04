@@ -23,6 +23,9 @@ pub const Node = struct {
     // The inodes are reference to the inodes in the page, so the inodes should not be free.
     inodes: INodes,
     isFreed: bool = false,
+    // The id of the node.
+    id: u64 = 0,
+
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -30,11 +33,15 @@ pub const Node = struct {
     /// init a node with allocator.
     pub fn init(allocator: std.mem.Allocator) *Self {
         const self = allocator.create(Self) catch unreachable;
+        const id = std.crypto.random.int(u64);
         self.* = .{
             .allocator = allocator,
             .children = std.ArrayList(*Node).init(allocator),
             .inodes = std.ArrayList(INode).init(allocator),
+            .id = id,
         };
+        const ptr = @intFromPtr(self);
+        std.log.debug("trace node, create a node, node id: {d}, ptr: {d}", .{ self.id, ptr });
         return self;
     }
 
@@ -43,6 +50,8 @@ pub const Node = struct {
         if (self.isFreed) {
             return;
         }
+        const ptr = @intFromPtr(self);
+        std.log.debug("trace node, deinit node, node id: {d}, ptr: {d}", .{ self.id, ptr });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
@@ -162,7 +171,7 @@ pub const Node = struct {
 
     /// Inserts a key/value.
     /// *Note*: the oldKey, newKey will be stored in the node, so the oldKey, newKey will not be freed
-    pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: PgidType, flags: u32) void {
+    pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: PgidType, flags: u32) *INode {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
         } else if (oldKey.len <= 0) {
@@ -177,7 +186,6 @@ pub const Node = struct {
             // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
             self.inodes.insert(index, insertINode) catch unreachable;
-            self.bucket.?.autoFreeObject.addNode(self);
         }
         const inodeRef = &self.inodes.items[index];
         inodeRef.*.flags = flags;
@@ -198,8 +206,8 @@ pub const Node = struct {
             }
         }
         inodeRef.value = value;
-        std.log.info("put: {s}, {any}", .{ newKey, value.? });
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
+        return inodeRef;
     }
 
     /// Removes a key from the node.
@@ -221,23 +229,17 @@ pub const Node = struct {
             if (self.isLeaf) {
                 const elem = p.leafPageElementPtr(i);
                 inode.flags = elem.flags;
-                // inode.key = BufStr.init(self.allocator, elem.key());
-                // inode.key.?.incrRef();
-                // inode.value = BufStr.init(self.allocator, elem.value());
-                // inode.value.?.incrRef();
-
+                inode.isNew = false;
                 inode.key = self.allocator.dupe(u8, elem.key()) catch unreachable;
                 inode.value = self.allocator.dupe(u8, elem.value()) catch unreachable;
             } else {
                 const elem = p.branchPageElementPtr(i);
                 inode.pgid = elem.pgid;
-                // inode.key = BufStr.init(self.allocator, elem.key());
-                // inode.key.?.incrRef();
+                inode.isNew = false;
                 inode.key = self.allocator.dupe(u8, elem.key()) catch unreachable;
             }
             assert(inode.key.?.len > 0, "key is null", .{});
             self.inodes.append(inode) catch unreachable;
-            self.bucket.?.autoFreeObject.addNode(self);
         }
 
         // Save first key so we can find the node in the parent when we spill.
@@ -302,7 +304,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            std.log.info("inode: {s}, value: {any}", .{ inode.key.?, inode.value.? });
+            // std.log.info("inode: {s}, value: {any}", .{ inode.key.?, inode.value.? });
         }
 
         // DEBUG ONLY: n.deump()
@@ -315,7 +317,8 @@ pub const Node = struct {
         var curNode = self;
         while (true) {
             // Split node into two.
-            const a, const b = self.splitTwo(_pageSize);
+            const count = curNode.inodes.items.len;
+            const a, const b = curNode.splitTwo(_pageSize);
             nodes.append(a.?) catch unreachable;
 
             // If we can't split then exit the loop.
@@ -323,7 +326,8 @@ pub const Node = struct {
                 std.log.info("the node is not need to split", .{});
                 break;
             } else {
-                std.log.info("the node[{any}] is need to split", .{b.?});
+                std.log.info("the node[{d} -> {d}] is need to split", .{ count, a.?.inodes.items.len });
+                self.bucket.?.autoFreeObject.addNode(a.?);
             }
 
             // Set node to be so it gets split on the next function.
@@ -368,13 +372,14 @@ pub const Node = struct {
 
         // Create a new node and add it to the parent.
         const next = Node.init(self.allocator);
+        self.bucket.?.autoFreeObject.addNode(next);
         next.bucket = self.bucket;
         next.isLeaf = self.isLeaf;
         next.parent = self.parent;
+        self.parent.?.children.append(next) catch unreachable;
 
         // Split inodes across two nodes.
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
-        self.bucket.?.autoFreeObject.addNode(next);
         // shrink self.inodes to _splitIndex
         self.inodes.resize(_splitIndex) catch unreachable;
 
@@ -446,17 +451,16 @@ pub const Node = struct {
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
         defer self.allocator.free(nodes);
-
+        std.log.debug("nodes size: {d}, key: {s}", .{ nodes.len, self.key orelse "empty" });
         for (nodes, 0..) |node, i| {
-            _ = i; // autofix
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
+                std.log.debug("free node=>: {d}, i: {d}", .{ node.pgid, i });
                 // TODO why free the page
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 node.pgid = 0;
             }
-
             // Allocate contiguous space for the node.(COW: Copy on Write)
             // TODO why +1
             const allocateSize: usize = node.size() / _db.pageSize + 1;
@@ -470,12 +474,12 @@ pub const Node = struct {
             if (node.parent) |parent| {
                 const key: []const u8 = node.key orelse node.inodes.items[0].key.?;
                 const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
-                parent.put(key, newKey, null, node.pgid, 0);
+                _ = parent.put(key, newKey, null, node.pgid, 0);
                 if (node.key != null) {
                     self.allocator.free(node.key.?);
-                    self.key = null;
                 }
                 node.key = newKey;
+                //self.bucket.?.autoFreeObject.addNode(parent);
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
@@ -487,7 +491,7 @@ pub const Node = struct {
         // If the root node split and created a new root then we need to spill that
         // as well. We'll clear out the children to make sure it doesn't try to respill.
         if (self.parent != null and self.parent.?.pgid == 0) {
-            self.children.clearAndFree();
+            // self.children.clearAndFree();
             return self.parent.?.spill();
         }
     }
@@ -678,11 +682,19 @@ pub const INode = struct {
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.
     value: ?[]u8 = null,
 
+    // if the inode is new, then the inode will be added to the inodes list.
+    isNew: bool = true,
+
+    /// The id of the inode.
+    id: u64 = 0,
+
     const Self = @This();
 
     /// Initializes a node.
     pub fn init(flags: u32, pgid: PgidType, key: ?[]const u8, value: ?[]u8) Self {
-        return .{ .flags = flags, .pgid = pgid, .key = key, .value = value };
+        const id = std.crypto.random.int(u64);
+        std.log.debug("create a inode, inode id: {d}", .{id});
+        return .{ .flags = flags, .pgid = pgid, .key = key, .value = value, .id = id };
     }
 
     /// keyLen returns the length of the key.
@@ -695,6 +707,12 @@ pub const INode = struct {
     pub fn valueLen(self: Self) usize {
         const sz = self.value orelse return 0;
         return sz.len();
+    }
+
+    /// setKey sets the key of the inode, and set the inode to new.
+    pub fn setKey(self: *Self, key: []const u8) void {
+        self.key = key;
+        self.isNew = true;
     }
 
     /// getKey returns the key of the inode.

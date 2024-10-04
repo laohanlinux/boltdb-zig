@@ -12,17 +12,45 @@ const Error = @import("error.zig").Error;
 const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
 const BufStr = consts.BufStr;
 const PgidType = consts.PgidType;
+// A set of nodes that will be freed by the bucket.
+const NodeSet = std.AutoHashMap(*Node, void);
 
+// A set of aligned values that will be freed by the bucket.
 const AutoFreeObject = struct {
+    // A set of aligned values that will be freed by the bucket.
     alignedValue: std.ArrayList([]u8),
-    tmpBuf: std.ArrayList(BufStr),
-    autoFreeNodes: std.ArrayList(*Node),
+    // A set of nodes that will be freed by the bucket.
+    // 1: Note, the bucket.nodes is not in the autoFreeObject, so we need to destroy it manually.
+    // But the bucket.rootNode is in the autoFreeObject, so we don't need to destroy it manually.
+    // Because the bucket.rootNode is a special node, it is the root node of the bucket.
+    // So, we need to destroy it manually.
+    // 2: the nodes of autoFreeNodes is a new node that created after tx.commit(Copy on Write), their are is a spill node, a snapshot node, a new node.
+    autoFreeNodes: NodeSet,
+    /// Add a node to the auto free object.
     pub fn addNode(self: *AutoFreeObject, node: *Node) void {
-        _ = self; // autofix
-        _ = node; // autofix
-        // const ptr = @intFromPtr(node);
-        // std.log.info("addNode: {} (address: 0x{x})", .{ node.pgid, ptr });
-        // self.autoFreeNodes.append(node) catch unreachable;
+        const gop = self.autoFreeNodes.getOrPut(node) catch unreachable;
+        const ptr = @intFromPtr(node);
+        assert(gop.found_existing == false, "the node({}: 0x{x}) is already in the auto free nodes", .{ node.pgid, ptr });
+    }
+
+    /// Add an aligned value to the auto free object.
+    pub fn addAlignedValue(self: *AutoFreeObject, value: []u8) void {
+        self.alignedValue.append(value) catch unreachable;
+    }
+
+    /// Deinit the auto free object.
+    pub fn deinit(self: *AutoFreeObject, allocator: std.mem.Allocator) void {
+        var it = self.autoFreeNodes.keyIterator();
+        while (it.next()) |node| {
+            node.*.deinit();
+            node.*.destroy();
+        }
+        self.autoFreeNodes.deinit();
+
+        for (0..self.alignedValue.items.len) |i| {
+            allocator.free(self.alignedValue.items[i]);
+        }
+        self.alignedValue.deinit();
     }
 };
 
@@ -73,8 +101,7 @@ pub const Bucket = struct {
         b.fillPercent = consts.DefaultFillPercent;
         b.autoFreeObject = .{
             .alignedValue = std.ArrayList([]u8).init(b.allocator),
-            .tmpBuf = std.ArrayList(BufStr).init(b.allocator),
-            .autoFreeNodes = std.ArrayList(*Node).init(b.allocator),
+            .autoFreeNodes = NodeSet.init(b.allocator),
         };
         return b;
     }
@@ -97,37 +124,17 @@ pub const Bucket = struct {
             }
         }
         {
+            // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
             var nodeIter = self.nodes.iterator();
             while (nodeIter.next()) |nextNode| {
                 nextNode.value_ptr.*.deinit();
             }
             self.nodes.deinit();
         }
-
+        self.rootNode = null; // just set the rootNode to null, don't destroy it(it will be destroyed by the autoFreeObject)
         // Free autoFreeObject
         {
-            for (0..self.autoFreeObject.alignedValue.items.len) |i| {
-                self.allocator.free(self.autoFreeObject.alignedValue.items[i]);
-            }
-            self.autoFreeObject.alignedValue.deinit();
-
-            for (0..self.autoFreeObject.autoFreeNodes.items.len) |i| {
-                std.log.info("autoFreeObject.autoFreeNodes.items[{}]: {any}", .{ i, self.autoFreeObject.autoFreeNodes.items[i].key });
-                self.autoFreeObject.autoFreeNodes.items[i].deinit();
-            }
-            for (0..self.autoFreeObject.autoFreeNodes.items.len) |i| {
-                self.autoFreeObject.autoFreeNodes.items[i].destroy();
-            }
-            self.autoFreeObject.autoFreeNodes.deinit();
-
-            for (0..self.autoFreeObject.tmpBuf.items.len) |i| {
-                self.autoFreeObject.tmpBuf.items[i].deinit();
-            }
-            self.autoFreeObject.tmpBuf.deinit();
-        }
-        if (self.rootNode) |_node| {
-            self.allocator.destroy(_node);
-            self.rootNode = null;
+            self.autoFreeObject.deinit(self.allocator);
         }
         self.allocator.destroy(self);
     }
@@ -252,10 +259,11 @@ pub const Bucket = struct {
         defer newBucket.deinit();
         newBucket.rootNode = Node.init(self.allocator);
         newBucket.rootNode.?.isLeaf = true;
-
+        self.autoFreeObject.addNode(newBucket.rootNode.?);
         const value = newBucket.write();
+
         // Insert into node
-        c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
+        _ = c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
         std.log.info("create a new bucket: {s}, value: {any}", .{ cpKey, value });
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
@@ -642,7 +650,7 @@ pub const Bucket = struct {
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.first.?) });
             assert(keyPairRef.third & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});
-            c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
+            _ = c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
         }
 
