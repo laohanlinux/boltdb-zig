@@ -28,9 +28,14 @@ const AutoFreeObject = struct {
     autoFreeNodes: NodeSet,
     /// Add a node to the auto free object.
     pub fn addNode(self: *AutoFreeObject, node: *Node) void {
+        const key = node.key orelse "";
         const gop = self.autoFreeNodes.getOrPut(node) catch unreachable;
         const ptr = @intFromPtr(node);
-        assert(gop.found_existing == false, "the node({}: 0x{x}) is already in the auto free nodes", .{ node.pgid, ptr });
+        // assert(gop.found_existing == false, "the node({}: 0x{x}, {d}) is already in the auto free nodes", .{ node.pgid, ptr, node.id });
+        std.log.debug("add node to the auto free nodes, key: {s}, pgid: {d}, ptr: 0x{x}, id: {d}", .{ key, node.pgid, ptr, node.id });
+        if (gop.found_existing) {
+            std.log.debug("the node({s}, {}: 0x{x}, {d}) is already in the auto free nodes", .{ key, node.pgid, ptr, node.id });
+        }
     }
 
     /// Add an aligned value to the auto free object.
@@ -42,7 +47,7 @@ const AutoFreeObject = struct {
     pub fn deinit(self: *AutoFreeObject, allocator: std.mem.Allocator) void {
         var it = self.autoFreeNodes.keyIterator();
         while (it.next()) |node| {
-            node.*.deinit();
+            // node.*.deinit();
             node.*.destroy();
         }
         self.autoFreeNodes.deinit();
@@ -127,7 +132,7 @@ pub const Bucket = struct {
             // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
             var nodeIter = self.nodes.iterator();
             while (nodeIter.next()) |nextNode| {
-                nextNode.value_ptr.*.deinit();
+                nextNode.value_ptr.*.destroy();
             }
             self.nodes.deinit();
         }
@@ -198,10 +203,12 @@ pub const Bucket = struct {
             alignedValue = self.allocator.alloc(u8, value.len) catch unreachable;
             @memcpy(alignedValue, value);
             self.autoFreeObject.alignedValue.append(alignedValue) catch unreachable;
-            std.log.warn("unaligned memory, align size: {}", .{alignedValue.len});
+            // self.stats().unAlignValueN += 1;
+            // std.log.warn("unaligned memory, align size: {}", .{alignedValue.len});
         } else {
             alignedValue = value;
-            std.log.warn("aligned memory, align size: {}, value: {any}", .{ alignedValue.len, alignedValue });
+            // self.stats().alignValueN += 1;
+            // std.log.warn("aligned memory, align size: {}, value: {any}", .{ alignedValue.len, alignedValue });
         }
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
@@ -239,12 +246,10 @@ pub const Bucket = struct {
             return Error.BucketNameRequired;
         }
         // copy the key, avoid the key be freed by the caller.
-        const cpKey = self.allocator.dupe(u8, key) catch unreachable;
-        errdefer self.allocator.free(cpKey);
         // Move cursor to correct position.
         var c = self.cursor();
         defer c.deinit();
-        const keyPairRef = c._seek(cpKey);
+        const keyPairRef = c._seek(key);
 
         // Return an error if there is an existing key.
         if (keyPairRef.first != null and std.mem.eql(u8, key, keyPairRef.first.?)) {
@@ -253,6 +258,9 @@ pub const Bucket = struct {
             }
             return Error.IncompactibleValue;
         }
+
+        const cpKey = self.allocator.dupe(u8, key) catch unreachable;
+        errdefer self.allocator.free(cpKey);
 
         // Create empty, inline bucket.
         const newBucket = Bucket.init(self.tx.?);
@@ -264,7 +272,7 @@ pub const Bucket = struct {
 
         // Insert into node
         _ = c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
-        // std.log.info("create a new bucket: {s}, value: {any}", .{ cpKey, value });
+        std.log.info("create a new bucket: {s}", .{cpKey});
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
         // to be treated as regular, non-inline bucket for the rest of the tx.
@@ -375,9 +383,9 @@ pub const Bucket = struct {
         }
 
         // Insert into node.
-        const cpKey = self.allocator.dupe(u8, keyPair.key.?);
-        const cpValue = self.allocator.dupe(u8, keyPair.value.?);
-        c.node().?.put(cpKey, cpKey, cpValue, 0, 0);
+        const cpKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
+        const cpValue = self.allocator.dupe(u8, keyPair.value.?) catch unreachable;
+        _ = c.node().?.put(cpKey, cpKey, cpValue, 0, 0);
     }
 
     /// Removes a key from the bucket.
@@ -478,9 +486,10 @@ pub const Bucket = struct {
     }
 
     /// Return stats on a bucket.
-    pub fn stats(self: *const Self) BucketStats {
+    pub fn stats(self: *Self) BucketStats {
         var s = BucketStats.init();
-        const subStats = BucketStats.init();
+        var subStats = BucketStats.init();
+        assert(self.tx != null, "tx closed", .{});
         const pageSize = self.tx.?.db.?.pageSize;
         s.BucketN += 1;
         if (self._b.?.root == 0) {
@@ -488,7 +497,7 @@ pub const Bucket = struct {
         }
         const tuple3 = Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats);
         const tuple3Arg = tuple3{ .first = self, .second = &s, .third = &subStats };
-        self.forEachPage(tuple3, tuple3Arg, travelStats);
+        self.forEachPage(tuple3Arg, travelStats);
 
         // Alloc stats can be computed from page counts and pageSize.
         s.BranchAlloc = (s.BranchPageN + s.BranchOverflowN) * pageSize;
@@ -498,10 +507,13 @@ pub const Bucket = struct {
         s.depth += subStats.depth;
         // Add the stats for all sub-buckets.
         s.add(&subStats);
+        return s;
     }
 
     // Travel the bucket and its sub-buckets to collect stats.
     fn travelStats(context: Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats), p: *const page.Page, depth: usize) void {
+        assert(context.first != null, "bucket is null", .{});
+        assert(context.second != null, "bucket stats is null", .{});
         const b = context.first.?;
         const s = context.second.?;
         if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
@@ -509,7 +521,7 @@ pub const Bucket = struct {
 
             // used totals the used bytes for the page.
             var used = page.Page.headerSize();
-
+            std.log.debug("travelStats: depth: {d}, page: {any}", .{ depth, p });
             if (p.count != 0) {
                 // If page has any elements, add all element headers.
                 used += page.LeafPageElement.headerSize() * @as(usize, p.count - 1); // TODO why -1.
@@ -519,7 +531,7 @@ pub const Bucket = struct {
                 // of the last element's key/value equals to the total of the sizes.
                 // of all previous elements' keys and values.
                 // It also includes the last element's header.
-                const lastElement = p.leafPageElement(@as(usize, p.count - 1));
+                const lastElement = p.leafPageElementRef(@as(usize, p.count - 1));
                 used += @as(usize, lastElement.?.pos + lastElement.?.kSize + lastElement.?.vSize);
             }
 
@@ -536,7 +548,7 @@ pub const Bucket = struct {
                 // Do that by iterating over all element headers
                 // looking for the ones with the bucketLeafFlag.
                 for (0..p.count) |i| {
-                    const elem = p.leafPageElement(i).?;
+                    const elem = p.leafPageElementRef(i).?;
                     if (elem.flags & consts.BucketLeafFlag != 0) {
                         // For any bucket elements. open the element value
                         // and recursively call Stats on the contained bucket.
@@ -546,11 +558,11 @@ pub const Bucket = struct {
             }
         } else if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
             s.BranchPageN += 1;
-            const lastElement = p.branchPageElementPtr(p.count - 1);
+            const lastElement = p.branchPageElementRef(p.count - 1).?;
 
             // used totals the used bytes for the page.
             // Add header and all element header.
-            const used = page.Page.headerSize() + (page.BranchPageElement.headerSize() * @as(usize, p.count - 1));
+            var used = page.Page.headerSize() + (page.BranchPageElement.headerSize() * @as(usize, p.count - 1));
 
             // Add size of all keys and values.
             // Again, use the fact that last element's position euqals to
@@ -569,11 +581,13 @@ pub const Bucket = struct {
     // Iterates over every page in a bucket, including inline pages.
     fn forEachPage(self: *Self, context: anytype, travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         // If we have an inline page then just use that.
-        if (self.page != null) {
-            travel(context, self.page, 0);
+        if (self.page) |_p| {
+            std.log.debug("forEachPage: depth: {d}, root: {d}", .{ 0, self._b.?.root });
+            travel(context, _p, 0);
             return;
         }
 
+        assert(self.tx != null, "tx closed", .{});
         // Otherwise traverse the page hierarchy.
         self.tx.?.forEachPage(self._b.?.root, 0, context, travel);
     }
@@ -776,7 +790,7 @@ pub const Bucket = struct {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b == null or self._b.?.root == 0) {
-            std.log.info("this is a inline bucket, be embedded at page", .{});
+            // std.log.info("this is a inline bucket, be embedded at page", .{});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
                 return PageOrNode{ .first = null, .second = rNode };
@@ -894,6 +908,11 @@ pub const BucketStats = struct {
     BucketN: usize = 0, // total number of buckets including the top bucket
     InlineBucketN: usize = 0, // total number on inlined buckets
     InlineBucketInuse: usize = 0, // bytes used for inlined buckets (also accouted for in LeafInuse)
+
+    // align value operation statistics
+    alignValueN: usize = 0,
+    // unalign value operation statistics
+    unAlignValueN: usize = 0,
 
     /// Initializes a new bucket statistics.
     pub fn init() BucketStats {

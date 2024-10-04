@@ -5,7 +5,6 @@ const tx = @import("tx.zig");
 const util = @import("util.zig");
 const consts = @import("consts.zig");
 const PgidType = consts.PgidType;
-const BufStr = consts.BufStr;
 const assert = @import("assert.zig").assert;
 
 /// Represents an in-memory, deserialized page.
@@ -268,7 +267,7 @@ pub const Node = struct {
             p.flags |= consts.intFromFlags(.branch);
         }
 
-        assert(self.inodes.items.len < 0xFFFF, "inode overflow: {} (pgid={})", .{ self.inodes.items.len, p.id });
+        assert(self.inodes.items.len < 0xFFFF, "inode({}) overflow: {} > {}", .{ p.id, self.inodes.items.len, 0xFFFF });
         p.count = @as(u16, @intCast(self.inodes.items.len));
         // Stop here if there are no items to write.
         if (p.count == 0) {
@@ -334,7 +333,7 @@ pub const Node = struct {
                 std.log.info("the node is not need to split", .{});
                 break;
             } else {
-                std.log.info("the node[{d} -> {d}] is need to split", .{ count, a.?.inodes.items.len });
+                std.log.info("the node[{d} -> {d}] is need to split, isLeaf: {}", .{ count, a.?.inodes.items.len, a.?.isLeaf });
                 self.bucket.?.autoFreeObject.addNode(a.?);
             }
 
@@ -407,6 +406,8 @@ pub const Node = struct {
         }
         // Loop until we only have the minmum number of keys required for the second page.
         var inodeIndex: usize = 0;
+        // count is used to avoid the overflow of the usize
+        var count: usize = 0;
         for (self.inodes.items, 0..) |inode, i| {
             var elsize = self.pageElementSize() + inode.key.?.len;
             if (inode.value) |value| {
@@ -417,6 +418,10 @@ pub const Node = struct {
             // If we have at least the minimum number of keys and adding another
             // node would put us over the threshold then exit and return
             if (inodeIndex >= self.inodes.items.len and sz + elsize > threshold) {
+                break;
+            }
+            count += 1;
+            if (count >= 0xFFFF) {
                 break;
             }
 

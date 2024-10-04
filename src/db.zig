@@ -992,7 +992,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                var buf: [200]usize = undefined;
+                var buf: [1]usize = undefined;
                 randomBuf(buf[0..]);
                 std.log.info("random: {any}\n", .{buf});
                 for (buf) |i| {
@@ -1001,12 +1001,12 @@ test "DB-Write" {
                     const bt = try trx.createBucket(bucketName);
                     _ = bt; // autofix
                 }
-                // const bt = try trx.createBucket("hello");
-                // std.debug.print("create bucket: {s}\n", .{"hello"});
-                // try bt.put(consts.KeyPair.init("ping", "pong"));
-                // try bt.put(consts.KeyPair.init("echo", "ok"));
-                // try bt.put(consts.KeyPair.init("Alice", "Bod"));
-                // _ = res; // autofix
+                const bt = trx.getBucket("hello-0") orelse unreachable;
+                try bt.put(consts.KeyPair.init("ping", "pong"));
+                try bt.put(consts.KeyPair.init("echo", "ok"));
+                try bt.put(consts.KeyPair.init("Alice", "Bod"));
+                std.log.info("put key: {s}, value: {s}", .{ "ping", "pong" });
+                std.debug.print("create bucket: {s}, isInline: {any}\n", .{ "hello-0", bt.page });
             }
         }.update;
         try kvDB.update({}, updateFn2);

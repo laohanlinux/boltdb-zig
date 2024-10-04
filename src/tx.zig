@@ -434,6 +434,7 @@ pub const TX = struct {
                 if (child) |childBucket| {
                     try childBucket.tx.?.checkBucket(childBucket, context.reachable, context.freed);
                 }
+
                 std.log.debug("\t>>>check bucket:[{s}] done<<<", .{name});
                 return;
             }
@@ -526,12 +527,8 @@ pub const TX = struct {
     /// Iterates over every page within a given page and executes a function.
     pub fn forEachPage(self: *Self, pgid: PgidType, depth: usize, context: anytype, comptime travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         const p = self.getPage(pgid);
-
         // Execute function.
         travel(context, p, depth);
-
-        // std.mem.sort(comptime T: type, items: []T, context: anytype, comptime lessThanFn: fn(@TypeOf(context), lhs:T, rhs:T)bool)
-
         // Recursively loop over children.
         if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
             for (0..p.count) |i| {

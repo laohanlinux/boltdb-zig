@@ -81,6 +81,16 @@ pub const Page = struct {
         return dPtr;
     }
 
+    /// Retrives the branch page reference element by index.
+    pub fn branchPageElementRef(self: *const Self, index: usize) ?*const BranchPageElement {
+        if (self.count <= index) {
+            return null;
+        }
+        const ptr = self.getDataPtrIntRef() + index * BranchPageElement.headerSize();
+        const dPtr: *const BranchPageElement = @ptrFromInt(ptr);
+        return dPtr;
+    }
+
     /// Converts a pointer to a specific type.
     pub fn opaqPtrTo(_: *Self, ptr: ?*anyopaque, comptime T: type) T {
         return @ptrCast(@alignCast(ptr));
@@ -103,6 +113,16 @@ pub const Page = struct {
         }
         const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize();
         const dPtr: *LeafPageElement = @ptrFromInt(ptr);
+        return dPtr;
+    }
+
+    /// Retrives the leaf page reference element by index.
+    pub fn leafPageElementRef(self: *const Self, index: usize) ?*const LeafPageElement {
+        if (self.count <= index) {
+            return null;
+        }
+        const ptr = self.getDataPtrIntRef() + index * LeafPageElement.headerSize();
+        const dPtr: *const LeafPageElement = @ptrFromInt(ptr);
         return dPtr;
     }
 
@@ -161,7 +181,13 @@ pub const Page = struct {
     }
 
     /// Returns the pointer of the page data.
-    pub fn getDataPtrInt(self: *Self) usize {
+    pub fn getDataPtrInt(self: *const Self) usize {
+        const ptr = @intFromPtr(self);
+        return ptr + Self.headerSize();
+    }
+
+    /// Returns the pointer reference of the page data.
+    pub fn getDataPtrIntRef(self: *const Self) usize {
         const ptr = @intFromPtr(self);
         return ptr + Self.headerSize();
     }
