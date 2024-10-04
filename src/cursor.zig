@@ -62,7 +62,7 @@ pub const Cursor = struct {
         // If we land on an empty page then move to the next value.
         // https://github.com/boltdb/bolt/issues/450
         if (self.stack.getLast().count() == 0) {
-            std.log.info("next key {any}", .{pNode.first});
+            // std.log.info("next key {any}", .{pNode.first});
             _ = self._next();
         }
         const keyValueRet = self.keyValue();

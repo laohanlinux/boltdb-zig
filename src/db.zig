@@ -420,13 +420,11 @@ pub const DB = struct {
         // TODO Allocate a tempory buffer for the page.
         const buf = try self.allocator.alloc(u8, count * self.pageSize);
         @memset(buf, 0);
-        std.log.debug("allocate a new page, count:{}, size: {}", .{ count, count * self.pageSize });
         const p = Page.init(buf);
         p.overflow = @as(u32, @intCast(count)) - 1;
-
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
-        std.log.debug("allocatoe a new page from freelist, id: {}", .{p.id});
+        defer std.log.debug("allocate a new page, pid: {}, count:{}, overflow: {}, size: {}", .{ p.id, count, p.overflow, count * self.pageSize });
         if (p.id != 0) {
             return p;
         }
@@ -994,7 +992,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                var buf: [10]usize = undefined;
+                var buf: [200]usize = undefined;
                 randomBuf(buf[0..]);
                 std.log.info("random: {any}\n", .{buf});
                 for (buf) |i| {

@@ -429,12 +429,12 @@ pub const TX = struct {
         // Check each bucket within this bucket.
         return self.forEach(ctx, struct {
             fn inner(context: Context, name: []const u8, b1: ?*Bucket) Error!void {
-                std.log.debug("check bucket:[{s}]", .{name});
+                std.log.debug("\t<<<check bucket:[{s}] start>>>", .{name});
                 const child = b1.?.getBucket(name);
                 if (child) |childBucket| {
                     try childBucket.tx.?.checkBucket(childBucket, context.reachable, context.freed);
                 }
-                std.log.debug(">>>check bucket:[{s}] done<<<", .{name});
+                std.log.debug("\t>>>check bucket:[{s}] done<<<", .{name});
                 return;
             }
         }.inner);
@@ -546,7 +546,7 @@ pub const TX = struct {
     pub fn getPage(self: *Self, id: PgidType) *page.Page {
         // Check the dirty pages first.
         if (self.pages.?.get(id)) |p| {
-            std.log.debug("get page from pages cache: {}", .{id});
+            // std.log.debug("get page from pages cache: {}", .{id});
             return p;
         }
         // Otherwise return directly form the mmap.

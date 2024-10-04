@@ -41,7 +41,8 @@ pub const Node = struct {
             .id = id,
         };
         const ptr = @intFromPtr(self);
-        std.log.debug("trace node, create a node, node id: {d}, ptr: {d}", .{ self.id, ptr });
+        _ = ptr; // autofix
+        // std.log.debug("trace node, create a node, node id: {d}, ptr: {d}", .{ self.id, ptr });
         return self;
     }
 
@@ -51,7 +52,8 @@ pub const Node = struct {
             return;
         }
         const ptr = @intFromPtr(self);
-        std.log.debug("trace node, deinit node, node id: {d}, ptr: {d}", .{ self.id, ptr });
+        _ = ptr; // autofix
+        // std.log.debug("trace node, deinit node, node id: {d}, ptr: {d}", .{ self.id, ptr });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
@@ -230,13 +232,16 @@ pub const Node = struct {
                 const elem = p.leafPageElementPtr(i);
                 inode.flags = elem.flags;
                 inode.isNew = false;
-                inode.key = self.allocator.dupe(u8, elem.key()) catch unreachable;
-                inode.value = self.allocator.dupe(u8, elem.value()) catch unreachable;
+                // inode.key = self.allocator.dupe(u8, elem.key()) catch unreachable;
+                // inode.value = self.allocator.dupe(u8, elem.value()) catch unreachable;
+                inode.key = elem.key();
+                inode.value = elem.value();
             } else {
                 const elem = p.branchPageElementPtr(i);
                 inode.pgid = elem.pgid;
                 inode.isNew = false;
-                inode.key = self.allocator.dupe(u8, elem.key()) catch unreachable;
+                // inode.key = self.allocator.dupe(u8, elem.key()) catch unreachable;
+                inode.key = elem.key();
             }
             assert(inode.key.?.len > 0, "key is null", .{});
             self.inodes.append(inode) catch unreachable;
@@ -244,7 +249,8 @@ pub const Node = struct {
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            self.key = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
+            // self.key = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
+            self.key = self.inodes.items[0].key.?;
             assert(self.key.?.len > 0, "key is null", .{});
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
@@ -271,7 +277,9 @@ pub const Node = struct {
         }
         // |e1|e2|e3|b1|b2|b3|
         // Loop over each item and write it to the page.
-        var b = p.getDataSlice()[self.pageElementSize() * self.inodes.items.len ..];
+        var dataSlice = p.getDataSlice();
+        assert(dataSlice.len >= (self.pageElementSize() * self.inodes.items.len), "the page({d}) is too small to write all inodes, data size: {d}, need size: {d}", .{ p.id, dataSlice.len, self.pageElementSize() * self.inodes.items.len });
+        var b = dataSlice[self.pageElementSize() * self.inodes.items.len ..];
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
@@ -462,7 +470,6 @@ pub const Node = struct {
                 node.pgid = 0;
             }
             // Allocate contiguous space for the node.(COW: Copy on Write)
-            // TODO why +1
             const allocateSize: usize = node.size() / _db.pageSize + 1;
             const p = try _tx.allocate(allocateSize);
             assert(p.id < _tx.meta.pgid, "pgid ({}) above high water mark ({})", .{ p.id, _tx.meta.pgid });
@@ -727,6 +734,9 @@ pub const INode = struct {
 
     /// deinit the inode
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        if (!self.isNew) {
+            return;
+        }
         if (self.key) |_key| {
             allocator.free(_key);
             self.key = null;

@@ -170,25 +170,22 @@ pub const Page = struct {
     pub fn getDataSlice(self: *Self) []u8 {
         const ptr = self.getDataPtrInt();
         const slice: [*]u8 = @ptrFromInt(ptr);
-        return slice[0..(pageSize - Self.headerSize())];
+        const pageNum = self.overflow + 1;
+        return slice[Self.headerSize()..(@as(usize, pageNum) * pageSize)];
     }
 
     /// Returns a byte slice of the page data.
     pub fn asSlice(self: *Self) []u8 {
         const slice: [*]u8 = @ptrCast(self);
-        if (self.count == 0xFFFF) {
-            const end = @as(usize, self.overflow + 1) * @as(usize, pageSize);
-            return slice[0..@as(usize, end)];
-        } else {
-            return slice[0..@as(usize, pageSize)];
-        }
+        const pageNum = self.overflow + 1;
+        return slice[0..@as(usize, pageNum * pageSize)];
     }
 
     /// find the key in the leaf page elements, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
     pub fn searchLeafElements(self: *Self, key: []const u8) struct { index: usize, exact: bool } {
         var left: usize = 0;
         var right: usize = self.count;
-        std.log.debug("searchLeafElements: {s}, count: {d}", .{ key, self.count });
+        // std.log.debug("searchLeafElements: {s}, count: {d}", .{ key, self.count });
         while (left < right) {
             const mid = left + (right - left) / 2;
             const element = self.leafPageElementPtr(mid);
@@ -262,8 +259,8 @@ pub const LeafPageElement = packed struct {
 
     /// Returns a byte slice of the node key.
     pub fn key(self: *const Self) []const u8 {
-        std.log.info("{any}", .{self});
-        std.log.info("{}, {}", .{ self.pos, self.kSize });
+        // std.log.info("{any}", .{self});
+        // std.log.info("{}, {}", .{ self.pos, self.kSize });
         const buf = @as([*]u8, @ptrCast(@constCast(self)));
         return buf[0..][self.pos..(self.pos + self.kSize)];
     }

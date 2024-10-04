@@ -108,7 +108,7 @@ pub const Bucket = struct {
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
-        std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
+        // std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
         self.isInittialized = false;
         var btIter = self.buckets.iterator();
@@ -264,7 +264,7 @@ pub const Bucket = struct {
 
         // Insert into node
         _ = c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
-        std.log.info("create a new bucket: {s}, value: {any}", .{ cpKey, value });
+        // std.log.info("create a new bucket: {s}, value: {any}", .{ cpKey, value });
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
         // to be treated as regular, non-inline bucket for the rest of the tx.
@@ -781,7 +781,6 @@ pub const Bucket = struct {
             if (self.rootNode) |rNode| {
                 return PageOrNode{ .first = null, .second = rNode };
             }
-            // std.log.info("the page is {any}", .{self.page.?});
             return PageOrNode{ .first = self.page, .second = null };
         }
 
