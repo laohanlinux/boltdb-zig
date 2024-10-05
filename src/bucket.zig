@@ -480,6 +480,7 @@ pub const Bucket = struct {
         var keyPairRef = c.first();
         while (keyPairRef.key != null) {
             try travel(context, keyPairRef.key.?, keyPairRef.value);
+            std.log.debug("forEachKeyValue: {any}", .{c.stack.items});
             keyPairRef = c.next();
         }
         return;
@@ -679,6 +680,7 @@ pub const Bucket = struct {
         // Update the root node for this bucket.
         assert(self.rootNode.?.pgid < self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
         self._b.?.root = self.rootNode.?.pgid;
+        std.debug.print("the rootNode update to {d}\n", .{self._b.?.root});
     }
 
     // Returns true if a bucket is small enough to be written inline

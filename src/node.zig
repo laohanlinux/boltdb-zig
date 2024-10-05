@@ -330,10 +330,10 @@ pub const Node = struct {
 
             // If we can't split then exit the loop.
             if (b == null) {
-                std.log.info("the node is not need to split", .{});
+                std.log.info("the node is not need to split, id: {d}, key: {s}", .{ curNode.pgid, curNode.key orelse "empty" });
                 break;
             } else {
-                std.log.info("the node[{d} -> {d}] is need to split, isLeaf: {}", .{ count, a.?.inodes.items.len, a.?.isLeaf });
+                std.log.info("the node[{d} -> a: {d}, b: {d}] is need to split, isLeaf: {}", .{ count, a.?.inodes.items.len, b.?.inodes.items.len, a.?.isLeaf });
                 self.bucket.?.autoFreeObject.addNode(a.?);
             }
 
@@ -373,7 +373,7 @@ pub const Node = struct {
         if (self.parent == null) {
             self.parent = Node.init(self.allocator);
             self.parent.?.bucket = self.bucket;
-            self.children.append(self) catch unreachable; // children also is you!
+            self.parent.?.children.append(self) catch unreachable; // children also is you!
             self.bucket.?.autoFreeObject.addNode(self.parent.?);
         }
 
@@ -392,6 +392,11 @@ pub const Node = struct {
 
         // Update the statistics.
         self.bucket.?.tx.?.stats.split += 1;
+
+        assert(self.parent.?.numChildren() == next.parent.?.numChildren(), "the parent node's children count is not equal to the next node's parent node's children count", .{});
+        assert(self.parent.? == next.parent.?, "the parent node is not equal to the next node's parent node", .{});
+        assert(self.parent.?.bucket.? == next.parent.?.bucket.?, "the parent node's bucket is not equal to the next node's parent node's bucket", .{});
+        assert(self.parent.?.bucket.? == self.bucket.?, "the parent node's bucket is not equal to the self node's bucket", .{});
 
         return [2]?*Node{ self, next };
     }
@@ -455,7 +460,10 @@ pub const Node = struct {
             {},
             lessFn,
         );
-        for (self.children.items) |child| {
+        for (self.children.items, 0..) |child, i| {
+            if (i > 0) {
+                assert(std.mem.order(u8, self.children.items[i].key.?, self.children.items[i - 1].key.?) == .gt, "the children node is not in order", .{});
+            }
             try child.spill();
         }
         // We no longer need the children list because it's only used for spilling tracking.
@@ -482,7 +490,7 @@ pub const Node = struct {
             node.write(p);
             node.spilled = true;
 
-            // Insert into parent inodes. TODO
+            // Insert into parent inodes
             if (node.parent) |parent| {
                 const key: []const u8 = node.key orelse node.inodes.items[0].key.?;
                 const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
@@ -490,7 +498,7 @@ pub const Node = struct {
                 if (node.key != null) {
                     self.allocator.free(node.key.?);
                 }
-                node.key = newKey;
+                node.key = self.allocator.dupe(u8, newKey) catch unreachable;
                 //self.bucket.?.autoFreeObject.addNode(parent);
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });

@@ -62,7 +62,7 @@ pub const Cursor = struct {
         // If we land on an empty page then move to the next value.
         // https://github.com/boltdb/bolt/issues/450
         if (self.stack.getLast().count() == 0) {
-            // std.log.info("next key {any}", .{pNode.first});
+            std.log.info("the last element count is 0, try to move to the next", .{});
             _ = self._next();
         }
         const keyValueRet = self.keyValue();
@@ -212,6 +212,8 @@ pub const Cursor = struct {
             const pNode = self._bucket.pageNode(pgid);
             self.stack.append(ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 }) catch unreachable;
         }
+
+        std.log.info("the first element ref is {any}", .{self.stack.items[0].node});
     }
 
     // Moves the cursor to the last leaf element under that last page in the stack.
@@ -241,11 +243,13 @@ pub const Cursor = struct {
     /// Moves to the next leaf element and returns the key and value.
     /// If the cursor is at the last leaf element then it stays there and return null.
     pub fn _next(self: *Self) KeyValueRef {
+        defer std.log.info("the stack is {}", .{self.stack.items.len});
         while (true) {
+            // assert(self.stack.items.len > 0, "the stack is empty", .{});
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
             var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
-            // std.log.info("the i is {}", .{i});
+            std.log.info("the i is {}", .{i});
             while (i >= 0) : (i -= 1) {
                 const elem = &self.stack.items[@as(usize, @intCast(i))];
                 if ((elem.index + 1) < elem.count()) {
@@ -267,7 +271,7 @@ pub const Cursor = struct {
             self._first();
 
             // If this is an empty page then restart and move back up the stack.
-            if (self.stack.getLast().count() == 0) {
+            if (self.getLastElementRef().?.count() == 0) {
                 continue;
             }
 
