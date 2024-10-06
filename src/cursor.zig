@@ -200,6 +200,7 @@ pub const Cursor = struct {
             // Exit when we hit a leaf page.
             const ref = self.stack.getLast();
             if (ref.isLeaf()) {
+                // had move to the first element that first leaf's key.
                 break;
             }
             // Keep adding pages pointing to the first element to the stack.
@@ -207,13 +208,15 @@ pub const Cursor = struct {
             if (ref.node) |n| {
                 pgid = n.pgid;
             } else {
+                assert(ref.index < ref.p.?.count, "the index is out of range, index: {}, count: {}", .{ ref.index, ref.p.?.count });
                 pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
             }
             const pNode = self._bucket.pageNode(pgid);
             self.stack.append(ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 }) catch unreachable;
+            assert(self.stack.getLast().index == 0, "the index is not 0, index: {}", .{self.stack.getLast().index});
         }
 
-        std.log.info("the first element ref is {any}", .{self.stack.items[0].node});
+        std.log.info("now, the stack len is {}, the last element ref is {any}", .{ self.stack.items.len, self.stack.getLast() });
     }
 
     // Moves the cursor to the last leaf element under that last page in the stack.
@@ -252,10 +255,12 @@ pub const Cursor = struct {
             std.log.info("the i is {}", .{i});
             while (i >= 0) : (i -= 1) {
                 const elem = &self.stack.items[@as(usize, @intCast(i))];
-                if ((elem.index + 1) < elem.count()) {
+                if ((elem.index + 1) < elem.count()) { // iterate the current inode elements
                     elem.index += 1;
                     break;
                 }
+                // pop the current page by index that same to pop the current inode from the stack.
+                // _ = self.stack.pop();
             }
 
             // If we've hit the root page then stop and return. This will leave the
@@ -267,6 +272,7 @@ pub const Cursor = struct {
             // Otherwise start from where we left off in the stack and find the
             // first element of the first leaf page.
             self.stack.resize(@as(usize, @intCast(i + 1))) catch unreachable; // TODO
+            assert(self.stack.items.len == (i + 1), "the stack is empty", .{});
             // Fix location
             self._first();
 
@@ -274,7 +280,6 @@ pub const Cursor = struct {
             if (self.getLastElementRef().?.count() == 0) {
                 continue;
             }
-
             return self.keyValue();
         }
     }

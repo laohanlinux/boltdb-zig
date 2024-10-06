@@ -15,6 +15,7 @@ const onCommitFn = util.Closure(usize);
 const assert = @import("assert.zig").assert;
 const Table = @import("pretty_table.zig").Table;
 const PgidType = consts.PgidType;
+const AutoFreeObject = bucket.AutoFreeObject;
 
 /// Represent a read-only or read/write transaction on the database.
 /// Read-only transactions can be used for retriving values for keys and creating cursors.
@@ -31,6 +32,7 @@ pub const TX = struct {
     meta: *Meta,
     root: *Bucket, // the root bucket of the transaction, the bucket root is reference to the meta.root
     pages: ?*std.AutoHashMap(PgidType, *Page),
+    autoFreeNodes: AutoFreeObject,
     stats: TxStats,
 
     _commitHandlers: std.ArrayList(onCommitFn),
@@ -64,6 +66,7 @@ pub const TX = struct {
         assert(self.root._b.?.sequence == _db.getMeta().root.sequence, "sequence is invalid", .{});
         // Note: here the root node is not set
         self.root.rootNode = null;
+        self.autoFreeNodes = AutoFreeObject.init(_db.allocator);
         self.allocator = _db.allocator;
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
@@ -502,9 +505,10 @@ pub const TX = struct {
             _db.removeTx(self);
             std.log.info("remove tx({}) from db", .{self.meta.txid});
         }
-
+        std.log.info("before clear all reference", .{});
         // Clear all reference.
         self.allocator.destroy(self.meta);
+        std.log.info("after clear meta", .{});
         self.db = null;
         if (self.pages) |_pages| {
             var itr = _pages.valueIterator();
@@ -515,8 +519,9 @@ pub const TX = struct {
             self.allocator.destroy(_pages);
             self.pages = null;
         }
+        self.autoFreeNodes.deinit(self.allocator);
         self.root.deinit();
-
+        std.log.info("after clear root", .{});
         // Execute commit handlers now that the locks have been removed.
         std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});
         for (self._commitHandlers.items) |func| {

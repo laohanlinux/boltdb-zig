@@ -39,9 +39,6 @@ pub const Node = struct {
             .inodes = std.ArrayList(INode).init(allocator),
             .id = id,
         };
-        const ptr = @intFromPtr(self);
-        _ = ptr; // autofix
-        // std.log.debug("trace node, create a node, node id: {d}, ptr: {d}", .{ self.id, ptr });
         return self;
     }
 
@@ -51,22 +48,21 @@ pub const Node = struct {
             return;
         }
         const ptr = @intFromPtr(self);
-        _ = ptr; // autofix
-        // std.log.debug("trace node, deinit node, node id: {d}, ptr: {d}", .{ self.id, ptr });
+        std.log.debug("trace node, deinit node, node id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, ptr });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (0..self.inodes.items.len) |i| {
             self.inodes.items[i].deinit(self.allocator);
         }
+
+        if (self.key) |key| {
+            self.allocator.free(key);
+        }
+        self.key = null;
+
         self.inodes.deinit();
         self.children.deinit();
-    }
-
-    /// Destroy the node.
-    pub fn destroy(self: *Self) void {
-        self.deinit();
-        self.allocator.destroy(self);
     }
 
     /// Returns the top-level node this node is attached to.
@@ -78,7 +74,7 @@ pub const Node = struct {
         }
     }
 
-    /// Returns the minimum number of inodes this node should have.
+    // Returns the minimum number of inodes this node should have.
     fn minKeys(self: *const Self) usize {
         if (self.isLeaf) {
             return 1;
@@ -215,7 +211,8 @@ pub const Node = struct {
     pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
         const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) orelse return;
-        _ = self.inodes.orderedRemove(index);
+        var inode = self.inodes.orderedRemove(index);
+        inode.deinit(self.allocator);
         // Mark the node as needing rebalancing.
         self.unbalance = true;
     }
@@ -271,7 +268,7 @@ pub const Node = struct {
         p.count = @as(u16, @intCast(self.inodes.items.len));
         // Stop here if there are no items to write.
         if (p.count == 0) {
-            std.log.info("no inode need write, pid={}", .{p.id});
+            std.log.info("no inode need write, pgid={}", .{p.id});
             return;
         }
         // |e1|e2|e3|b1|b2|b3|
@@ -334,7 +331,6 @@ pub const Node = struct {
                 break;
             } else {
                 std.log.info("the node[{d} -> a: {d}, b: {d}] is need to split, isLeaf: {}", .{ count, a.?.inodes.items.len, b.?.inodes.items.len, a.?.isLeaf });
-                self.bucket.?.autoFreeObject.addNode(a.?);
             }
 
             // Set node to be so it gets split on the next function.
@@ -374,12 +370,13 @@ pub const Node = struct {
             self.parent = Node.init(self.allocator);
             self.parent.?.bucket = self.bucket;
             self.parent.?.children.append(self) catch unreachable; // children also is you!
-            self.bucket.?.autoFreeObject.addNode(self.parent.?);
+            self.bucket.?.tx.?.autoFreeNodes.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
         const next = Node.init(self.allocator);
-        self.bucket.?.autoFreeObject.addNode(next);
+        // self.bucket.?.autoFreeObject.addNode(next);
+        self.bucket.?.tx.?.autoFreeNodes.addNode(next);
         next.bucket = self.bucket;
         next.isLeaf = self.isLeaf;
         next.parent = self.parent;

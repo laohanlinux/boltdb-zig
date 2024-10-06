@@ -372,7 +372,7 @@ pub const DB = struct {
 
     /// Retrives a page reference from the mmap based on the current page size.
     pub fn pageById(self: *const Self, id: consts.PgidType) *Page {
-        std.log.debug("retrive a page by pid: {}", .{id});
+        std.log.debug("retrive a page by pgid: {}", .{id});
         const pos: u64 = id * @as(u64, self.pageSize);
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
         return Page.init(buf);
@@ -424,7 +424,7 @@ pub const DB = struct {
         p.overflow = @as(u32, @intCast(count)) - 1;
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
-        defer std.log.debug("allocate a new page, pid: {}, count:{}, overflow: {}, size: {}", .{ p.id, count, p.overflow, count * self.pageSize });
+        defer std.log.debug("allocate a new page, pgid: {}, count:{}, overflow: {}, size: {}", .{ p.id, count, p.overflow, count * self.pageSize });
         if (p.id != 0) {
             return p;
         }
@@ -992,7 +992,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                var buf: [10]usize = undefined;
+                var buf: [1000]usize = undefined;
                 randomBuf(buf[0..]);
                 std.log.info("random: {any}\n", .{buf});
                 for (buf) |i| {
@@ -1013,34 +1013,34 @@ test "DB-Write" {
                 };
                 try trx.forEach(ctx, forEachFn.inner);
 
-                // const bt = trx.getBucket("hello-0") orelse unreachable;
-                // try bt.put(consts.KeyPair.init("ping", "pong"));
-                // try bt.put(consts.KeyPair.init("echo", "ok"));
-                // try bt.put(consts.KeyPair.init("Alice", "Bod"));
-                // const got = bt.get("ping");
-                // std.debug.assert(got != null);
-                // std.debug.assert(std.mem.eql(u8, got.?, "pong"));
+                const bt = trx.getBucket("hello-0") orelse unreachable;
+                try bt.put(consts.KeyPair.init("ping", "pong"));
+                try bt.put(consts.KeyPair.init("echo", "ok"));
+                try bt.put(consts.KeyPair.init("Alice", "Bod"));
+                const got = bt.get("ping");
+                std.debug.assert(got != null);
+                std.debug.assert(std.mem.eql(u8, got.?, "pong"));
 
-                // const got2 = bt.get("not");
-                // std.debug.assert(got2 == null);
+                const got2 = bt.get("not");
+                std.debug.assert(got2 == null);
             }
         }.update;
         try kvDB.update({}, updateFn2);
 
-        // const viewFn = struct {
-        //     fn view(_: void, trx: *TX) Error!void {
-        //         for (0..1000) |_| {
-        //             const bt = trx.getBucket("Alice");
-        //             assert(bt == null, "the bucket is not null", .{});
-        //         }
-        //         for (0..1000) |_| {
-        //             const bt = trx.getBucket("hello-0").?;
-        //             const kv = bt.get("not");
-        //             assert(kv == null, "should be not found the key", .{});
-        //         }
-        //     }
-        // };
-        // try kvDB.view({}, viewFn.view);
+        const viewFn = struct {
+            fn view(_: void, trx: *TX) Error!void {
+                for (0..1000) |_| {
+                    const bt = trx.getBucket("Alice");
+                    assert(bt == null, "the bucket is not null", .{});
+                }
+                for (0..1000) |_| {
+                    const bt = trx.getBucket("hello-0").?;
+                    const kv = bt.get("not");
+                    assert(kv == null, "should be not found the key", .{});
+                }
+            }
+        };
+        try kvDB.view({}, viewFn.view);
         kvDB.close() catch unreachable;
     }
     // test "DB-read" {

@@ -16,7 +16,8 @@ const PgidType = consts.PgidType;
 const NodeSet = std.AutoHashMap(*Node, void);
 
 // A set of aligned values that will be freed by the bucket.
-const AutoFreeObject = struct {
+pub const AutoFreeObject = struct {
+    isFreed: bool = false,
     // A set of aligned values that will be freed by the bucket.
     alignedValue: std.ArrayList([]u8),
     // A set of nodes that will be freed by the bucket.
@@ -26,6 +27,20 @@ const AutoFreeObject = struct {
     // So, we need to destroy it manually.
     // 2: the nodes of autoFreeNodes is a new node that created after tx.commit(Copy on Write), their are is a spill node, a snapshot node, a new node.
     autoFreeNodes: NodeSet,
+
+    freePtrs: std.AutoArrayHashMap(u64, isize),
+
+    allocator: std.mem.Allocator,
+    /// Init the auto free object.
+    pub fn init(allocator: std.mem.Allocator) AutoFreeObject {
+        return .{
+            .alignedValue = std.ArrayList([]u8).init(allocator),
+            .autoFreeNodes = NodeSet.init(allocator),
+            .allocator = allocator,
+            .freePtrs = std.AutoArrayHashMap(u64, isize).init(allocator),
+        };
+    }
+
     /// Add a node to the auto free object.
     pub fn addNode(self: *AutoFreeObject, node: *Node) void {
         const key = node.key orelse "";
@@ -45,17 +60,26 @@ const AutoFreeObject = struct {
 
     /// Deinit the auto free object.
     pub fn deinit(self: *AutoFreeObject, allocator: std.mem.Allocator) void {
+        assert(self.isFreed == false, "the auto free object is already freed", .{});
+        self.isFreed = true;
         var it = self.autoFreeNodes.keyIterator();
         while (it.next()) |node| {
-            // node.*.deinit();
-            node.*.destroy();
+            const ptr = @intFromPtr(node);
+            const key = node.*.key orelse "";
+            std.log.debug("deinit the auto free node: {d}, key: {s}, ptr: 0x{x}", .{ node.*.id, key, ptr });
+            node.*.deinit();
+            self.allocator.destroy(node.*);
+            self.freePtrs.put(ptr, 1) catch unreachable;
         }
         self.autoFreeNodes.deinit();
 
         for (0..self.alignedValue.items.len) |i| {
             allocator.free(self.alignedValue.items[i]);
+            const ptr = @intFromPtr(self.alignedValue.items[i].ptr);
+            self.freePtrs.put(ptr, 1) catch unreachable;
         }
         self.alignedValue.deinit();
+        self.freePtrs.deinit();
     }
 };
 
@@ -104,16 +128,15 @@ pub const Bucket = struct {
         b.page = null;
         // set the fill percent
         b.fillPercent = consts.DefaultFillPercent;
-        b.autoFreeObject = .{
-            .alignedValue = std.ArrayList([]u8).init(b.allocator),
-            .autoFreeNodes = NodeSet.init(b.allocator),
-        };
         return b;
     }
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
-        // std.log.debug("deinit bucket, rid: {}, root: {}", .{ self._b.?.root, self.rootNode == null });
+        const rootId = self._b.?.root;
+        _ = rootId; // autofix
+        // defer std.log.debug("finish deinit bucket, rid: {}", .{rootId});
+        // std.log.debug("start deinit bucket, rid: {}, root: {}", .{ rootId, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
         self.isInittialized = false;
         var btIter = self.buckets.iterator();
@@ -122,25 +145,24 @@ pub const Bucket = struct {
             nextBucket.value_ptr.*.deinit();
         }
         self.buckets.deinit();
-
         if (self.tx.?.writable) {
             if (self._b) |iBucket| {
                 iBucket.deinit(self.allocator);
+                self._b = null;
             }
         }
         {
             // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
             var nodeIter = self.nodes.iterator();
             while (nodeIter.next()) |nextNode| {
-                nextNode.value_ptr.*.destroy();
+                // std.log.debug("--> {}, {}, {d}", .{ rootId, nextNode.key_ptr.*, self.nodes.count() });
+                nextNode.value_ptr.*.deinit();
+                self.allocator.destroy(nextNode.value_ptr.*);
             }
             self.nodes.deinit();
         }
+
         self.rootNode = null; // just set the rootNode to null, don't destroy it(it will be destroyed by the autoFreeObject)
-        // Free autoFreeObject
-        {
-            self.autoFreeObject.deinit(self.allocator);
-        }
         self.allocator.destroy(self);
     }
 
@@ -267,7 +289,7 @@ pub const Bucket = struct {
         defer newBucket.deinit();
         newBucket.rootNode = Node.init(self.allocator);
         newBucket.rootNode.?.isLeaf = true;
-        self.autoFreeObject.addNode(newBucket.rootNode.?);
+        self.tx.?.autoFreeNodes.addNode(newBucket.rootNode.?);
         const value = newBucket.write();
 
         // Insert into node
