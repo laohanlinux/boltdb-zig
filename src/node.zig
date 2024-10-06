@@ -48,7 +48,8 @@ pub const Node = struct {
             return;
         }
         const ptr = @intFromPtr(self);
-        std.log.debug("trace node, deinit node, node id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, ptr });
+        _ = ptr; // autofix
+        // std.log.debug("trace node, deinit node, node id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, ptr });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
@@ -639,14 +640,6 @@ pub const Node = struct {
     // Causes the node to copy all its inode key/value references to heap memory.
     // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
     pub fn dereference(self: *Self) void {
-        // TODO: meybe we should not free the key, because it was referennce same to first inode.
-        // if (self.key != null) {
-        //     const _key = self.allocator.alloc(u8, self.key.?.len()) catch unreachable;
-        //     std.mem.copyForwards(u8, _key, self.key.?.asSlice());
-        //     self.key = _key;
-        //     assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
-        // }
-
         if (self.key != null) {
             const cpKey = self.allocator.dupe(u8, self.key.?) catch unreachable;
             self.allocator.free(self.key.?);

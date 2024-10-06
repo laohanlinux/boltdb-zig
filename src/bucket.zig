@@ -66,7 +66,8 @@ pub const AutoFreeObject = struct {
         while (it.next()) |node| {
             const ptr = @intFromPtr(node);
             const key = node.*.key orelse "";
-            std.log.debug("deinit the auto free node: {d}, key: {s}, ptr: 0x{x}", .{ node.*.id, key, ptr });
+            _ = key; // autofix
+            // std.log.debug("deinit the auto free node: {d}, key: {s}, ptr: 0x{x}", .{ node.*.id, key, ptr });
             node.*.deinit();
             self.allocator.destroy(node.*);
             self.freePtrs.put(ptr, 1) catch unreachable;
@@ -804,7 +805,8 @@ pub const Bucket = struct {
         defer self.buckets.deinit();
         var itr = self.buckets.iterator();
         while (itr.next()) |entry| {
-            entry.value_ptr.*.dereference();
+            _ = entry; // autofix
+            // entry.value_ptr.*.dereference();
         }
     }
 

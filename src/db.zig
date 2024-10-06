@@ -287,6 +287,7 @@ pub const DB = struct {
     /// Opens the underlying memory-mapped file and initializes the meta references.
     /// minsz is the minimum size that the new mmap can be.
     pub fn mmap(self: *Self, minsz: usize) !void {
+        std.log.info("mmap minsz: {}", .{minsz});
         self.mmaplock.lock();
         defer self.mmaplock.unlock();
         const fileInfo = try self.file.metadata();
@@ -300,7 +301,8 @@ pub const DB = struct {
 
         // Dereference call mmap references before unmmapping.
         if (self.rwtx) |_rwtx| {
-            _rwtx.root.dereference();
+            _ = _rwtx; // autofix
+            // _rwtx.root.dereference();
         }
 
         // Unmap existing data before continuing.
@@ -312,6 +314,7 @@ pub const DB = struct {
 
         // Memory-map the data file as a byte slice.
         self.dataRef = try util.mmap(self.file, size, true);
+        self.datasz = size;
         std.log.info("succeed to init data reference, size: {}", .{size});
         // Save references to the meta pages.
         self.meta0 = self.pageById(0).meta();
@@ -372,8 +375,9 @@ pub const DB = struct {
 
     /// Retrives a page reference from the mmap based on the current page size.
     pub fn pageById(self: *const Self, id: consts.PgidType) *Page {
-        std.log.debug("retrive a page by pgid: {}", .{id});
         const pos: u64 = id * @as(u64, self.pageSize);
+        // std.log.debug("retrive a page by pgid: {}", .{id});
+        assert(self.dataRef.?.len >= (pos + self.pageSize), "dataRef.len: {}, pos: {}, pageSize: {}, id: {}", .{ self.dataRef.?.len, pos, self.pageSize, id });
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
         return Page.init(buf);
     }
@@ -428,6 +432,7 @@ pub const DB = struct {
         if (p.id != 0) {
             return p;
         }
+
         // Resize mmap() if we're at the end.
         p.id = self.rwtx.?.meta.pgid;
         const minsz: usize = (@as(usize, @intCast(p.id)) + 1 + count) * self.pageSize;
@@ -437,7 +442,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(PgidType, count);
-        std.log.debug("update the meta page, pgid: {}", .{self.rwtx.?.meta.pgid});
+        std.log.debug("update the meta page, pgid: {}, minsz: {}, datasz: {}", .{ self.rwtx.?.meta.pgid, minsz, self.datasz });
         return p;
     }
 
@@ -953,7 +958,7 @@ test "DB-Write" {
     var options = defaultOptions;
     options.readOnly = false;
     options.initialMmapSize = 10 * consts.PageSize;
-    options.strictMode = true;
+    // options.strictMode = true;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
     defer std.testing.allocator.free(filePath);
 

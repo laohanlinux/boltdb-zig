@@ -95,11 +95,12 @@ pub const FreeList = struct {
 
         var initial: usize = 0;
         const previd: usize = 0;
+        std.log.debug("1, allocate n: {d}, ids: {any}", .{ n, self.ids.items });
         for (self.ids.items, 0..) |id, i| {
             assert(id > 1, "invalid page({}) allocation", .{id});
 
             // Reset initial page if this is not contigous.
-            if (previd == 0 or id - previd != 1) {
+            if (previd == 0 or (id - previd) != 1) {
                 initial = id;
             }
             // If we found a contignous block then remove it and return it.
@@ -117,6 +118,8 @@ pub const FreeList = struct {
                     self.ids.resize(self.ids.items.len - n) catch unreachable;
                 }
 
+                assert(beforeCount == (n + self.ids.items.len), "beforeCount == n + self.ids.items.len, beforeCount: {d}, n: {d}, self.ids.items.len: {d}", .{ beforeCount, n, self.ids.items.len });
+
                 // Remove from the free cache.
                 // TODO Notice
                 for (0..n) |ii| {
@@ -125,6 +128,7 @@ pub const FreeList = struct {
                 }
                 const afterCount = self.ids.items.len;
                 assert(beforeCount == (n + afterCount), "{} != {}", .{ beforeCount, afterCount });
+                std.log.debug("2, allocate a new page, pgid: {d}, n: {d}, initial: {d}", .{ initial, n, initial });
                 return initial;
             }
         }
