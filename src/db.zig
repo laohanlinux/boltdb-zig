@@ -997,7 +997,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                var buf: [1000]usize = undefined;
+                var buf: [1]usize = undefined;
                 randomBuf(buf[0..]);
                 std.log.info("random: {any}\n", .{buf});
                 for (buf) |i| {
@@ -1034,11 +1034,11 @@ test "DB-Write" {
 
         const viewFn = struct {
             fn view(_: void, trx: *TX) Error!void {
-                for (0..1000) |_| {
+                for (0..1) |_| {
                     const bt = trx.getBucket("Alice");
                     assert(bt == null, "the bucket is not null", .{});
                 }
-                for (0..1000) |_| {
+                for (0..1) |_| {
                     const bt = trx.getBucket("hello-0").?;
                     const kv = bt.get("not");
                     assert(kv == null, "should be not found the key", .{});

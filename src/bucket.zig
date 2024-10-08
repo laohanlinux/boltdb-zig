@@ -104,8 +104,6 @@ pub const Bucket = struct {
 
     allocator: std.mem.Allocator,
 
-    autoFreeObject: AutoFreeObject,
-
     const Self = @This();
 
     /// Initializes a new bucket.
@@ -223,9 +221,8 @@ pub const Bucket = struct {
         var alignedValue: []u8 = undefined;
         const isAligned = @intFromPtr(value.ptr) % alignment == 0;
         if (!isAligned) {
-            alignedValue = self.allocator.alloc(u8, value.len) catch unreachable;
-            @memcpy(alignedValue, value);
-            self.autoFreeObject.alignedValue.append(alignedValue) catch unreachable;
+            alignedValue = self.allocator.dupe(u8, value) catch unreachable;
+            self.tx.?.autoFreeNodes.alignedValue.append(alignedValue) catch unreachable;
             // self.stats().unAlignValueN += 1;
             // std.log.warn("unaligned memory, align size: {}", .{alignedValue.len});
         } else {

@@ -216,7 +216,7 @@ pub const Cursor = struct {
             assert(self.stack.getLast().index == 0, "the index is not 0, index: {}", .{self.stack.getLast().index});
         }
 
-        std.log.info("now, the stack len is {}, the last element ref is {any}", .{ self.stack.items.len, self.stack.getLast() });
+        // std.log.info("now, the stack len is {}, the last element ref is {any}", .{ self.stack.items.len, self.stack.getLast() });
     }
 
     // Moves the cursor to the last leaf element under that last page in the stack.

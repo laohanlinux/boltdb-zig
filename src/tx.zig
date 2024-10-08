@@ -115,7 +115,9 @@ pub const TX = struct {
             .{ "meta.CheckSum", self.meta.check_sum },
             .{ "meta.Magic", self.meta.magic },
             .{ "meta.TxId", self.meta.txid },
-            .{ "meta.Freelist", self.meta.freelist },
+            .{ "meta.Freelist.PgId", self.meta.freelist },
+            .{ "meta.Freelist.Count", self.db.?.freelist.count() },
+            .{ "meta.Freelist.Ids", self.db.?.freelist.ids.items },
             .{ "meta.Pgid", self.meta.pgid },
         };
 
