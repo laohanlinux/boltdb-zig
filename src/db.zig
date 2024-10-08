@@ -375,8 +375,8 @@ pub const DB = struct {
 
     /// Retrives a page reference from the mmap based on the current page size.
     pub fn pageById(self: *const Self, id: consts.PgidType) *Page {
+        std.log.debug("retrive a page by pgid: {}, pageSize: {}", .{ id, self.pageSize });
         const pos: u64 = id * @as(u64, self.pageSize);
-        // std.log.debug("retrive a page by pgid: {}", .{id});
         assert(self.dataRef.?.len >= (pos + self.pageSize), "dataRef.len: {}, pos: {}, pageSize: {}, id: {}", .{ self.dataRef.?.len, pos, self.pageSize, id });
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
         return Page.init(buf);
@@ -1167,7 +1167,20 @@ test "Cursor_Delete" {
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
-            try cursor.delete();
+
+            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{1});
+            defer std.testing.allocator.free(key);
+
+            var keyPair = cursor.first();
+            while (!keyPair.isNotFound()) {
+                std.log.info("delete key: {s}", .{keyPair.key.?});
+                if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
+                    try cursor.delete();
+                    keyPair = cursor.next();
+                    continue;
+                }
+                break;
+            }
         }
     }.update;
     try kvDB.update({}, updateFn2);

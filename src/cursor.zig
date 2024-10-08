@@ -163,9 +163,8 @@ pub const Cursor = struct {
     /// Removes the current key/value under the cursor from the bucket.
     /// Delete fails if current key/value is a bucket or if the transaction is not writable.
     pub fn delete(self: *Self) Error!void {
-        if (self._bucket.tx.?.db == null) {
-            return Error.ErrTxClosed;
-        } else if (!self._bucket.tx.?.writable) {
+        assert(self._bucket.tx.?.db != null, "tx closed", .{});
+        if (!self._bucket.tx.?.writable) {
             return Error.TxNotWriteable;
         }
         const keyValueRet = self.keyValue();
@@ -174,7 +173,7 @@ pub const Cursor = struct {
             return Error.IncompactibleValue;
         }
 
-        self.getNode().?.del(keyValueRet.first);
+        self.getNode().?.del(keyValueRet.key().?);
     }
 
     // Moves the cursor to a given key and returns it.

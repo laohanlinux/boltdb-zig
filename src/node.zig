@@ -693,7 +693,9 @@ pub const Node = struct {
     fn safeCheck(self: *const Self) void {
         for (0..self.inodes.items.len) |i| {
             if (i > 0) {
-                assert(std.mem.order(u8, self.inodes.items[i].key.?, self.inodes.items[i - 1].key.?) == .gt, "the inodes is not in order", .{});
+                const left = self.inodes.items[i - 1].key.?;
+                const right = self.inodes.items[i].key.?;
+                assert(std.mem.order(u8, right, left) == .gt, "the inodes is not in order, left: {s}, right: {s}", .{ left, right });
             }
         }
         if (self.parent) |parent| {
@@ -788,7 +790,7 @@ pub const INode = struct {
 
     /// lower bound of the key
     pub fn lowerBoundFn(context: []const u8, item: @This()) std.math.Order {
-        return std.mem.order(u8, item.getKey().?, context);
+        return std.mem.order(u8, context, item.getKey().?);
     }
 };
 

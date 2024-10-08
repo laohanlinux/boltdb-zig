@@ -113,6 +113,11 @@ pub const KeyPair = struct {
     pub fn init(_key: ?[]const u8, _value: ?[]const u8) @This() {
         return KeyPair{ .key = _key, .value = _value };
     }
+
+    /// Check if the key is not found.
+    pub fn isNotFound(self: *const KeyPair) bool {
+        return self.key == null;
+    }
 };
 
 // global general purpose allocator
