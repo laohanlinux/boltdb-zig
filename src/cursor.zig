@@ -144,7 +144,7 @@ pub const Cursor = struct {
     /// If the key does not exist then the next key is used. If no keys
     /// follow, a nil key is returned.
     /// The returned key and value are only valid for the life of the transaction.
-    pub fn seek(self: *Self, seekKey: []u8) KeyPair {
+    pub fn seek(self: *Self, seekKey: []const u8) KeyPair {
         var keyValueRet = self._seek(seekKey);
         // If we ended up after the last element of a page then move to the next one.
         const ref = self.stack.getLast();

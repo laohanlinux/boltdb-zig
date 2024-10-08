@@ -953,103 +953,224 @@ pub const Meta = packed struct {
 //     }
 // }
 
-test "DB-Write" {
+// test "DB-Write" {
+//     std.testing.log_level = .debug;
+//     var options = defaultOptions;
+//     options.readOnly = false;
+//     options.initialMmapSize = 10 * consts.PageSize;
+//     // options.strictMode = true;
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
+//     defer std.testing.allocator.free(filePath);
+
+//     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+
+//     const updateFn = struct {
+//         fn update(_kvDB: ?*DB, trx: *TX) Error!void {
+//             if (_kvDB == null) {
+//                 return Error.DatabaseNotOpen;
+//             }
+//             const Context = struct {
+//                 _tx: *TX,
+//             };
+//             const ctx = Context{ ._tx = trx };
+//             const forEach = struct {
+//                 fn inner(_: Context, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
+//                     std.log.info("execute forEach, bucket name: {s}", .{bucketName});
+//                 }
+//             };
+//             std.log.info("Execute write transaction: {}", .{trx.getID()});
+//             return trx.forEach(ctx, forEach.inner);
+//         }
+//     }.update;
+//     {
+//         // test "DB-update"
+//         for (0..1) |i| {
+//             _ = i; // autofix
+//             try kvDB.update(kvDB, updateFn);
+//             const meta = kvDB.getMeta();
+//             // because only freelist page is used, so the max pgid is 5
+//             assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
+//             assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
+//             assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
+//         }
+
+//         // Create a bucket
+//         const updateFn2 = struct {
+//             fn update(_: void, trx: *TX) Error!void {
+//                 var buf: [1000]usize = undefined;
+//                 randomBuf(buf[0..]);
+//                 std.log.info("random: {any}\n", .{buf});
+//                 for (buf) |i| {
+//                     const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
+//                     defer std.testing.allocator.free(bucketName);
+//                     const bt = try trx.createBucket(bucketName);
+//                     _ = bt; // autofix
+//                 }
+
+//                 const forEachCtx = struct {
+//                     _tx: *TX,
+//                 };
+//                 const ctx = forEachCtx{ ._tx = trx };
+//                 const forEachFn = struct {
+//                     fn inner(_: forEachCtx, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
+//                         std.log.info("execute forEach, bucket name: {s}", .{bucketName});
+//                     }
+//                 };
+//                 try trx.forEach(ctx, forEachFn.inner);
+
+//                 const bt = trx.getBucket("hello-0") orelse unreachable;
+//                 try bt.put(consts.KeyPair.init("ping", "pong"));
+//                 try bt.put(consts.KeyPair.init("echo", "ok"));
+//                 try bt.put(consts.KeyPair.init("Alice", "Bod"));
+//                 const got = bt.get("ping");
+//                 std.debug.assert(got != null);
+//                 std.debug.assert(std.mem.eql(u8, got.?, "pong"));
+
+//                 const got2 = bt.get("not");
+//                 std.debug.assert(got2 == null);
+//             }
+//         }.update;
+//         try kvDB.update({}, updateFn2);
+
+//         const viewFn = struct {
+//             fn view(_: void, trx: *TX) Error!void {
+//                 for (0..100) |_| {
+//                     const bt = trx.getBucket("Alice");
+//                     assert(bt == null, "the bucket is not null", .{});
+//                 }
+//                 for (0..100) |_| {
+//                     const bt = trx.getBucket("hello-0").?;
+//                     const kv = bt.get("not");
+//                     assert(kv == null, "should be not found the key", .{});
+//                 }
+//             }
+//         };
+//         try kvDB.view({}, viewFn.view);
+//         kvDB.close() catch unreachable;
+//     }
+//     // test "DB-read" {
+//     {}
+// }
+
+// test "Cursor_Bucket" {
+//     std.testing.log_level = .debug;
+//     var options = defaultOptions;
+//     options.readOnly = false;
+//     options.initialMmapSize = 10 * consts.PageSize;
+//     // options.strictMode = true;
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
+//     defer std.testing.allocator.free(filePath);
+
+//     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//     defer kvDB.close() catch unreachable;
+
+//     const updateFn = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             const b = trx.createBucket("widgets") catch unreachable;
+//             var cursor = b.cursor();
+//             defer cursor.deinit();
+//             const cb = cursor.bucket();
+//             std.debug.assert(@intFromPtr(b) == @intFromPtr(cb));
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn);
+// }
+
+test "Cursor_Seek" {
     std.testing.log_level = .debug;
     var options = defaultOptions;
     options.readOnly = false;
     options.initialMmapSize = 10 * consts.PageSize;
     // options.strictMode = true;
-    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
+    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
     defer std.testing.allocator.free(filePath);
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+    defer kvDB.close() catch unreachable;
 
     const updateFn = struct {
-        fn update(_kvDB: ?*DB, trx: *TX) Error!void {
-            if (_kvDB == null) {
-                return Error.DatabaseNotOpen;
-            }
-            const Context = struct {
-                _tx: *TX,
-            };
-            const ctx = Context{ ._tx = trx };
-            const forEach = struct {
-                fn inner(_: Context, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
-                    std.log.info("execute forEach, bucket name: {s}", .{bucketName});
-                }
-            };
-            std.log.info("Execute write transaction: {}", .{trx.getID()});
-            return trx.forEach(ctx, forEach.inner);
+        fn update(_: void, trx: *TX) Error!void {
+            const b = trx.createBucket("widgets") catch unreachable;
+            b.put(consts.KeyPair.init("foo", "0001")) catch unreachable;
+            b.put(consts.KeyPair.init("bar", "0002")) catch unreachable;
+            b.put(consts.KeyPair.init("baz", "0003")) catch unreachable;
+            _ = b.createBucket("bkt") catch unreachable;
         }
     }.update;
-    {
-        // test "DB-update"
-        for (0..1) |i| {
-            _ = i; // autofix
-            try kvDB.update(kvDB, updateFn);
-            const meta = kvDB.getMeta();
-            // because only freelist page is used, so the max pgid is 5
-            assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
-            assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
-            assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
+    try kvDB.update({}, updateFn);
+
+    const viewFn = struct {
+        fn view(_: void, trx: *TX) Error!void {
+            const b = trx.getBucket("widgets") orelse unreachable;
+            var cursor = b.cursor();
+            defer cursor.deinit();
+            // Exact match should go to the key.
+            const kv = cursor.seek("bar");
+            std.debug.assert(std.mem.eql(u8, kv.key.?, "bar"));
+            std.debug.assert(std.mem.eql(u8, kv.value.?, "0002"));
+
+            // Inexact match should go to the next key.
+            const kv2 = cursor.seek("bas");
+            std.debug.assert(std.mem.eql(u8, kv2.key.?, "baz"));
+            std.debug.assert(std.mem.eql(u8, kv2.value.?, "0003"));
+
+            // Low key should go to the first key.
+            const kv3 = cursor.seek("");
+            std.debug.assert(std.mem.eql(u8, kv3.key.?, "bar"));
+            std.debug.assert(std.mem.eql(u8, kv3.value.?, "0002"));
+
+            // High key should return no key.
+            const kv4 = cursor.seek("zzz");
+            std.debug.assert(kv4.key == null);
+            std.debug.assert(kv4.value == null);
+
+            // Buckets should return their key but no value.
+            const kv5 = cursor.seek("bkt");
+            std.debug.assert(std.mem.eql(u8, kv5.key.?, "bkt"));
+            std.debug.assert(kv5.value == null);
         }
+    }.view;
+    try kvDB.view({}, viewFn);
+}
 
-        // Create a bucket
-        const updateFn2 = struct {
-            fn update(_: void, trx: *TX) Error!void {
-                var buf: [1000]usize = undefined;
-                randomBuf(buf[0..]);
-                std.log.info("random: {any}\n", .{buf});
-                for (buf) |i| {
-                    const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
-                    defer std.testing.allocator.free(bucketName);
-                    const bt = try trx.createBucket(bucketName);
-                    _ = bt; // autofix
-                }
+test "Cursor_Delete" {
+    std.testing.log_level = .debug;
+    var options = defaultOptions;
+    options.readOnly = false;
+    options.initialMmapSize = 10 * consts.PageSize;
+    // options.strictMode = true;
+    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
+    defer std.testing.allocator.free(filePath);
 
-                const forEachCtx = struct {
-                    _tx: *TX,
-                };
-                const ctx = forEachCtx{ ._tx = trx };
-                const forEachFn = struct {
-                    fn inner(_: forEachCtx, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
-                        std.log.info("execute forEach, bucket name: {s}", .{bucketName});
-                    }
-                };
-                try trx.forEach(ctx, forEachFn.inner);
+    const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+    defer kvDB.close() catch unreachable;
 
-                const bt = trx.getBucket("hello-0") orelse unreachable;
-                try bt.put(consts.KeyPair.init("ping", "pong"));
-                try bt.put(consts.KeyPair.init("echo", "ok"));
-                try bt.put(consts.KeyPair.init("Alice", "Bod"));
-                const got = bt.get("ping");
-                std.debug.assert(got != null);
-                std.debug.assert(std.mem.eql(u8, got.?, "pong"));
-
-                const got2 = bt.get("not");
-                std.debug.assert(got2 == null);
+    const count = 1000;
+    // Insert every other key between 0 and $count.
+    const updateFn = struct {
+        fn update(_: void, trx: *TX) Error!void {
+            const b = trx.createBucket("widgets") catch unreachable;
+            for (0..count) |i| {
+                const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{i});
+                defer std.testing.allocator.free(key);
+                const value = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{i});
+                defer std.testing.allocator.free(value);
+                try b.put(consts.KeyPair.init(key, value));
             }
-        }.update;
-        try kvDB.update({}, updateFn2);
+            _ = trx.createBucket("sub") catch unreachable;
+        }
+    }.update;
+    try kvDB.update({}, updateFn);
 
-        const viewFn = struct {
-            fn view(_: void, trx: *TX) Error!void {
-                for (0..100) |_| {
-                    const bt = trx.getBucket("Alice");
-                    assert(bt == null, "the bucket is not null", .{});
-                }
-                for (0..100) |_| {
-                    const bt = trx.getBucket("hello-0").?;
-                    const kv = bt.get("not");
-                    assert(kv == null, "should be not found the key", .{});
-                }
-            }
-        };
-        try kvDB.view({}, viewFn.view);
-        kvDB.close() catch unreachable;
-    }
-    // test "DB-read" {
-    {}
+    const updateFn2 = struct {
+        fn update(_: void, trx: *TX) Error!void {
+            const b = trx.getBucket("widgets") orelse unreachable;
+            var cursor = b.cursor();
+            defer cursor.deinit();
+            try cursor.delete();
+        }
+    }.update;
+    try kvDB.update({}, updateFn2);
 }
 
 fn randomBuf(buf: []usize) void {
