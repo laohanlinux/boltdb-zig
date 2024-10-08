@@ -227,7 +227,7 @@ pub const Page = struct {
     }
 
     /// find the key in the branch page elements, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
-    pub fn searchBranchElements(self: *Self, key: []const u8) struct { index: usize, pgid: PgidType, exact: bool } {
+    pub fn searchBranchElements(self: *Self, key: []const u8) struct { index: usize, exact: bool } {
         var left: usize = 0;
         var right: usize = self.count;
         while (left < right) {
@@ -235,12 +235,12 @@ pub const Page = struct {
             const element = self.branchPageElementPtr(mid);
             const cmp = std.mem.order(u8, element.key(), key);
             switch (cmp) {
-                .eq => return .{ .index = mid, .pgid = element.pgid, .exact = true },
+                .eq => return .{ .index = mid, .exact = true },
                 .lt => left = mid + 1,
                 .gt => right = mid,
             }
         }
-        return .{ .index = left, .pgid = 0, .exact = false };
+        return .{ .index = left, .exact = false };
     }
 };
 

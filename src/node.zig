@@ -49,7 +49,11 @@ pub const Node = struct {
         }
         const ptr = @intFromPtr(self);
         _ = ptr; // autofix
-        // std.log.debug("trace node, deinit node, node id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, ptr });
+        const nKey = self.key orelse "empty";
+        _ = nKey; // autofix
+        const isParent = self.parent != null;
+        _ = isParent; // autofix
+        // std.log.debug("deinit node, key: {s}, node id: {d}, pgid: {d}, ptr: 0x{x}, isParent: {}", .{ nKey, self.id, self.pgid, ptr, isParent });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
@@ -169,6 +173,7 @@ pub const Node = struct {
 
     /// Inserts a key/value.
     /// *Note*: the oldKey, newKey will be stored in the node, so the oldKey, newKey will not be freed
+    /// the pgid is the page id of the new node, the new node is the child node of the current node
     pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: PgidType, flags: u32) *INode {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
@@ -205,6 +210,7 @@ pub const Node = struct {
         }
         inodeRef.value = value;
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
+        self.safeCheck();
         return inodeRef;
     }
 
@@ -257,7 +263,7 @@ pub const Node = struct {
 
     /// Writes the items into one or more pages.
     pub fn write(self: *Self, p: *page.Page) void {
-        defer std.log.info("succeed to write node into page({})", .{p.id});
+        defer std.log.info("succeed to write node into page(ptr: 0x{x}, id: {d}, flags: {d})", .{ @intFromPtr(p), p.id, p.flags });
         // Initialize page.
         if (self.isLeaf) {
             p.flags |= consts.intFromFlags(.leaf);
@@ -458,6 +464,7 @@ pub const Node = struct {
             {},
             lessFn,
         );
+        self.safeCheck();
         for (self.children.items, 0..) |child, i| {
             if (i > 0) {
                 assert(std.mem.order(u8, self.children.items[i].key.?, self.children.items[i - 1].key.?) == .gt, "the children node is not in order", .{});
@@ -470,12 +477,13 @@ pub const Node = struct {
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
         defer self.allocator.free(nodes);
-        std.log.debug("nodes size: {d}, key: {s}", .{ nodes.len, self.key orelse "empty" });
+        std.log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.len, self.key orelse "empty" });
         for (nodes, 0..) |node, i| {
+            _ = i; // autofix
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
-                std.log.debug("free node=>: {d}, i: {d}", .{ node.pgid, i });
+                // std.log.debug("free node=>: {d}, i: {d}", .{ node.pgid, i });
                 // TODO why free the page
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 node.pgid = 0;
@@ -497,7 +505,6 @@ pub const Node = struct {
                     self.allocator.free(node.key.?);
                 }
                 node.key = self.allocator.dupe(u8, newKey) catch unreachable;
-                //self.bucket.?.autoFreeObject.addNode(parent);
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
@@ -505,7 +512,7 @@ pub const Node = struct {
             // Update the statistics.
             _tx.stats.spill += 1;
         }
-
+        self.safeCheck();
         // If the root node split and created a new root then we need to spill that
         // as well. We'll clear out the children to make sure it doesn't try to respill.
         if (self.parent != null and self.parent.?.pgid == 0) {
@@ -517,11 +524,11 @@ pub const Node = struct {
     /// Attempts to combine the node with sibling nodes if the node fill
     /// size is below a threshold or if there are not enough keys.
     pub fn rebalance(self: *Self) void {
-        std.log.debug("rebalance node: {d}", .{self.pgid});
         if (!self.unbalance) {
             return;
         }
         self.unbalance = false;
+        std.log.debug("rebalance node: {d}", .{self.pgid});
 
         // Update statistics.
         self.bucket.?.tx.?.stats.rebalance += 1;
@@ -678,6 +685,27 @@ pub const Node = struct {
             self.pgid = 0;
         }
     }
+
+    fn nodePtrInt(self: *const Self) usize {
+        return @intFromPtr(self);
+    }
+
+    fn safeCheck(self: *const Self) void {
+        for (0..self.inodes.items.len) |i| {
+            if (i > 0) {
+                assert(std.mem.order(u8, self.inodes.items[i].key.?, self.inodes.items[i - 1].key.?) == .gt, "the inodes is not in order", .{});
+            }
+        }
+        if (self.parent) |parent| {
+            const pKey = parent.key orelse "";
+            const iKey = self.inodes.items[0].key.?;
+            assert(std.mem.eql(u8, pKey, "") or std.mem.order(u8, pKey, iKey) == .eq, "the parent key({s}) is not equal to the self key({s})", .{ pKey, iKey });
+        }
+        if (self.key) |_key| {
+            const iKey = self.inodes.items[0].key.?;
+            assert(std.mem.order(u8, _key, iKey) == .eq, "the key is not equal to the self key", .{});
+        }
+    }
 };
 
 /// Represents a node on a page.
@@ -687,6 +715,9 @@ pub const INode = struct {
     pgid: PgidType = 0,
     // The key is the first key in the inodes. the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
     // so the key should not be free. it will be free when the page is free.
+    // 1: if the node is a branch node, then the key is the first key in the inodes.
+    // 2: if the node is a leaf node, then the key is null(TODO).
+    // 3: if the node is root node, then the key is null.
     key: ?[]const u8 = null,
     // If the value is nil then it's a branch node.
     // same as key, the value is reference to the value in the inodes that bytes slice is reference to the value in the page.

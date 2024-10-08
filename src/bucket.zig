@@ -9,7 +9,7 @@ const Cursor = @import("cursor.zig").Cursor;
 const consts = @import("consts.zig");
 const util = @import("util.zig");
 const Error = @import("error.zig").Error;
-const PageOrNode = Tuple.t2(?*page.Page, ?*Node);
+const PageOrNode = consts.PageOrNode;
 const BufStr = consts.BufStr;
 const PgidType = consts.PgidType;
 // A set of nodes that will be freed by the bucket.
@@ -92,7 +92,9 @@ pub const Bucket = struct {
     tx: ?*tx.TX, // the associated transaction
     buckets: std.StringHashMap(*Bucket), // subbucket cache
     nodes: std.AutoHashMap(PgidType, *Node), // node cache
-    rootNode: ?*Node = null, // materialized node for the root page. Same to nodes, if the transaction is onlyRead, it is null.
+    // materialized node for the root page. Same to nodes.
+    // 1: If the transaction is onlyRead, it is null, because readonly transaction just use UnderlyingPage.
+    rootNode: ?*Node = null,
     page: ?*page.Page = null, // inline page reference
 
     // Sets the thredshold for filling nodes when they split. By default,
@@ -318,7 +320,7 @@ pub const Bucket = struct {
 
     /// Deletes a bucket at the give key.
     /// Returns an error if the bucket does not exists, or if the key represents a non-bucket value.
-    pub fn deleteBucket(self: *Self, key: []u8) Error!void {
+    pub fn deleteBucket(self: *Self, key: []const u8) Error!void {
         if (self.tx.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
@@ -326,7 +328,8 @@ pub const Bucket = struct {
         }
 
         // Move cursor to correct position.
-        const c = self.cursor();
+        var c = self.cursor();
+        defer c.deinit();
         const keyPairRef = c._seek(key);
 
         // Return an error if the bucket dosn't exist or is not a bucket.
@@ -339,12 +342,8 @@ pub const Bucket = struct {
         // Returnsively delete all child buckets.
         const child = self.getBucket(key).?;
         try child.forEach(traveBucket);
-
         // Remove cached copy. TODO memory leak
         _ = self.buckets.remove(key);
-
-        // Release all bucket pages to the freelist.
-        child.deinit();
 
         // Delete the node if we have a matching key.
         c.node().?.del(key);
@@ -411,7 +410,7 @@ pub const Bucket = struct {
     /// Removes a key from the bucket.
     /// If the key does not exist then nothing is done and a nil error is returned.
     /// Returns an error if the bucket was created from a read-only transaction.
-    pub fn delete(self: *Self, key: []u8) Error!void {
+    pub fn delete(self: *Self, key: []const u8) Error!void {
         if (self.tx.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.writable) {
@@ -419,7 +418,8 @@ pub const Bucket = struct {
         }
 
         // Move cursor to correct position.
-        const c = self.cursor();
+        var c = self.cursor();
+        defer c.deinit();
         const keyPairRef = c._seek(key);
 
         // Return on error if there is already existing bucket value.
@@ -666,7 +666,7 @@ pub const Bucket = struct {
                 self.allocator.free(valBuffer);
                 std.log.info("spill a inlineable bucket({s}) done!", .{entry.key_ptr.*});
             } else {
-                try entry.value_ptr.*.spill();
+                try entry.value_ptr.*.spill(); // TODO Opz code
                 // Update the child bucket header in this bucket.
                 value.appendNTimes(0, _Bucket.size()) catch unreachable;
                 const bt = _Bucket.init(value.items[0..]);
@@ -700,7 +700,7 @@ pub const Bucket = struct {
         // Update the root node for this bucket.
         assert(self.rootNode.?.pgid < self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
         self._b.?.root = self.rootNode.?.pgid;
-        std.debug.print("the rootNode update to {d}\n", .{self._b.?.root});
+        std.log.info("the rootNode update to {d}, isLeaf:{}, inodes: {any}\n", .{ self._b.?.root, self.rootNode.?.isLeaf, self.rootNode.?.inodes.items });
     }
 
     // Returns true if a bucket is small enough to be written inline
@@ -813,7 +813,7 @@ pub const Bucket = struct {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b == null or self._b.?.root == 0) {
-            // std.log.info("this is a inline bucket, be embedded at page", .{});
+            std.log.info("this is a inline bucket, be embedded at page", .{});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
                 return PageOrNode{ .first = null, .second = rNode };

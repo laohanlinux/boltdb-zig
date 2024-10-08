@@ -1,5 +1,7 @@
 const std = @import("std");
 const assert = @import("util.zig").assert;
+const Page = @import("page.zig").Page;
+const Node = @import("node.zig").Node;
 /// Represents a marker value to indicate that a file is a Bolt DB.
 pub const Magic = 0xED0CDAED;
 /// The data file format verison.
@@ -36,7 +38,7 @@ pub const PageFlag = enum(u8) {
     branch = 0x01,
     leaf = 0x02,
     meta = 0x04,
-    free_list = 0x10,
+    freeList = 0x10,
 };
 /// A bucket leaf flag.
 pub const bucket_leaf_flag: u32 = 0x01;
@@ -67,7 +69,7 @@ pub fn toFlags(flag: u16) PageFlag {
     }
 
     if (flag == 0x10) {
-        return PageFlag.free_list;
+        return PageFlag.freeList;
     }
 
     @panic("invalid flag");
@@ -76,23 +78,30 @@ pub fn toFlags(flag: u16) PageFlag {
 /// Represents the internal transaction indentifier.
 pub const TxId = u64;
 
-/// A tuple of two elements.
-pub const Tuple = struct {
-    /// A tuple of two elements.
-    pub fn t2(comptime firstType: type, comptime secondType: type) type {
-        return struct {
-            first: firstType,
-            second: secondType,
-        };
+/// A page or node.
+pub const PageOrNode = struct {
+    first: ?*Page,
+    second: ?*Node,
+};
+
+/// A key-value reference.
+pub const KeyValueRef = struct {
+    first: ?[]const u8,
+    second: ?[]u8,
+    third: u32,
+    /// Get the key.
+    pub fn key(self: *const KeyValueRef) ?[]const u8 {
+        return self.first.?;
     }
 
-    /// A tuple of three elements.
-    pub fn t3(comptime firstType: type, comptime secondType: type, comptime thirdType: type) type {
-        return struct {
-            first: firstType,
-            second: secondType,
-            third: thirdType,
-        };
+    /// Get the value.
+    pub fn value(self: *const KeyValueRef) ?[]u8 {
+        return self.second;
+    }
+
+    /// Get the Flag.
+    pub fn flag(self: *const KeyValueRef) u32 {
+        return self.third;
     }
 };
 

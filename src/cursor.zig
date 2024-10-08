@@ -11,7 +11,7 @@ const consts = @import("consts.zig");
 const PgidType = consts.PgidType;
 const Tuple = consts.Tuple;
 const KeyPair = consts.KeyPair;
-const KeyValueRef = consts.Tuple.t3(?[]const u8, ?[]u8, u32);
+const KeyValueRef = consts.KeyValueRef;
 const Error = @import("error.zig").Error;
 
 /// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
@@ -183,6 +183,7 @@ pub const Cursor = struct {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Start from root page/node and traverse to correct page.
         self.stack.resize(0) catch unreachable;
+        // std.log.info("seekKey: {s}, root: {}\n", .{ seekKey, self._bucket._b.?.root });
         self.search(seekKey, self._bucket._b.?.root);
         const ref = self.getLastElementRef().?;
         // If the cursor is pointing to the end of page/node then return nil.
@@ -306,7 +307,7 @@ pub const Cursor = struct {
             self.searchNode(key, _node);
             return;
         }
-
+        assert(p.?.id == pgid, "the page id is not equal to the pgid, page id: {}, pgid: {}", .{ p.?.id, pgid });
         self.searchPage(key, p.?);
     }
 
@@ -348,12 +349,22 @@ pub const Cursor = struct {
 
     // Search key from pages
     fn searchPage(self: *Self, key: []const u8, p: *page.Page) void {
+        assert(p.flags == consts.intFromFlags(.branch), "the page is not a branch page, page: {any}", .{p});
         // Binary search for the correct range.
-        const leafElements = p.searchBranchElements(key);
-        assert(leafElements.exact == true, "leafElements.exact should be true", .{});
-        self.getLastElementRef().?.index = leafElements.index;
+        var elementRef = p.searchBranchElements(key);
+        if (!elementRef.exact and elementRef.index > 0) {
+            elementRef.index -= 1;
+        }
+        // if (p.id == 117) {
+        //     for (0..p.count) |i| {
+        //         const elem = p.branchPageElement(i);
+        //         std.log.debug("branch page element: {any}, elementRef: {any}", .{ elem, elementRef });
+        //     }
+        // }
+        self.getLastElementRef().?.index = elementRef.index;
         // Recursively search to the next page.
-        self.search(key, leafElements.pgid);
+        const nextPgid = p.branchPageElementPtr(elementRef.index).pgid;
+        self.search(key, nextPgid);
     }
 
     // Searches the leaf node on the top of the stack for a key

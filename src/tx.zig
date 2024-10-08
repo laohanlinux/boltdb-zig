@@ -233,10 +233,18 @@ pub const TX = struct {
         // spill data onto dirty pages.
         startTime = std.time.Timer.start() catch unreachable;
         // During splitting (for example, merging two nodes at 90% and 30% will become 120% after merging, so merging first and then splitting is no problem)
+        if (self.root.rootNode) |rootNode| {
+            assert(rootNode.isLeaf, "rootNode should be leaf node", .{});
+        }
+        // assert(self.root.rootNode != null, "rootNode should be null", .{});
         self.root.spill() catch |err| {
             self._rollback();
             return err;
         };
+        // if (self.root.rootNode) |rootNode| {
+        //     assert(rootNode.isLeaf, "rootNode should be leaf node, detail: {any}", .{rootNode});
+        // }
+
         // std.log.debug("after commit root spill", .{});
         self.stats.spill_time += startTime.lap();
 
@@ -306,7 +314,6 @@ pub const TX = struct {
 
     /// Writes any dirty pages to disk.
     pub fn write(self: *Self) Error!void {
-        std.log.info("ready to write dirty pages into disk", .{});
         // Sort pages by id.
         var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.?.count());
         defer pagesSlice.deinit();
@@ -320,7 +327,7 @@ pub const TX = struct {
             }
         }.inner;
         std.mem.sort(*Page, pagesSlice.items, {}, asc);
-
+        std.log.info("ready to write dirty pages into disk, page count: {}", .{pagesSlice.items.len});
         const _db = self.db.?;
         const opts = _db.opts.?;
         for (pagesSlice.items) |p| {
@@ -330,7 +337,12 @@ pub const TX = struct {
             _ = try opts(_db.file, slice, offset);
             // Update statistics
             self.stats.write += 1;
-            std.log.debug("write page into disk: pgid: {}, offset: {}, size: {}", .{ p.id, offset, slice.len });
+            if (p.id == 117) {
+                const k1 = p.branchPageElement(0).?;
+                const k2 = p.branchPageElement(1).?;
+                std.log.debug("k1: {any}, k2: {any}\n", .{ k1, k2 });
+            }
+            std.log.debug("write page into disk: pgid: {}, flags: {}, offset: {}, size: {}", .{ p.id, consts.toFlags(p.flags), offset, slice.len });
         }
 
         // Ignore file sync if flag is set on DB.
@@ -550,7 +562,7 @@ pub const TX = struct {
     pub fn getPage(self: *Self, id: PgidType) *page.Page {
         // Check the dirty pages first.
         if (self.pages.?.get(id)) |p| {
-            // std.log.debug("get page from pages cache: {}", .{id});
+            std.log.debug("get page from pages cache: {}", .{id});
             return p;
         }
         // Otherwise return directly form the mmap.

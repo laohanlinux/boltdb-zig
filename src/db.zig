@@ -265,7 +265,7 @@ pub const DB = struct {
         {
             const p = self.pageInBuffer(buf, 2);
             p.id = 2;
-            p.flags = consts.intFromFlags(consts.PageFlag.free_list);
+            p.flags = consts.intFromFlags(consts.PageFlag.freeList);
             p.count = 0;
             p.overflow = 0;
         }
@@ -442,7 +442,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(PgidType, count);
-        std.log.debug("update the meta page, pgid: {}, minsz: {}, datasz: {}", .{ self.rwtx.?.meta.pgid, minsz, self.datasz });
+        std.log.debug("update the meta page, pgid: {}, flags:{} minsz: {}, datasz: {}", .{ self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
         return p;
     }
 
@@ -997,7 +997,7 @@ test "DB-Write" {
         // Create a bucket
         const updateFn2 = struct {
             fn update(_: void, trx: *TX) Error!void {
-                var buf: [1]usize = undefined;
+                var buf: [1000]usize = undefined;
                 randomBuf(buf[0..]);
                 std.log.info("random: {any}\n", .{buf});
                 for (buf) |i| {
@@ -1034,11 +1034,11 @@ test "DB-Write" {
 
         const viewFn = struct {
             fn view(_: void, trx: *TX) Error!void {
-                for (0..1) |_| {
+                for (0..100) |_| {
                     const bt = trx.getBucket("Alice");
                     assert(bt == null, "the bucket is not null", .{});
                 }
-                for (0..1) |_| {
+                for (0..100) |_| {
                     const bt = trx.getBucket("hello-0").?;
                     const kv = bt.get("not");
                     assert(kv == null, "should be not found the key", .{});

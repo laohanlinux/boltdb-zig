@@ -230,7 +230,7 @@ pub const FreeList = struct {
         // Combine the old free pgids and pgids waiting on an open transaction.
         //
         // Update the header flag.
-        p.flags |= consts.intFromFlags(.free_list);
+        p.flags |= consts.intFromFlags(.freeList);
         p.overflow = 0;
 
         // The page.Count can only hold up to 64k elements so if we overflow that
