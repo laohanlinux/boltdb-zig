@@ -56,7 +56,7 @@ pub const Cursor = struct {
         self.stack.resize(0) catch unreachable;
         const pNode = self._bucket.pageNode(self._bucket._b.?.root);
 
-        const ref = ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 };
+        const ref = ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 };
         self.stack.append(ref) catch unreachable;
         _ = self._first();
         // If we land on an empty page then move to the next value.
@@ -82,7 +82,7 @@ pub const Cursor = struct {
         assert(self._bucket.tx.?.db == null, "tx closed", .{});
         self.stack.resize(0) catch unreachable;
         const pNode = self._bucket.?.pageNode(self._bucket.?._b.root);
-        var ref = ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 };
+        var ref = ElementRef{ .page = pNode.page, .node = pNode.node, .index = 0 };
         ref.index = ref.count() - 1;
         self.stack.append(ref) catch unreachable;
         self._last();
@@ -102,6 +102,9 @@ pub const Cursor = struct {
     ) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         const keyValueRet = self._next();
+        if (keyValueRet.key == null) {
+            return KeyPair.init(null, null);
+        }
         // Return an error if current value is a bucket.
         if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.key, null);
@@ -212,7 +215,7 @@ pub const Cursor = struct {
                 pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
             }
             const pNode = self._bucket.pageNode(pgid);
-            self.stack.append(ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 }) catch unreachable;
+            self.stack.append(ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 }) catch unreachable;
             assert(self.stack.getLast().index == 0, "the index is not 0, index: {}", .{self.stack.getLast().index});
         }
 
@@ -287,8 +290,8 @@ pub const Cursor = struct {
     /// Search recursively performs a binary search against a given page/node until it finds a given key.
     pub fn search(self: *Self, key: []const u8, pgid: PgidType) void {
         const pNode = self._bucket.pageNode(pgid);
-        const p = pNode.first;
-        const n = pNode.second;
+        const p = pNode.page;
+        const n = pNode.node;
         if (p != null and (p.?.flags & (consts.intFromFlags(.branch) | consts.intFromFlags(.leaf)) == 0)) {
             assert(false, "invalid page type, pgid: {}, flags: {}, page: {any}\n", .{ pgid, p.?.flags, p.? });
         }
@@ -411,14 +414,14 @@ pub const Cursor = struct {
         assert(self.stack.items.len > 0, "accessing a node with a zero-length cursor stack", .{});
 
         // If the top of the stack is a leaf node then just return it.
-        if (self.stack.getLastOrNull()) |ref| {
-            if (ref.node != null and ref.node.?.isLeaf) {
-                return ref.node;
-            }
+        const latestElementRef = self.getLastElementRef().?;
+        if (latestElementRef.node != null and latestElementRef.node.?.isLeaf) {
+            return latestElementRef.node;
         }
         // Start from root and traverse down the lierarchy.
         var n = self.stack.items[0].node;
         if (n == null) {
+            // assert(self.stack.items[0].p.?.id > 1, "the page id is not valid, id: {}", .{self.stack.items[0].p.?.id});
             n = self._bucket.node(self.stack.items[0].p.?.id, null);
         }
         // find the node from the stack from the top to the bottom.

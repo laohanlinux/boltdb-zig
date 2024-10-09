@@ -234,6 +234,9 @@ func (c *Cursor) node() *node {
 
 ### Delete
 
+- Delete a key from a leaf node, after the deletion, if the node is less than half of the fill percent, then the node will be merged with its sibling node.
+- After the key is deleted, the node'key is not updated, because the rebanlance will be triggered during the commit process. So, the deleted key exists in the node'key, but the key is not valid.
+
 ## Write a bucket Into slice
 
 <a name="Write a bucket Into slice"></a>

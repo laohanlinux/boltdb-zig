@@ -193,14 +193,6 @@ pub const Page = struct {
     }
 
     /// Returns a byte slice of the page data.
-    pub fn getDataSlice(self: *Self) []u8 {
-        const ptr = self.getDataPtrInt();
-        const slice: [*]u8 = @ptrFromInt(ptr);
-        const pageNum = self.overflow + 1;
-        return slice[Self.headerSize()..(@as(usize, pageNum) * pageSize)];
-    }
-
-    /// Returns a byte slice of the page data.
     pub fn asSlice(self: *Self) []u8 {
         const slice: [*]u8 = @ptrCast(self);
         const pageNum = self.overflow + 1;

@@ -12,6 +12,7 @@ const Error = @import("error.zig").Error;
 const PageOrNode = consts.PageOrNode;
 const BufStr = consts.BufStr;
 const PgidType = consts.PgidType;
+const Page = page.Page;
 // A set of nodes that will be freed by the bucket.
 const NodeSet = std.AutoHashMap(*Node, void);
 
@@ -252,6 +253,7 @@ pub const Bucket = struct {
             assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
             assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
+            std.log.debug("inline align value: {any}", .{alignedValue});
         }
         return child;
     }
@@ -630,18 +632,18 @@ pub const Bucket = struct {
         const pNode = self.pageNode(pgid);
 
         // Execute function.
-        travel(context, pNode.first, pNode.second, depth);
+        travel(context, pNode.page, pNode.node, depth);
 
         // Recursively loop over children.
-        if (pNode.first) |p| {
+        if (pNode.page) |p| {
             if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
                 for (0..p.count) |i| {
                     const elem = p.branchPageElementPtr(i);
                     self._forEachPageNode(context, elem.pgid, depth + 1, travel);
                 }
             }
-        } else if (!pNode.second.?.isLeaf) {
-            for (pNode.second.?.inodes.items) |iNode| {
+        } else if (!pNode.node.?.isLeaf) {
+            for (pNode.node.?.inodes.items) |iNode| {
                 self._forEachPageNode(context, iNode.pgid, depth + 1, travel);
             }
         }
@@ -660,7 +662,6 @@ pub const Bucket = struct {
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
             if (entry.value_ptr.*.inlineable()) {
-                entry.value_ptr.*.free(); // TODO Opz code
                 const valBuffer = entry.value_ptr.*.write();
                 value.appendSlice(valBuffer) catch unreachable;
                 self.allocator.free(valBuffer);
@@ -748,10 +749,14 @@ pub const Bucket = struct {
         // Write a bucket header.
         const _bt = _Bucket.init(value);
         _bt.* = self._b.?;
+        assert(_bt.root == 0, "the bucket root is not eq 0", .{});
 
+        // TODO may sure no children at the node and more check!.
         // Convert byte slice to a fake page and write the roor node.
-        const p = page.Page.init(value[Bucket.bucketHeaderSize()..]);
-        n.write(p);
+        const p = Page.init(value[Bucket.bucketHeaderSize()..]);
+        const written = n.write(p) + Page.headerSize();
+        assert(written == n.size(), "the written size is not equal to the node size, written: {d}, need size: {d}", .{ written, n.size() });
+        std.log.info("after write page, the value is {any}", .{value});
         return value;
     }
 
@@ -813,20 +818,20 @@ pub const Bucket = struct {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b == null or self._b.?.root == 0) {
-            std.log.info("this is a inline bucket, be embedded at page", .{});
+            std.log.info("this is a inline bucket, be embedded at page, pgid: {d}", .{id});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
-                return PageOrNode{ .first = null, .second = rNode };
+                return PageOrNode{ .page = null, .node = rNode };
             }
-            return PageOrNode{ .first = self.page, .second = null };
+            return PageOrNode{ .page = self.page, .node = null };
         }
 
         // Check the node cache for non-inline buckets.
         if (self.nodes.get(id)) |cacheNode| {
-            return PageOrNode{ .first = null, .second = cacheNode };
+            return PageOrNode{ .page = null, .node = cacheNode };
         }
         // Finally lookup the page from the transaction if the id's node is not materialized.
-        return PageOrNode{ .first = self.tx.?.getPage(id), .second = null };
+        return PageOrNode{ .page = self.tx.?.getPage(id), .node = null };
     }
 
     /// Creates a node from a page and associates it with a given parent.
@@ -840,9 +845,10 @@ pub const Bucket = struct {
         const n = Node.init(self.allocator);
         n.bucket = self;
         if (parentNode != null) {
+            // the node is not the root node, so add it to the parent node's children that contact with it.
             parentNode.?.children.append(n) catch unreachable;
         } else {
-            self.rootNode = n;
+            self.rootNode = n; // the node is the root node
         }
         // Use the page into the node and cache it.
         var p = self.page;
@@ -852,8 +858,10 @@ pub const Bucket = struct {
         }
         // Read the page into the node and cacht it.
         n.read(p.?);
-        self.nodes.put(pgid, n) catch unreachable;
-
+        std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}", .{ pgid, n.nodePtrInt(), parentNode == null });
+        const entry = self.nodes.getOrPut(pgid) catch unreachable;
+        assert(!entry.found_existing, "the node is already exist, pgid: {d}, ptr: 0x{x}", .{ pgid, n.nodePtrInt() });
+        entry.value_ptr.* = n;
         // Update statistic.
         self.tx.?.stats.nodeCount += 1;
         return n;

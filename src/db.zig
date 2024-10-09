@@ -374,6 +374,7 @@ pub const DB = struct {
     }
 
     /// Retrives a page reference from the mmap based on the current page size.
+    /// TODO if the page is overflowed?
     pub fn pageById(self: *const Self, id: consts.PgidType) *Page {
         std.log.debug("retrive a page by pgid: {}, pageSize: {}", .{ id, self.pageSize });
         const pos: u64 = id * @as(u64, self.pageSize);
@@ -1145,7 +1146,7 @@ test "Cursor_Delete" {
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
 
-    const count = 10;
+    const count = 2;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -1153,11 +1154,12 @@ test "Cursor_Delete" {
             for (0..count) |i| {
                 const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{i});
                 defer std.testing.allocator.free(key);
-                const value = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{i});
+                const value = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count + i});
                 defer std.testing.allocator.free(value);
                 try b.put(consts.KeyPair.init(key, value));
+                std.log.info("insert key: {s}, value: {s}", .{ key, value });
             }
-            _ = trx.createBucket("sub") catch unreachable;
+            // _ = trx.createBucket("sub") catch unreachable;
         }
     }.update;
     try kvDB.update({}, updateFn);
@@ -1173,9 +1175,9 @@ test "Cursor_Delete" {
 
             var keyPair = cursor.first();
             while (!keyPair.isNotFound()) {
-                std.log.info("delete key: {s}", .{keyPair.key.?});
                 if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
                     try cursor.delete();
+                    std.log.info("delete key: {s}, cmpKey: {s}", .{ keyPair.key.?, key });
                     keyPair = cursor.next();
                     continue;
                 }

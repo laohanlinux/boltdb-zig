@@ -80,8 +80,8 @@ pub const TxId = u64;
 
 /// A page or node.
 pub const PageOrNode = struct {
-    first: ?*Page,
-    second: ?*Node,
+    page: ?*Page,
+    node: ?*Node,
 };
 
 /// A key-value reference.
@@ -96,13 +96,18 @@ pub const KeyPair = struct {
     key: ?[]const u8,
     value: ?[]const u8,
     /// Create a new key-value pair.
-    pub fn init(_key: ?[]const u8, _value: ?[]const u8) @This() {
-        return KeyPair{ .key = _key, .value = _value };
+    pub fn init(key: ?[]const u8, value: ?[]const u8) @This() {
+        return KeyPair{ .key = key, .value = value };
     }
 
     /// Check if the key is not found.
     pub fn isNotFound(self: *const KeyPair) bool {
         return self.key == null;
+    }
+
+    /// Check if the value is a bucket.
+    pub fn isBucket(self: *const KeyPair) bool {
+        return !self.isNotFound() and self.value == null;
     }
 };
 

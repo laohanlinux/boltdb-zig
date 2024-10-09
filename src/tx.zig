@@ -241,9 +241,6 @@ pub const TX = struct {
             self._rollback();
             return err;
         };
-        // if (self.root.rootNode) |rootNode| {
-        //     assert(rootNode.isLeaf, "rootNode should be leaf node, detail: {any}", .{rootNode});
-        // }
 
         // std.log.debug("after commit root spill", .{});
         self.stats.spill_time += startTime.lap();
@@ -342,7 +339,7 @@ pub const TX = struct {
                 const k2 = p.branchPageElement(1).?;
                 std.log.debug("k1: {any}, k2: {any}\n", .{ k1, k2 });
             }
-            std.log.debug("write page into disk: pgid: {}, flags: {}, offset: {}, size: {}", .{ p.id, consts.toFlags(p.flags), offset, slice.len });
+            std.log.debug("write page into disk: pgid: {}, flags: {}, offset: {}, size: {}, any: {any}", .{ p.id, consts.toFlags(p.flags), offset, slice.len, slice });
         }
 
         // Ignore file sync if flag is set on DB.
