@@ -194,17 +194,17 @@ pub const Bucket = struct {
         var _cursor = self.cursor();
         defer _cursor.deinit();
         const keyPairRef = _cursor._seek(name);
-        if (keyPairRef.first == null) {
+        if (keyPairRef.key == null) {
             return null;
         }
 
         // Return nil if the key dosn't exist or it is not a bucket.
-        if (!std.mem.eql(u8, name, keyPairRef.first.?) or keyPairRef.third & consts.BucketLeafFlag == 0) {
+        if (!std.mem.eql(u8, name, keyPairRef.key.?) or keyPairRef.flag & consts.BucketLeafFlag == 0) {
             return null;
         }
 
         // because the keyPairRef.second is a bucket value, so we need to open it.
-        const child = self.openBucket(keyPairRef.second.?);
+        const child = self.openBucket(keyPairRef.value.?);
         // cache the bucket
         const cpName = self.allocator.dupe(u8, name) catch unreachable;
         self.buckets.put(cpName, child) catch unreachable;
@@ -274,8 +274,8 @@ pub const Bucket = struct {
         const keyPairRef = c._seek(key);
 
         // Return an error if there is an existing key.
-        if (keyPairRef.first != null and std.mem.eql(u8, key, keyPairRef.first.?)) {
-            if (keyPairRef.third & consts.BucketLeafFlag != 0) {
+        if (keyPairRef.key != null and std.mem.eql(u8, key, keyPairRef.key.?)) {
+            if (keyPairRef.flag & consts.BucketLeafFlag != 0) {
                 return Error.BucketExists;
             }
             return Error.IncompactibleValue;
@@ -397,7 +397,7 @@ pub const Bucket = struct {
         const keyPairRef = c._seek(keyPair.key.?);
 
         // Return an error if there is an existing key with a bucket value.
-        if (keyPairRef.first != null and std.mem.eql(u8, keyPair.key.?, keyPairRef.first.?) and keyPairRef.third & consts.BucketLeafFlag != 0) {
+        if (keyPairRef.key != null and std.mem.eql(u8, keyPair.key.?, keyPairRef.key.?) and keyPairRef.flag & consts.BucketLeafFlag != 0) {
             return Error.IncompactibleValue;
         }
 
@@ -683,8 +683,8 @@ pub const Bucket = struct {
             // Update parent node.
             var c = self.cursor();
             const keyPairRef = c._seek(entry.key_ptr.*);
-            assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.first.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.first.?) });
-            assert(keyPairRef.third & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.third});
+            assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.key.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.key.?) });
+            assert(keyPairRef.flag & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.flag});
             _ = c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
         }

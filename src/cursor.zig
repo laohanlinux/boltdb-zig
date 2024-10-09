@@ -66,14 +66,14 @@ pub const Cursor = struct {
             _ = self._next();
         }
         const keyValueRet = self.keyValue();
-        if (keyValueRet.first == null) {
+        if (keyValueRet.key == null) {
             return KeyPair.init(null, null);
         }
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
-            return KeyPair.init(keyValueRet.first.?, null);
+        if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
+            return KeyPair.init(keyValueRet.key.?, null);
         }
-        return KeyPair.init(keyValueRet.first.?, keyValueRet.second);
+        return KeyPair.init(keyValueRet.key.?, keyValueRet.value);
     }
 
     /// Moves the cursor to the last item in the bucket and returns its key and value.
@@ -88,10 +88,10 @@ pub const Cursor = struct {
         self._last();
         const keyValueRet = self.keyValue();
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
-            return KeyPair.init(keyValueRet.third, null);
+        if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
+            return KeyPair.init(keyValueRet.key, null);
         }
-        return KeyPair.init(keyValueRet.first, keyValueRet.second);
+        return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
     /// Moves the cursor to the next item in the bucket and returns its key and value.
@@ -103,10 +103,10 @@ pub const Cursor = struct {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         const keyValueRet = self._next();
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
-            return KeyPair.init(keyValueRet.first, null);
+        if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
+            return KeyPair.init(keyValueRet.key, null);
         }
-        return KeyPair.init(keyValueRet.first, keyValueRet.second);
+        return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
     /// Moves the cursor to the previous item in the bucket and returns its key and value.
@@ -169,11 +169,11 @@ pub const Cursor = struct {
         }
         const keyValueRet = self.keyValue();
         // Return an error if current value is a bucket.
-        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
+        if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
             return Error.IncompactibleValue;
         }
 
-        self.getNode().?.del(keyValueRet.key().?);
+        self.getNode().?.del(keyValueRet.key.?);
     }
 
     // Moves the cursor to a given key and returns it.
@@ -188,7 +188,7 @@ pub const Cursor = struct {
         // If the cursor is pointing to the end of page/node then return nil.
         // TODO, if not found the key, the index should be 0, but the count maybe > 0
         if (ref.index >= ref.count()) {
-            return KeyValueRef{ .first = null, .second = null, .third = 0 };
+            return KeyValueRef{ .key = null, .value = null, .flag = 0 };
         }
         // If this is a bucket then return a nil value.
         return self.keyValue();
@@ -266,7 +266,7 @@ pub const Cursor = struct {
             // If we've hit the root page then stop and return. This will leave the
             // cursor on the last element of the past page.
             if (i == -1) {
-                return KeyValueRef{ .first = null, .second = null, .third = 0 };
+                return KeyValueRef{ .key = null, .value = null, .flag = 0 };
             }
 
             // Otherwise start from where we left off in the stack and find the
@@ -391,19 +391,19 @@ pub const Cursor = struct {
         if (ref.count() == 0 or ref.index >= ref.count()) {
             // 1: all key remove of tx, the page's keys are 0,
             // 2: index == count indicate not found the key.
-            return KeyValueRef{ .first = null, .second = null, .third = 0 };
+            return KeyValueRef{ .key = null, .value = null, .flag = 0 };
         }
 
         // Retrieve value from node.
         if (ref.node) |refNode| {
             const inode = &refNode.inodes.items[ref.index];
             // std.log.info("keyValue: {any}", .{inode});
-            return KeyValueRef{ .first = inode.getKey(), .second = inode.getValue(), .third = inode.flags };
+            return KeyValueRef{ .key = inode.getKey(), .value = inode.getValue(), .flag = inode.flags };
         }
 
         // Or retrieve value from page.
         const elem = ref.p.?.leafPageElement(ref.index).?;
-        return KeyValueRef{ .first = elem.key(), .second = elem.value(), .third = elem.flags };
+        return KeyValueRef{ .key = elem.key(), .value = elem.value(), .flag = elem.flags };
     }
 
     /// Returns the node that the cursor is currently positioned on.

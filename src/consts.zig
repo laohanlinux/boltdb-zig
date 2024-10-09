@@ -86,23 +86,9 @@ pub const PageOrNode = struct {
 
 /// A key-value reference.
 pub const KeyValueRef = struct {
-    first: ?[]const u8,
-    second: ?[]u8,
-    third: u32,
-    /// Get the key.
-    pub fn key(self: *const KeyValueRef) ?[]const u8 {
-        return self.first.?;
-    }
-
-    /// Get the value.
-    pub fn value(self: *const KeyValueRef) ?[]u8 {
-        return self.second;
-    }
-
-    /// Get the Flag.
-    pub fn flag(self: *const KeyValueRef) u32 {
-        return self.third;
-    }
+    key: ?[]const u8 = null,
+    value: ?[]u8 = null,
+    flag: u32 = 0,
 };
 
 /// A key-value pair.

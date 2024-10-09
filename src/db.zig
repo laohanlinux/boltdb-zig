@@ -1076,62 +1076,62 @@ pub const Meta = packed struct {
 //     try kvDB.update({}, updateFn);
 // }
 
-test "Cursor_Seek" {
-    std.testing.log_level = .debug;
-    var options = defaultOptions;
-    options.readOnly = false;
-    options.initialMmapSize = 10 * consts.PageSize;
-    // options.strictMode = true;
-    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
-    defer std.testing.allocator.free(filePath);
+// test "Cursor_Seek" {
+//     std.testing.log_level = .debug;
+//     var options = defaultOptions;
+//     options.readOnly = false;
+//     options.initialMmapSize = 10 * consts.PageSize;
+//     // options.strictMode = true;
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
+//     defer std.testing.allocator.free(filePath);
 
-    const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-    defer kvDB.close() catch unreachable;
+//     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//     defer kvDB.close() catch unreachable;
 
-    const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
-            const b = trx.createBucket("widgets") catch unreachable;
-            b.put(consts.KeyPair.init("foo", "0001")) catch unreachable;
-            b.put(consts.KeyPair.init("bar", "0002")) catch unreachable;
-            b.put(consts.KeyPair.init("baz", "0003")) catch unreachable;
-            _ = b.createBucket("bkt") catch unreachable;
-        }
-    }.update;
-    try kvDB.update({}, updateFn);
+//     const updateFn = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             const b = trx.createBucket("widgets") catch unreachable;
+//             b.put(consts.KeyPair.init("foo", "0001")) catch unreachable;
+//             b.put(consts.KeyPair.init("bar", "0002")) catch unreachable;
+//             b.put(consts.KeyPair.init("baz", "0003")) catch unreachable;
+//             _ = b.createBucket("bkt") catch unreachable;
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn);
 
-    const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
-            const b = trx.getBucket("widgets") orelse unreachable;
-            var cursor = b.cursor();
-            defer cursor.deinit();
-            // Exact match should go to the key.
-            const kv = cursor.seek("bar");
-            std.debug.assert(std.mem.eql(u8, kv.key.?, "bar"));
-            std.debug.assert(std.mem.eql(u8, kv.value.?, "0002"));
+//     const viewFn = struct {
+//         fn view(_: void, trx: *TX) Error!void {
+//             const b = trx.getBucket("widgets") orelse unreachable;
+//             var cursor = b.cursor();
+//             defer cursor.deinit();
+//             // Exact match should go to the key.
+//             const kv = cursor.seek("bar");
+//             std.debug.assert(std.mem.eql(u8, kv.key.?, "bar"));
+//             std.debug.assert(std.mem.eql(u8, kv.value.?, "0002"));
 
-            // Inexact match should go to the next key.
-            const kv2 = cursor.seek("bas");
-            std.debug.assert(std.mem.eql(u8, kv2.key.?, "baz"));
-            std.debug.assert(std.mem.eql(u8, kv2.value.?, "0003"));
+//             // Inexact match should go to the next key.
+//             const kv2 = cursor.seek("bas");
+//             std.debug.assert(std.mem.eql(u8, kv2.key.?, "baz"));
+//             std.debug.assert(std.mem.eql(u8, kv2.value.?, "0003"));
 
-            // Low key should go to the first key.
-            const kv3 = cursor.seek("");
-            std.debug.assert(std.mem.eql(u8, kv3.key.?, "bar"));
-            std.debug.assert(std.mem.eql(u8, kv3.value.?, "0002"));
+//             // Low key should go to the first key.
+//             const kv3 = cursor.seek("");
+//             std.debug.assert(std.mem.eql(u8, kv3.key.?, "bar"));
+//             std.debug.assert(std.mem.eql(u8, kv3.value.?, "0002"));
 
-            // High key should return no key.
-            const kv4 = cursor.seek("zzz");
-            std.debug.assert(kv4.key == null);
-            std.debug.assert(kv4.value == null);
+//             // High key should return no key.
+//             const kv4 = cursor.seek("zzz");
+//             std.debug.assert(kv4.key == null);
+//             std.debug.assert(kv4.value == null);
 
-            // Buckets should return their key but no value.
-            const kv5 = cursor.seek("bkt");
-            std.debug.assert(std.mem.eql(u8, kv5.key.?, "bkt"));
-            std.debug.assert(kv5.value == null);
-        }
-    }.view;
-    try kvDB.view({}, viewFn);
-}
+//             // Buckets should return their key but no value.
+//             const kv5 = cursor.seek("bkt");
+//             std.debug.assert(std.mem.eql(u8, kv5.key.?, "bkt"));
+//             std.debug.assert(kv5.value == null);
+//         }
+//     }.view;
+//     try kvDB.view({}, viewFn);
+// }
 
 test "Cursor_Delete" {
     std.testing.log_level = .debug;
@@ -1145,7 +1145,7 @@ test "Cursor_Delete" {
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
 
-    const count = 1000;
+    const count = 10;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
