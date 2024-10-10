@@ -1,27 +1,5 @@
 const std = @import("std");
 
-// /// Compares two byte slices lexicographically.
-// pub fn cmpBytes(a: []const u8, b: []const u8) std.math.Order {
-//     var i: usize = 0;
-//     var j: usize = 0;
-//     while (i < a.len and j < b.len) {
-//         if (a[i] < b[j]) {
-//             return std.math.Order.lt;
-//         } else if (a[i] > b[j]) {
-//             return std.math.Order.gt;
-//         }
-//         i += 1;
-//         j += 1;
-//     }
-//     if (i < a.len) {
-//         return std.math.Order.gt;
-//     } else if (j < b.len) {
-//         return std.math.Order.lt;
-//     } else {
-//         return std.math.Order.eq;
-//     }
-// }
-
 /// Asserts that `ok` is true. If not, it will print the formatted message and panic.
 pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     if (ok) {
@@ -34,6 +12,7 @@ pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     @panic(s);
 }
 
+/// panic the program with the formatted message
 pub fn panicFmt(comptime fmt: []const u8, args: anytype) noreturn {
     const allocator = std.heap.page_allocator;
     const s = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
@@ -42,16 +21,19 @@ pub fn panicFmt(comptime fmt: []const u8, args: anytype) noreturn {
     @panic(s);
 }
 
+/// check the platform is Windows
 pub inline fn isWindows() bool {
     const tag = @import("builtin").os.tag;
     return (tag == .windows);
 }
 
+/// check the platform is Linux
 pub inline fn isLinux() bool {
     const tag = @import("builtin").os.tag;
     return (tag == .linux);
 }
 
+/// check the platform is MacOS
 pub inline fn isMacOS() bool {
     const tag = @import("builtin").os.tag;
     return tag.isDarwin();
@@ -62,6 +44,7 @@ pub inline fn maxMapSize() usize {
     return 1 << 32;
 }
 
+/// mmap the file to the memory
 pub fn mmap(fp: std.fs.File, fileSize: u64, writeable: bool) ![]u8 {
     var port: u32 = std.posix.PROT.READ;
     if (writeable) {

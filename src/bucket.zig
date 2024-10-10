@@ -638,7 +638,7 @@ pub const Bucket = struct {
         if (pNode.page) |p| {
             if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
                 for (0..p.count) |i| {
-                    const elem = p.branchPageElementPtr(i);
+                    const elem = p.branchPageElementRef(i).?;
                     self._forEachPageNode(context, elem.pgid, depth + 1, travel);
                 }
             }
@@ -653,22 +653,20 @@ pub const Bucket = struct {
     pub fn spill(self: *Self) Error!void {
         // Spill all child buckets first.
         var itr = self.buckets.iterator();
-        var value = std.ArrayList(u8).init(self.allocator);
-        defer value.deinit();
         while (itr.next()) |entry| {
-            value.resize(0) catch unreachable;
+            var value: std.ArrayList(u8) = undefined;
             std.log.info("Run at bucket({s}) spill!", .{entry.key_ptr.*});
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
             if (entry.value_ptr.*.inlineable()) {
                 const valBuffer = entry.value_ptr.*.write();
-                value.appendSlice(valBuffer) catch unreachable;
-                self.allocator.free(valBuffer);
+                value = std.ArrayList(u8).fromOwnedSlice(self.allocator, valBuffer);
                 std.log.info("spill a inlineable bucket({s}) done!", .{entry.key_ptr.*});
             } else {
                 try entry.value_ptr.*.spill(); // TODO Opz code
                 // Update the child bucket header in this bucket.
+                value = std.ArrayList(u8).init(self.allocator);
                 value.appendNTimes(0, _Bucket.size()) catch unreachable;
                 const bt = _Bucket.init(value.items[0..]);
                 bt.* = entry.value_ptr.*._b.?;
@@ -678,6 +676,7 @@ pub const Bucket = struct {
             // If we delete a bucket ?
             if (entry.value_ptr.*.rootNode == null) {
                 std.log.debug("the root node is null, skip it.", .{});
+                value.deinit();
                 continue;
             }
 
@@ -688,6 +687,7 @@ pub const Bucket = struct {
             assert(keyPairRef.flag & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.flag});
             _ = c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
+            value.deinit();
         }
 
         // Ignore if there's not a materialized root node.
@@ -756,7 +756,7 @@ pub const Bucket = struct {
         const p = Page.init(value[Bucket.bucketHeaderSize()..]);
         const written = n.write(p) + Page.headerSize();
         assert(written == n.size(), "the written size is not equal to the node size, written: {d}, need size: {d}", .{ written, n.size() });
-        std.log.info("after write page, the value is {any}", .{value});
+        std.log.info("after write bucket to page, the vLen:{d}, data: {any}", .{ value.len, value });
         return value;
     }
 
@@ -801,14 +801,14 @@ pub const Bucket = struct {
 
     /// Removes all references to the old mmap.
     pub fn dereference(self: *Bucket) void {
+        std.log.info("dereference bucket, pgid: {d}", .{self._b.?.root});
         if (self.rootNode) |rNode| {
             rNode.root().?.dereference();
         }
-        defer self.buckets.deinit();
         var itr = self.buckets.iterator();
         while (itr.next()) |entry| {
-            _ = entry; // autofix
-            // entry.value_ptr.*.dereference();
+            std.log.info("dereference bucket({s}), pgid: {d}", .{ entry.key_ptr.*, entry.value_ptr.*._b.?.root });
+            entry.value_ptr.*.dereference();
         }
     }
 

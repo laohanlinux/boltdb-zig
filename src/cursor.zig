@@ -212,7 +212,7 @@ pub const Cursor = struct {
                 pgid = n.pgid;
             } else {
                 assert(ref.index < ref.p.?.count, "the index is out of range, index: {}, count: {}", .{ ref.index, ref.p.?.count });
-                pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
+                pgid = ref.p.?.branchPageElementRef(ref.index).?.pgid;
             }
             const pNode = self._bucket.pageNode(pgid);
             self.stack.append(ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 }) catch unreachable;
@@ -236,7 +236,7 @@ pub const Cursor = struct {
             if (ref.node) |_node| {
                 pgid = _node.pgid;
             } else {
-                pgid = ref.p.?.branchPageElementPtr(ref.index).pgid;
+                pgid = ref.p.?.branchPageElementRef(ref.index).?.pgid;
             }
 
             const pNode = self._bucket.pageNode(pgid);
@@ -365,7 +365,7 @@ pub const Cursor = struct {
         // }
         self.getLastElementRef().?.index = elementRef.index;
         // Recursively search to the next page.
-        const nextPgid = p.branchPageElementPtr(elementRef.index).pgid;
+        const nextPgid = p.branchPageElementRef(elementRef.index).?.pgid;
         self.search(key, nextPgid);
     }
 

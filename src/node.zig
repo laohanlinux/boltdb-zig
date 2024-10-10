@@ -206,6 +206,10 @@ pub const Node = struct {
             }
             // Free old value.
             if (inodeRef.value != null) {
+                if (value != null) {
+                    assert(@intFromPtr(inodeRef.value.?.ptr) != @intFromPtr(value.?.ptr), "the value is null", .{});
+                }
+                std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
                 self.allocator.free(inodeRef.getValue().?);
                 inodeRef.value = null;
             }
@@ -213,7 +217,8 @@ pub const Node = struct {
         inodeRef.value = value;
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
         self.safeCheck();
-        std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, self.inodes.items.len });
+        const vLen: usize = if (inodeRef.value) |v| v.len else 0;
+        std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
         return inodeRef;
     }
 
@@ -238,24 +243,25 @@ pub const Node = struct {
     pub fn read(self: *Self, p: *page.Page) void {
         self.pgid = p.id;
         self.isLeaf = p.isLeaf();
-        self.inodes.resize(@intCast(p.count)) catch unreachable;
-        std.log.info("read page: {any}", .{p.asSlice()});
+        self.inodes.resize(0) catch unreachable;
+        std.log.info("read page, pgid: {}, isLeaf: {}, count:{}, overflow:{}", .{ p.id, self.isLeaf, p.count, p.overflow });
+        // std.log.info("page binary data: {any}", .{p.asSlice()});
         for (0..@as(usize, p.count)) |i| {
             var inode = INode.init(0, 0, null, null);
             if (self.isLeaf) {
-                const elem = p.leafPageElementPtr(i);
+                const elem = p.leafPageElementRef(i).?;
                 inode.flags = elem.flags;
                 inode.isNew = false;
                 inode.key = elem.key();
                 inode.value = elem.value();
                 std.log.info("read leaf element: {any}", .{elem.*});
             } else {
-                const elem = p.branchPageElementPtr(i);
+                const elem = p.branchPageElementRef(i).?;
                 inode.pgid = elem.pgid;
                 inode.isNew = false;
                 inode.key = elem.key();
             }
-            std.log.info("read element, index: {d}, isLeaf: {}, key: {any}", .{ i, self.isLeaf, inode.key orelse "empty" });
+            std.log.info("read element, index: {d}, inode.id:{d}, inode.flags:{any}, inode.pgid:{d}, isLeaf: {}, key: {s}", .{ i, inode.id, inode.flags, inode.pgid, self.isLeaf, inode.key orelse "empty" });
             assert(inode.key.?.len > 0, "key is null", .{});
             self.inodes.append(inode) catch unreachable;
         }
@@ -274,7 +280,6 @@ pub const Node = struct {
     /// Writes the items into one or more pages.
     /// return the number of bytes written (not include the page header)
     pub fn write(self: *Self, p: *page.Page) usize {
-        // defer std.log.info("succeed to write node into page(ptr: 0x{x}, id: {d}, flags: {any})", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags) });
         // Initialize page.
         if (self.isLeaf) {
             p.flags |= consts.intFromFlags(.leaf);
@@ -286,16 +291,17 @@ pub const Node = struct {
         p.count = @as(u16, @intCast(self.inodes.items.len));
         // Stop here if there are no items to write.
         if (p.count == 0) {
-            std.log.info("no inode need write, pgid={}", .{p.id});
+            std.log.info("no inode need write, pgid={}, flags: {any}", .{ p.id, consts.toFlags(p.flags) });
             return 0;
         }
         // |e1|e2|e3|b1|b2|b3|
         // Loop over each item and write it to the page.
+        // cals the data start position, the data start position is the page header size + the page element size * the number of inodes
         const dataStart = Page.headerSize() + self.pageElementSize() * self.inodes.items.len;
-        const dataSlice = p.asSlice()[dataStart..];
-        assert(dataSlice.len >= (self.pageElementSize() * self.inodes.items.len), "the page({d}) is too small to write all inodes, data size: {d}, need size: {d}", .{ p.id, dataSlice.len, self.pageElementSize() * self.inodes.items.len });
-        var b = dataSlice[self.pageElementSize() * self.inodes.items.len ..];
+        var b = p.asSlice()[dataStart..];
+        // assert(b.len >= (self.pageElementSize() * self.inodes.items.len), "the page({d}) is too small to write all inodes, data size: {d}, need size: {d}", .{ p.id, dataSlice.len, self.pageElementSize() * self.inodes.items.len });
         var written: usize = 0;
+        std.log.info("write node into page(ptr: 0x{x}, id: {d}, flags: {any}), countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), p.count, p.overflow, p.asSlice().len, b.len });
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
@@ -321,7 +327,7 @@ pub const Node = struct {
             // See: https://github.com/boltdb/bolt/pull/335
             const kLen = inode.key.?.len;
             const vLen: usize = if (inode.value) |value| value.len else 0;
-            assert(b.len >= (kLen + vLen), "it should be not happen!", .{});
+            // assert(b.len >= (kLen + vLen), "it should be not happen, i: {d}, key: {s}, kLen: {d}, vLen: {d}, b.len: {d}", .{ i, inode.key.?, kLen, vLen, b.len });
             written += kLen + vLen;
             // Write data for the element to the end of the page.
             std.mem.copyForwards(u8, b[0..kLen], inode.key.?);
@@ -500,8 +506,6 @@ pub const Node = struct {
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
-                // std.log.debug("free node=>: {d}, i: {d}", .{ node.pgid, i });
-                // TODO why free the page
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 node.pgid = 0;
             }
@@ -510,7 +514,8 @@ pub const Node = struct {
             const p = try _tx.allocate(allocateSize);
             assert(p.id < _tx.meta.pgid, "pgid ({}) above high water mark ({})", .{ p.id, _tx.meta.pgid });
             node.pgid = p.id;
-            _ = node.write(p);
+            const written = node.write(p) + Page.headerSize();
+            assert(written == node.size(), "spill: wrote {d} bytes, expected {d} for node {d}", .{ written, node.size(), node.pgid });
             node.spilled = true;
 
             // Insert into parent inodes
@@ -666,20 +671,20 @@ pub const Node = struct {
     pub fn dereference(self: *Self) void {
         if (self.key != null) {
             const cpKey = self.allocator.dupe(u8, self.key.?) catch unreachable;
-            self.allocator.free(self.key.?);
+            // self.allocator.free(self.key.?);
             self.key = cpKey;
             assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
         }
 
         for (self.inodes.items) |*inode| {
             const newKey = self.allocator.dupe(u8, inode.key.?) catch unreachable;
-            self.allocator.free(inode.key.?);
+            // self.allocator.free(inode.key.?);
             inode.key = newKey;
             assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
                 const newValue = self.allocator.dupe(u8, value) catch unreachable;
-                self.allocator.free(value);
+                // self.allocator.free(value);
                 inode.value = newValue;
                 assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", .{});
             }

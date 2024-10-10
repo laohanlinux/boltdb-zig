@@ -548,7 +548,7 @@ pub const TX = struct {
         // Recursively loop over children.
         if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
             for (0..p.count) |i| {
-                const elem = p.branchPageElementPtr(i);
+                const elem = p.branchPageElementRef(i).?;
                 self.forEachPage(elem.pgid, depth + 1, context, travel);
             }
         }

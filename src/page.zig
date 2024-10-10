@@ -3,16 +3,7 @@ const db = @import("db.zig");
 const consts = @import("consts.zig");
 const PgidType = consts.PgidType;
 const PgIds = consts.PgIds;
-const cmpBytes = @import("util.zig").cmpBytes;
 
-/// The size of a branch page element.
-pub const branchPageElementSize = BranchPageElement.headerSize();
-/// The size of a leaf page element.
-pub const leafPageElementSize = LeafPageElement.headerSize();
-/// The bucket leaf flag.
-pub const bucket_leaf_flag: u32 = 0x01;
-/// The size of a page.
-const pageSize = consts.PageSize;
 /// A page.
 pub const Page = struct {
     // The page identifier.
@@ -21,8 +12,9 @@ pub const Page = struct {
     flags: u16,
     // The number of elements in the page.
     count: u16,
-    // The number of overflow elements in the page.
+    // the number of overflow page
     overflow: u32,
+
     const Self = @This();
     // the size of this, but why align(4)?
     // pub const headerSize: usize = 16; // Has some bug if use @sizeOf(Page), when other file reference it;
@@ -81,28 +73,18 @@ pub const Page = struct {
         return dPtr;
     }
 
-    /// Retrives the branch page reference element by index.
+    /// Converts a pointer to a specific type.
+    pub fn opaqPtrTo(_: *Self, ptr: ?*anyopaque, comptime T: type) T {
+        return @ptrCast(@alignCast(ptr));
+    }
+
+    /// Returns branch element reference by index.
     pub fn branchPageElementRef(self: *const Self, index: usize) ?*const BranchPageElement {
         if (self.count <= index) {
             return null;
         }
         const ptr = self.getDataPtrIntRef() + index * BranchPageElement.headerSize();
         const dPtr: *const BranchPageElement = @ptrFromInt(ptr);
-        return dPtr;
-    }
-
-    /// Converts a pointer to a specific type.
-    pub fn opaqPtrTo(_: *Self, ptr: ?*anyopaque, comptime T: type) T {
-        return @ptrCast(@alignCast(ptr));
-    }
-
-    /// Returns the pointer of index's branch elements
-    pub fn branchPageElementPtr(self: *Self, index: usize) *BranchPageElement {
-        if (self.count <= index) {
-            return undefined;
-        }
-        const ptr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
-        const dPtr: *BranchPageElement = @ptrFromInt(ptr);
         return dPtr;
     }
 
@@ -155,17 +137,6 @@ pub const Page = struct {
     }
 
     /// Retrives a list of freelist page elements.
-    pub fn freelistPageOverElements(self: *Self) ?[]PgidType {
-        const ptr = self.getDataPtrInt();
-        const firstPtr: *PgidType = @ptrFromInt(ptr);
-        var elements: [*]PgidType = @ptrCast(firstPtr);
-        // because page has overflow, the page.Count bit flag the page is overflow page instead of count flag,
-        // so the page count flag has store at `next 64bit`.
-        const overflowCount = elements[0..1][0];
-        return elements[1..@as(usize, overflowCount)];
-    }
-
-    /// Retrives a list of freelist page elements.
     pub fn freelistPageOverWithCountElements(self: *Self) ?[]PgidType {
         const ptr = self.getDataPtrInt();
         const firstPtr: *PgidType = @ptrFromInt(ptr);
@@ -193,20 +164,21 @@ pub const Page = struct {
     }
 
     /// Returns a byte slice of the page data.
+    /// NOTE: if the page is inline page, the slice's len maybe lt one page size.
     pub fn asSlice(self: *Self) []u8 {
         const slice: [*]u8 = @ptrCast(self);
         const pageNum = self.overflow + 1;
-        return slice[0..@as(usize, pageNum * pageSize)];
+        return slice[0..@as(usize, pageNum * consts.PageSize)];
     }
 
     /// find the key in the leaf page elements, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
-    pub fn searchLeafElements(self: *Self, key: []const u8) struct { index: usize, exact: bool } {
+    pub fn searchLeafElements(self: *const Self, key: []const u8) struct { index: usize, exact: bool } {
         var left: usize = 0;
         var right: usize = self.count;
         // std.log.debug("searchLeafElements: {s}, count: {d}", .{ key, self.count });
         while (left < right) {
             const mid = left + (right - left) / 2;
-            const element = self.leafPageElementPtr(mid);
+            const element = self.leafPageElementRef(mid).?;
             const cmp = std.mem.order(u8, element.key(), key);
             switch (cmp) {
                 .eq => return .{ .index = mid, .exact = true },
@@ -219,12 +191,12 @@ pub const Page = struct {
     }
 
     /// find the key in the branch page elements, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
-    pub fn searchBranchElements(self: *Self, key: []const u8) struct { index: usize, exact: bool } {
+    pub fn searchBranchElements(self: *const Self, key: []const u8) struct { index: usize, exact: bool } {
         var left: usize = 0;
         var right: usize = self.count;
         while (left < right) {
             const mid = left + (right - left) / 2;
-            const element = self.branchPageElementPtr(mid);
+            const element = self.branchPageElementRef(mid).?;
             const cmp = std.mem.order(u8, element.key(), key);
             switch (cmp) {
                 .eq => return .{ .index = mid, .exact = true },
