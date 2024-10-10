@@ -334,12 +334,12 @@ pub const TX = struct {
             _ = try opts(_db.file, slice, offset);
             // Update statistics
             self.stats.write += 1;
-            if (p.id == 117) {
-                const k1 = p.branchPageElement(0).?;
-                const k2 = p.branchPageElement(1).?;
-                std.log.debug("k1: {any}, k2: {any}\n", .{ k1, k2 });
-            }
-            std.log.debug("write page into disk: pgid: {}, flags: {}, offset: {}, size: {}, any: {any}", .{ p.id, consts.toFlags(p.flags), offset, slice.len, slice });
+            // if (p.id == 117) {
+            //     const k1 = p.branchPageElement(0).?;
+            //     const k2 = p.branchPageElement(1).?;
+            //     std.log.debug("k1: {any}, k2: {any}\n", .{ k1, k2 });
+            // }
+            // std.log.debug("write page into disk: pgid: {}, flags: {}, offset: {}, size: {}, any: {any}", .{ p.id, consts.toFlags(p.flags), offset, slice.len, slice });
         }
 
         // Ignore file sync if flag is set on DB.

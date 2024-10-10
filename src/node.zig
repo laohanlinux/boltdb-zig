@@ -274,7 +274,7 @@ pub const Node = struct {
     /// Writes the items into one or more pages.
     /// return the number of bytes written (not include the page header)
     pub fn write(self: *Self, p: *page.Page) usize {
-        defer std.log.info("succeed to write node into page(ptr: 0x{x}, id: {d}, flags: {any})", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags) });
+        // defer std.log.info("succeed to write node into page(ptr: 0x{x}, id: {d}, flags: {any})", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags) });
         // Initialize page.
         if (self.isLeaf) {
             p.flags |= consts.intFromFlags(.leaf);
@@ -330,7 +330,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            std.log.info("inode: btr: {}, {any}, value: {any}", .{ @intFromPtr(b.ptr), inode.key.?, inode.value });
+            // std.log.info("inode: btr: {}, {any}, value: {any}", .{ @intFromPtr(b.ptr), inode.key.?, inode.value });
         }
         // const deump = p.asSlice();
         // std.log.info("deump: {any}", .{deump});

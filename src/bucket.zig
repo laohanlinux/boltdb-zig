@@ -253,7 +253,7 @@ pub const Bucket = struct {
             assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
             assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
-            std.log.debug("inline align value: {any}", .{alignedValue});
+            // std.log.debug("inline align value: {any}", .{alignedValue});
         }
         return child;
     }
@@ -701,7 +701,7 @@ pub const Bucket = struct {
         // Update the root node for this bucket.
         assert(self.rootNode.?.pgid < self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
         self._b.?.root = self.rootNode.?.pgid;
-        std.log.info("the rootNode update to {d}, isLeaf:{}, inodes: {any}\n", .{ self._b.?.root, self.rootNode.?.isLeaf, self.rootNode.?.inodes.items });
+        std.log.info("the rootNode update to {d}, isLeaf:{}, inodes: {any}\n", .{ self._b.?.root, self.rootNode.?.isLeaf, self.rootNode.?.inodes.items.len });
     }
 
     // Returns true if a bucket is small enough to be written inline
