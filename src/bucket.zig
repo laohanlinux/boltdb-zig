@@ -19,8 +19,8 @@ const NodeSet = std.AutoHashMap(*Node, void);
 // A set of aligned values that will be freed by the bucket.
 pub const AutoFreeObject = struct {
     isFreed: bool = false,
-    // A set of aligned values that will be freed by the bucket.
-    alignedValue: std.ArrayList([]u8),
+    // A set of bytes that will be freed by the bucket.
+    autoFreeBytes: std.AutoHashMap(u64, []u8),
     // A set of nodes that will be freed by the bucket.
     // 1: Note, the bucket.nodes is not in the autoFreeObject, so we need to destroy it manually.
     // But the bucket.rootNode is in the autoFreeObject, so we don't need to destroy it manually.
@@ -35,10 +35,10 @@ pub const AutoFreeObject = struct {
     /// Init the auto free object.
     pub fn init(allocator: std.mem.Allocator) AutoFreeObject {
         return .{
-            .alignedValue = std.ArrayList([]u8).init(allocator),
             .autoFreeNodes = NodeSet.init(allocator),
             .allocator = allocator,
             .freePtrs = std.AutoArrayHashMap(u64, isize).init(allocator),
+            .autoFreeBytes = std.AutoHashMap(u64, []u8).init(allocator),
         };
     }
 
@@ -54,34 +54,43 @@ pub const AutoFreeObject = struct {
         }
     }
 
-    /// Add an aligned value to the auto free object.
-    pub fn addAlignedValue(self: *AutoFreeObject, value: []u8) void {
-        self.alignedValue.append(value) catch unreachable;
+    /// Add a byte slice to the auto free object.
+    pub fn addAutoFreeBytes(self: *AutoFreeObject, value: []u8) void {
+        const ptr = @intFromPtr(value.ptr);
+        const got = self.autoFreeBytes.getOrPut(ptr) catch unreachable;
+        if (got.found_existing) {
+            std.log.debug("the auto free bytes({}: 0x{x}) is already in the auto free bytes", .{ value.len, ptr });
+        } else {
+            got.value_ptr.* = value;
+            std.log.debug("add auto free bytes: {d}, ptr: 0x{x}", .{ value.len, ptr });
+        }
     }
 
     /// Deinit the auto free object.
     pub fn deinit(self: *AutoFreeObject, allocator: std.mem.Allocator) void {
         assert(self.isFreed == false, "the auto free object is already freed", .{});
         self.isFreed = true;
-        var it = self.autoFreeNodes.keyIterator();
-        while (it.next()) |node| {
-            const ptr = @intFromPtr(node);
-            const key = node.*.key orelse "";
-            _ = key; // autofix
-            // std.log.debug("deinit the auto free node: {d}, key: {s}, ptr: 0x{x}", .{ node.*.id, key, ptr });
-            node.*.deinit();
-            self.allocator.destroy(node.*);
-            self.freePtrs.put(ptr, 1) catch unreachable;
+        {
+            var it = self.autoFreeNodes.keyIterator();
+            while (it.next()) |node| {
+                const ptr = @intFromPtr(node);
+                node.*.deinit();
+                self.allocator.destroy(node.*);
+                self.freePtrs.put(ptr, 1) catch unreachable;
+            }
+            self.autoFreeNodes.deinit();
         }
-        self.autoFreeNodes.deinit();
 
-        for (0..self.alignedValue.items.len) |i| {
-            allocator.free(self.alignedValue.items[i]);
-            const ptr = @intFromPtr(self.alignedValue.items[i].ptr);
-            self.freePtrs.put(ptr, 1) catch unreachable;
-        }
-        self.alignedValue.deinit();
         self.freePtrs.deinit();
+
+        {
+            var it = self.autoFreeBytes.iterator();
+            while (it.next()) |entry| {
+                std.log.debug("free auto free bytes: {d}, ptr: 0x{x}, bytes: {any}", .{ entry.value_ptr.*.len, @intFromPtr(entry.value_ptr.*.ptr), entry.value_ptr.* });
+                allocator.free(entry.value_ptr.*);
+            }
+            self.autoFreeBytes.deinit();
+        }
     }
 };
 
@@ -225,7 +234,7 @@ pub const Bucket = struct {
         const isAligned = @intFromPtr(value.ptr) % alignment == 0;
         if (!isAligned) {
             alignedValue = self.allocator.dupe(u8, value) catch unreachable;
-            self.tx.?.autoFreeNodes.alignedValue.append(alignedValue) catch unreachable;
+            self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
             // self.stats().unAlignValueN += 1;
             // std.log.warn("unaligned memory, align size: {}", .{alignedValue.len});
         } else {
@@ -756,7 +765,7 @@ pub const Bucket = struct {
         const p = Page.init(value[Bucket.bucketHeaderSize()..]);
         const written = n.write(p) + Page.headerSize();
         assert(written == n.size(), "the written size is not equal to the node size, written: {d}, need size: {d}", .{ written, n.size() });
-        std.log.info("after write bucket to page, the vLen:{d}, data: {any}", .{ value.len, value });
+        std.log.info("after write bucket to page, the vPtr: 0x{x}, vLen:{d}, data: {any}", .{ @intFromPtr(value.ptr), value.len, value });
         return value;
     }
 

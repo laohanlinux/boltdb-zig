@@ -209,8 +209,9 @@ pub const Node = struct {
                 if (value != null) {
                     assert(@intFromPtr(inodeRef.value.?.ptr) != @intFromPtr(value.?.ptr), "the value is null", .{});
                 }
-                std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
-                self.allocator.free(inodeRef.value.?);
+                // std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
+                // self.allocator.free(inodeRef.value.?);
+                self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
                 inodeRef.value = null;
             }
         }
@@ -800,7 +801,9 @@ pub const INode = struct {
             self.key = null;
         }
         if (self.value) |value| {
-            allocator.free(value);
+            _ = value; // autofix
+            // std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
+            // allocator.free(value);
             self.value = null;
         }
     }
