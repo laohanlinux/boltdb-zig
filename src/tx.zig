@@ -31,7 +31,7 @@ pub const TX = struct {
     db: ?*DB,
     meta: *Meta,
     root: *Bucket, // the root bucket of the transaction, the bucket root is reference to the meta.root
-    pages: ?*std.AutoHashMap(PgidType, *Page),
+    pages: ?std.AutoHashMap(PgidType, *Page),
     autoFreeNodes: AutoFreeObject,
     stats: TxStats,
 
@@ -53,8 +53,8 @@ pub const TX = struct {
         const self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
         self.writable = writable;
-        self.pages = _db.allocator.create(std.AutoHashMap(PgidType, *Page)) catch unreachable;
-        self.pages.?.* = std.AutoHashMap(PgidType, *Page).init(_db.allocator);
+        // self.pages = _db.allocator.create(std.AutoHashMap(PgidType, *Page)) catch unreachable;
+        self.pages = std.AutoHashMap(PgidType, *Page).init(_db.allocator);
         self.stats = TxStats{};
         // Copy the meta page since it can be changed by the writer.
         self.meta = _db.allocator.create(Meta) catch unreachable;
@@ -225,6 +225,7 @@ pub const TX = struct {
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;
+        std.log.debug("rebalance root, root: {d}", .{self.root._b.?.root});
         self.root.rebalance();
         if (self.stats.rebalance > 0) {
             self.stats.spill_time += startTime.lap();
@@ -524,10 +525,10 @@ pub const TX = struct {
         if (self.pages) |_pages| {
             var itr = _pages.valueIterator();
             while (itr.next()) |p| {
+                std.log.debug("free page: {}, ptr: 0x{x}", .{ p.*.id, p.*.ptrInt() });
                 self.allocator.free(p.*.asSlice());
             }
-            _pages.deinit();
-            self.allocator.destroy(_pages);
+            self.pages.?.deinit();
             self.pages = null;
         }
         self.autoFreeNodes.deinit(self.allocator);

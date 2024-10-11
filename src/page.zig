@@ -151,6 +151,11 @@ pub const Page = struct {
         }
     }
 
+    /// Returns the pointer of the page.
+    pub fn ptrInt(self: *const Self) usize {
+        return @intFromPtr(self);
+    }
+
     /// Returns the pointer of the page data.
     pub fn getDataPtrInt(self: *const Self) usize {
         const ptr = @intFromPtr(self);

@@ -184,6 +184,7 @@ pub const Node = struct {
         } else if (newKey.len <= 0) {
             assert(false, "put: zero-length new key", .{});
         }
+        std.log.debug("put key: {s}, keyPtr: 0x{x}, valuePtr: 0x{x}", .{ newKey, @intFromPtr(newKey.ptr), @intFromPtr(value.?.ptr) });
         // Find insertion index.
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].getKey().?));
@@ -205,17 +206,18 @@ pub const Node = struct {
                 inodeRef.key = newKey;
             }
             // Free old value.
-            if (inodeRef.value != null) {
+            if (inodeRef.value != null and inodeRef.isNew) {
                 if (value != null) {
                     assert(@intFromPtr(inodeRef.value.?.ptr) != @intFromPtr(value.?.ptr), "the value is null", .{});
                 }
-                // std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
-                // self.allocator.free(inodeRef.value.?);
-                self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
+                std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
+                // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
+                self.allocator.free(inodeRef.value.?);
                 inodeRef.value = null;
             }
         }
         inodeRef.value = value;
+        inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
         self.safeCheck();
         const vLen: usize = if (inodeRef.value) |v| v.len else 0;
@@ -227,17 +229,12 @@ pub const Node = struct {
     pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
         const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) orelse return;
-        const beforeCount = self.inodes.items.len;
-        var inode = self.inodes.orderedRemove(index);
+        const inode = self.inodes.orderedRemove(index);
         assert(std.mem.eql(u8, inode.key.?, key), "the key is not equal to the inode key, key: {s}, inode key: {s}", .{ key, inode.key.? });
-        assert(beforeCount == self.inodes.items.len + 1, "the inodes count is not equal to the before count, before count: {d}, after count: {d}", .{ beforeCount, self.inodes.items.len });
-        inode.deinit(self.allocator);
+        //inode.deinit(self.allocator);
         // Mark the node as needing rebalancing.
         self.unbalance = true;
-        std.log.info("ptr: 0x{x}, id: {d}, succeed to delete key: {s}, len: {d}, before count: {d}", .{ self.nodePtrInt(), self.id, key, self.inodes.items.len, beforeCount });
-        for (self.inodes.items) |item| {
-            std.log.info("any: {any}", .{item.flags});
-        }
+        // std.log.info("ptr: 0x{x}, id: {d}, succeed to delete key: {s}, len: {d}, before count: {d}", .{ self.nodePtrInt(), self.id, key, self.inodes.items.len, beforeCount });
     }
 
     /// Read initializes the node from a page.
@@ -589,7 +586,7 @@ pub const Node = struct {
                 child.free();
                 return;
             }
-            std.debug.print("nothing need to rebalance at root: {d}\n", .{self.pgid});
+            std.debug.print("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}\n", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
             return;
         } else {
             std.log.debug("the node parent is not null, so rebalance: {d}, parent: {d}", .{ self.pgid, self.parent.?.pgid });
@@ -801,9 +798,8 @@ pub const INode = struct {
             self.key = null;
         }
         if (self.value) |value| {
-            _ = value; // autofix
-            // std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
-            // allocator.free(value);
+            std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
+            allocator.free(value);
             self.value = null;
         }
     }

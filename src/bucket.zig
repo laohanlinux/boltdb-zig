@@ -145,7 +145,6 @@ pub const Bucket = struct {
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
         const rootId = self._b.?.root;
-        _ = rootId; // autofix
         // defer std.log.debug("finish deinit bucket, rid: {}", .{rootId});
         // std.log.debug("start deinit bucket, rid: {}, root: {}", .{ rootId, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
@@ -158,7 +157,8 @@ pub const Bucket = struct {
         self.buckets.deinit();
         if (self.tx.?.writable) {
             if (self._b) |iBucket| {
-                iBucket.deinit(self.allocator);
+                _ = iBucket; // autofix
+                // iBucket.deinit(self.allocator);
                 self._b = null;
             }
         }
@@ -166,13 +166,13 @@ pub const Bucket = struct {
             // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
             var nodeIter = self.nodes.iterator();
             while (nodeIter.next()) |nextNode| {
-                // std.log.debug("--> {}, {}, {d}", .{ rootId, nextNode.key_ptr.*, self.nodes.count() });
+                std.log.debug("--> {}, {}, 0x{x}", .{ rootId, nextNode.key_ptr.*, nextNode.value_ptr.*.nodePtrInt() });
                 nextNode.value_ptr.*.deinit();
                 self.allocator.destroy(nextNode.value_ptr.*);
             }
             self.nodes.deinit();
         }
-
+        self.page = null;
         self.rootNode = null; // just set the rootNode to null, don't destroy it(it will be destroyed by the autoFreeObject)
         self.allocator.destroy(self);
     }
@@ -235,12 +235,10 @@ pub const Bucket = struct {
         if (!isAligned) {
             alignedValue = self.allocator.dupe(u8, value) catch unreachable;
             self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
-            // self.stats().unAlignValueN += 1;
-            // std.log.warn("unaligned memory, align size: {}", .{alignedValue.len});
         } else {
-            alignedValue = value;
-            // self.stats().alignValueN += 1;
-            // std.log.warn("aligned memory, align size: {}, value: {any}", .{ alignedValue.len, alignedValue });
+            // alignedValue = value;
+            alignedValue = self.allocator.dupe(u8, value) catch unreachable;
+            self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
         }
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
@@ -262,7 +260,6 @@ pub const Bucket = struct {
             assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
             assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
-            // std.log.debug("inline align value: {any}", .{alignedValue});
         }
         return child;
     }
@@ -771,6 +768,7 @@ pub const Bucket = struct {
 
     /// Attemps to balance all nodes
     pub fn rebalance(self: *Self) void {
+        std.log.debug("rebalance bucket: {d}", .{self._b.?.root});
         var valueItr = self.nodes.valueIterator();
         while (valueItr.next()) |n| {
             n.*.rebalance();
