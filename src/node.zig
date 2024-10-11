@@ -176,6 +176,7 @@ pub const Node = struct {
     /// Inserts a key/value.
     /// *Note*: the oldKey, newKey will be stored in the node, so the oldKey, newKey will not be freed
     /// the pgid is the page id of the new node, the new node is the child node of the current node
+    /// *Note*: the oldKey, newKey life is move to the node, so we should manage the life by ourselves
     pub fn put(self: *Self, oldKey: []const u8, newKey: []const u8, value: ?[]u8, pgid: PgidType, flags: u32) *INode {
         if (pgid > self.bucket.?.tx.?.meta.pgid) {
             assert(false, "pgid ({}) above hight water mark ({})", .{ pgid, self.bucket.?.tx.?.meta.pgid });
@@ -184,6 +185,7 @@ pub const Node = struct {
         } else if (newKey.len <= 0) {
             assert(false, "put: zero-length new key", .{});
         }
+        assert(@intFromPtr(oldKey.ptr) != @intFromPtr(newKey.ptr), "the oldKey and newKey is the same", .{});
         std.log.debug("put key: {s}, keyPtr: 0x{x}, valuePtr: 0x{x}", .{ newKey, @intFromPtr(newKey.ptr), @intFromPtr(value.?.ptr) });
         // Find insertion index.
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
@@ -200,11 +202,19 @@ pub const Node = struct {
             // not found, allocate a new memory
             inodeRef.key = newKey;
         } else {
-            if (!std.mem.eql(u8, newKey, inodeRef.key.?)) {
-                // free
-                self.allocator.free(inodeRef.getKey().?);
-                inodeRef.key = newKey;
+            // if (!std.mem.eql(u8, newKey, inodeRef.key.?)) {
+            //     // free
+            //     self.allocator.free(inodeRef.getKey().?);
+            //     inodeRef.key = newKey;
+            // }
+            if (inodeRef.key != null and inodeRef.isNew) {
+                std.log.info("free old key, id: {d}, key: 0x{x}", .{ inodeRef.id, @intFromPtr(inodeRef.key.?.ptr) });
+                self.allocator.free(inodeRef.key.?);
+                // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.key.?);
+                inodeRef.key = null;
             }
+            inodeRef.key = newKey;
+
             // Free old value.
             if (inodeRef.value != null and inodeRef.isNew) {
                 if (value != null) {
@@ -216,6 +226,7 @@ pub const Node = struct {
                 inodeRef.value = null;
             }
         }
+        self.allocator.free(oldKey);
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});

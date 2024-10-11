@@ -290,7 +290,9 @@ pub const Bucket = struct {
         }
 
         const cpKey = self.allocator.dupe(u8, key) catch unreachable;
-        errdefer self.allocator.free(cpKey);
+        // errdefer self.allocator.free(cpKey);
+        const newKey = self.allocator.dupe(u8, key) catch unreachable;
+        // errdefer self.allocator.free(newKey);
 
         // Create empty, inline bucket.
         const newBucket = Bucket.init(self.tx.?);
@@ -301,7 +303,7 @@ pub const Bucket = struct {
         const value = newBucket.write();
 
         // Insert into node
-        _ = c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
+        _ = c.node().?.put(cpKey, newKey, value, 0, consts.BucketLeafFlag);
         std.log.info("create a new bucket: {s}", .{cpKey});
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
@@ -411,8 +413,9 @@ pub const Bucket = struct {
 
         // Insert into node.
         const cpKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
+        const newKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
         const cpValue = self.allocator.dupe(u8, keyPair.value.?) catch unreachable;
-        _ = c.node().?.put(cpKey, cpKey, cpValue, 0, 0);
+        _ = c.node().?.put(cpKey, newKey, cpValue, 0, 0);
     }
 
     /// Removes a key from the bucket.
@@ -691,7 +694,10 @@ pub const Bucket = struct {
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.key.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.key.?) });
             assert(keyPairRef.flag & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.flag});
-            _ = c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
+            const newKey = keyPairRef.dupeKey(self.allocator).?;
+            const oldKey = self.allocator.dupe(u8, entry.key_ptr.*) catch unreachable;
+            // _ = c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
+            _ = c.node().?.put(oldKey, newKey, value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
             value.deinit();
         }

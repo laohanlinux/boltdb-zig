@@ -89,6 +89,19 @@ pub const KeyValueRef = struct {
     key: ?[]const u8 = null,
     value: ?[]u8 = null,
     flag: u32 = 0,
+    pub fn dupeKey(self: *const KeyValueRef, allocator: std.mem.Allocator) ?[]const u8 {
+        if (self.key) |key| {
+            return allocator.dupe(u8, key) catch unreachable;
+        }
+        return null;
+    }
+
+    fn dupeValue(self: *const KeyValueRef, allocator: std.mem.Allocator) ?[]u8 {
+        if (self.value) |value| {
+            return allocator.dupe(u8, value) catch unreachable;
+        }
+        return null;
+    }
 };
 
 /// A key-value pair.

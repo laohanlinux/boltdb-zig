@@ -1159,34 +1159,35 @@ test "Cursor_Delete" {
                 defer std.testing.allocator.free(value);
                 std.log.info("insert key: {s}, value: {s}", .{ key, value });
                 try b.put(consts.KeyPair.init(key, value));
+                try b.put(consts.KeyPair.init(key, value));
             }
-            // _ = trx.createBucket("sub") catch unreachable;
+            _ = trx.createBucket("sub") catch unreachable;
         }
     }.update;
     try kvDB.update({}, updateFn);
 
-    // const updateFn2 = struct {
-    //     fn update(_: void, trx: *TX) Error!void {
-    //         const b = trx.getBucket("widgets") orelse unreachable;
-    //         var cursor = b.cursor();
-    //         defer cursor.deinit();
+    const updateFn2 = struct {
+        fn update(_: void, trx: *TX) Error!void {
+            const b = trx.getBucket("widgets") orelse unreachable;
+            var cursor = b.cursor();
+            defer cursor.deinit();
 
-    //         const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{1});
-    //         defer std.testing.allocator.free(key);
+            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{1});
+            defer std.testing.allocator.free(key);
 
-    //         var keyPair = cursor.first();
-    //         while (!keyPair.isNotFound()) {
-    //             if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
-    //                 // try cursor.delete();
-    //                 std.log.info("delete key: {s}, cmpKey: {s}", .{ keyPair.key.?, key });
-    //                 keyPair = cursor.next();
-    //                 continue;
-    //             }
-    //             break;
-    //         }
-    //     }
-    // }.update;
-    // try kvDB.update({}, updateFn2);
+            var keyPair = cursor.first();
+            while (!keyPair.isNotFound()) {
+                if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
+                    // try cursor.delete();
+                    std.log.info("delete key: {s}, cmpKey: {s}", .{ keyPair.key.?, key });
+                    keyPair = cursor.next();
+                    continue;
+                }
+                break;
+            }
+        }
+    }.update;
+    try kvDB.update({}, updateFn2);
 }
 
 fn randomBuf(buf: []usize) void {
