@@ -149,6 +149,10 @@ pub const Bucket = struct {
         // std.log.debug("start deinit bucket, rid: {}, root: {}", .{ rootId, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
         self.isInittialized = false;
+        if (self.page) |inlinePage| {
+            _ = inlinePage; // autofix
+            self.freeInlinePage();
+        }
         var btIter = self.buckets.iterator();
         while (btIter.next()) |nextBucket| {
             self.allocator.free(nextBucket.key_ptr.*);
@@ -156,11 +160,7 @@ pub const Bucket = struct {
         }
         self.buckets.deinit();
         if (self.tx.?.writable) {
-            if (self._b) |iBucket| {
-                _ = iBucket; // autofix
-                // iBucket.deinit(self.allocator);
-                self._b = null;
-            }
+            self._b = null;
         }
         {
             // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
@@ -180,6 +180,12 @@ pub const Bucket = struct {
     /// Destroy the bucket.
     pub fn destroy(self: *Self) void {
         self.allocator.destroy(self);
+    }
+
+    pub fn freeInlinePage(self: *Self) void {
+        assert(self.page != null, "the bucket has no inline page", .{});
+        const inlinePage = self.page.?;
+        std.log.debug("free inline page, rid: {}, page: 0x{x}", .{ self._b.?.root, inlinePage.*.ptrInt() });
     }
 
     /// Create a cursor associated with the bucket.
@@ -224,22 +230,22 @@ pub const Bucket = struct {
     /// Helper method that re-interprets a sub-bucket value
     /// from a parent into a Bucket
     pub fn openBucket(self: *Self, value: []u8) *Bucket {
-        // std.log.info("openBucket, value: {any}", .{value});
         const child = Bucket.init(self.tx.?);
         // TODO
         // If unaligned load/stores are broken on this arch and value is
         // unaligned simply clone to an aligned byte array.
-        const alignment = std.math.ceilPowerOfTwo(usize, @alignOf(_Bucket)) catch @alignOf(usize);
-        var alignedValue: []u8 = undefined;
-        const isAligned = @intFromPtr(value.ptr) % alignment == 0;
-        if (!isAligned) {
-            alignedValue = self.allocator.dupe(u8, value) catch unreachable;
-            self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
-        } else {
-            // alignedValue = value;
-            alignedValue = self.allocator.dupe(u8, value) catch unreachable;
-            self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
-        }
+        // const alignment = std.math.ceilPowerOfTwo(usize, @alignOf(_Bucket)) catch @alignOf(usize);
+        // var alignedValue: []u8 = undefined;
+        // const isAligned = @intFromPtr(value.ptr) % alignment == 0;
+        // if (!isAligned) {
+        //     alignedValue = self.allocator.dupe(u8, value) catch unreachable;
+        // } else {
+        //     alignedValue = self.allocator.dupe(u8, value) catch unreachable;
+        // }
+
+        // TODO: Optimize the code.
+        const alignedValue = self.allocator.dupe(u8, value) catch unreachable;
+        assert(alignedValue.len >= _Bucket.size(), "the aligned value len is less than the bucket size", .{});
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
         // TODO Opz the code.
@@ -261,6 +267,7 @@ pub const Bucket = struct {
             assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
         }
+        self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
         return child;
     }
 
@@ -289,26 +296,17 @@ pub const Bucket = struct {
             return Error.IncompactibleValue;
         }
 
-        const cpKey = self.allocator.dupe(u8, key) catch unreachable;
-        // errdefer self.allocator.free(cpKey);
-        const newKey = self.allocator.dupe(u8, key) catch unreachable;
-        // errdefer self.allocator.free(newKey);
-
         // Create empty, inline bucket.
-        const newBucket = Bucket.init(self.tx.?);
-        defer newBucket.deinit();
-        newBucket.rootNode = Node.init(self.allocator);
-        newBucket.rootNode.?.isLeaf = true;
-        self.tx.?.autoFreeNodes.addNode(newBucket.rootNode.?);
-        const value = newBucket.write();
-
+        const value = self.packetInlineBucketValue();
+        const cpKey = self.allocator.dupe(u8, key) catch unreachable;
+        const newKey = self.allocator.dupe(u8, key) catch unreachable;
         // Insert into node
         _ = c.node().?.put(cpKey, newKey, value, 0, consts.BucketLeafFlag);
-        std.log.info("create a new bucket: {s}", .{cpKey});
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
         // to be treated as regular, non-inline bucket for the rest of the tx.
-        // FIXME: why
+        // TODO: if the self is inline bucket, it will have a inline page object,
+        // but it has subbucket after here, so we need to set the page to null.
         self.page = null;
         return self.getBucket(key) orelse return Error.BucketNotFound;
     }
@@ -749,6 +747,19 @@ pub const Bucket = struct {
     // Returns the maximum total size of a bucket to make it a candidate for inlining.
     fn maxInlineBucketSize(self: *const Self) usize {
         return self.tx.?.getDB().pageSize / 4;
+    }
+
+    fn packetInlineBucketValue(self: *Self) []u8 {
+        const newBucket = Bucket.init(self.tx.?);
+        newBucket.rootNode = Node.init(self.allocator);
+        newBucket.rootNode.?.isLeaf = true;
+        defer {
+            self.allocator.destroy(newBucket.rootNode.?);
+            newBucket.buckets.deinit();
+            newBucket.nodes.deinit();
+            self.allocator.destroy(newBucket);
+        }
+        return newBucket.write();
     }
 
     // Allocates and writes a bucket to a byte slice, *Note*! remember to free the memory

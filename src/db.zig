@@ -294,7 +294,7 @@ pub const DB = struct {
         // ensure the size is at least the minmum size.
         var size = @as(usize, fileInfo.size());
         // TODO Delete it
-        // assert(size > minsz, "the size of file is less than the minsz: {d}, file size: {d}", .{ minsz, size });
+        // assert(size >= minsz, "the size of file is less than the minsz: {d}, file size: {d}", .{ minsz, size });
         if (size < minsz) {
             size = minsz;
         }
@@ -1139,7 +1139,7 @@ test "Cursor_Delete" {
     std.testing.log_level = .debug;
     var options = defaultOptions;
     options.readOnly = false;
-    options.initialMmapSize = 10 * consts.PageSize;
+    options.initialMmapSize = 1000 * consts.PageSize;
     // options.strictMode = true;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
     defer std.testing.allocator.free(filePath);
@@ -1147,7 +1147,7 @@ test "Cursor_Delete" {
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
 
-    const count = 1;
+    const count = 1000;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -1172,13 +1172,13 @@ test "Cursor_Delete" {
             var cursor = b.cursor();
             defer cursor.deinit();
 
-            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{1});
+            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count / 2});
             defer std.testing.allocator.free(key);
 
             var keyPair = cursor.first();
             while (!keyPair.isNotFound()) {
                 if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
-                    // try cursor.delete();
+                    try cursor.delete();
                     std.log.info("delete key: {s}, cmpKey: {s}", .{ keyPair.key.?, key });
                     keyPair = cursor.next();
                     continue;

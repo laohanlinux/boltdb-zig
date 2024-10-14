@@ -254,8 +254,6 @@ pub const LeafPageElement = packed struct {
 
     /// Returns a byte slice of the node key.
     pub fn key(self: *const Self) []const u8 {
-        // std.log.info("{any}", .{self});
-        // std.log.info("{}, {}", .{ self.pos, self.kSize });
         const buf = @as([*]u8, @ptrCast(@constCast(self)));
         return buf[0..][self.pos..(self.pos + self.kSize)];
     }

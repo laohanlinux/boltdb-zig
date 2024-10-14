@@ -379,7 +379,6 @@ pub const Cursor = struct {
         if (n) |_node| {
             const index = std.sort.lowerBound(INode, _node.inodes.items, key, INode.lowerBoundFn);
             e.index = index;
-            // std.log.debug("nsearch: {s}, inodes: {s}", .{ key, _node.inodes.items[index].key.? });
             return;
         }
 
@@ -400,7 +399,6 @@ pub const Cursor = struct {
         // Retrieve value from node.
         if (ref.node) |refNode| {
             const inode = &refNode.inodes.items[ref.index];
-            // std.log.info("keyValue: {any}", .{inode});
             return KeyValueRef{ .key = inode.getKey(), .value = inode.getValue(), .flag = inode.flags };
         }
 

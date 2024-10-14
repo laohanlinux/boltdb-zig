@@ -57,12 +57,21 @@ pub const Node = struct {
         // std.log.debug("deinit node, key: {s}, node id: {d}, pgid: {d}, ptr: 0x{x}, isParent: {}", .{ nKey, self.id, self.pgid, ptr, isParent });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
+        // The is a inline node, so we should free the inline node memory
+        if (self.bucket) |inBucket| {
+            if (inBucket._b) |inBucketRoot| {
+                if (inBucketRoot.root == 0) {
+                    std.log.debug("this is inline bucket", .{});
+                }
+            }
+        }
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (0..self.inodes.items.len) |i| {
             self.inodes.items[i].deinit(self.allocator);
         }
 
         if (self.key) |key| {
+            std.log.info("free key: {s}, ptr: 0x{x}, len: {d}", .{ key, @intFromPtr(key.ptr), key.len });
             self.allocator.free(key);
         }
         self.key = null;
@@ -186,7 +195,7 @@ pub const Node = struct {
             assert(false, "put: zero-length new key", .{});
         }
         assert(@intFromPtr(oldKey.ptr) != @intFromPtr(newKey.ptr), "the oldKey and newKey is the same", .{});
-        std.log.debug("put key: {s}, keyPtr: 0x{x}, valuePtr: 0x{x}", .{ newKey, @intFromPtr(newKey.ptr), @intFromPtr(value.?.ptr) });
+        // std.log.debug("put key: {s}, keyPtr: 0x{x}, valuePtr: 0x{x}", .{ newKey, @intFromPtr(newKey.ptr), @intFromPtr(value.?.ptr) });
         // Find insertion index.
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].getKey().?));
@@ -233,6 +242,7 @@ pub const Node = struct {
         self.safeCheck();
         const vLen: usize = if (inodeRef.value) |v| v.len else 0;
         std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
+        std.log.info("create a new bucket: {s}", .{newKey});
         return inodeRef;
     }
 
@@ -249,12 +259,12 @@ pub const Node = struct {
     }
 
     /// Read initializes the node from a page.
+    /// *Note*: here, we set the node is old node.
     pub fn read(self: *Self, p: *page.Page) void {
         self.pgid = p.id;
         self.isLeaf = p.isLeaf();
         self.inodes.resize(0) catch unreachable;
         std.log.info("read page, pgid: {}, isLeaf: {}, count:{}, overflow:{}", .{ p.id, self.isLeaf, p.count, p.overflow });
-        // std.log.info("page binary data: {any}", .{p.asSlice()});
         for (0..@as(usize, p.count)) |i| {
             var inode = INode.init(0, 0, null, null);
             if (self.isLeaf) {
@@ -277,7 +287,7 @@ pub const Node = struct {
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            self.key = self.inodes.items[0].key.?;
+            self.key = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
             assert(self.key.?.len > 0, "key is null, id: {d}, ptr: 0x{x}", .{ self.id, self.nodePtrInt() });
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
@@ -531,7 +541,8 @@ pub const Node = struct {
             if (node.parent) |parent| {
                 const key: []const u8 = node.key orelse node.inodes.items[0].key.?;
                 const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
-                _ = parent.put(key, newKey, null, node.pgid, 0);
+                const oldKey = self.allocator.dupe(u8, key) catch unreachable;
+                _ = parent.put(oldKey, newKey, null, node.pgid, 0);
                 if (node.key != null) {
                     self.allocator.free(node.key.?);
                 }
@@ -734,10 +745,10 @@ pub const Node = struct {
             const iKey = self.inodes.items[0].key.?;
             assert(std.mem.eql(u8, pKey, "") or std.mem.order(u8, pKey, iKey) == .eq, "the parent key({s}) is not equal to the self key({s})", .{ pKey, iKey });
         }
-        if (self.key) |_key| {
-            const iKey = self.inodes.items[0].key.?;
-            assert(std.mem.order(u8, _key, iKey) == .eq, "the key is not equal to the self key", .{});
-        }
+        // if (self.key) |_key| {
+        //     const iKey = self.inodes.items[0].key.?;
+        //     assert(std.mem.order(u8, _key, iKey) == .eq, "the key is not equal to the self key", .{});
+        // }
     }
 };
 
@@ -808,6 +819,7 @@ pub const INode = struct {
             allocator.free(key);
             self.key = null;
         }
+        // TODO: Print the value address.(Eg: the value is a inline bucket value)
         if (self.value) |value| {
             std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
             allocator.free(value);

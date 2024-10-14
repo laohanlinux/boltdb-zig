@@ -525,7 +525,7 @@ pub const TX = struct {
         if (self.pages) |_pages| {
             var itr = _pages.valueIterator();
             while (itr.next()) |p| {
-                std.log.debug("free page: {}, ptr: 0x{x}", .{ p.*.id, p.*.ptrInt() });
+                std.log.debug("free page: {}, ptr: 0x{x}, overflow: {}", .{ p.*.id, p.*.ptrInt(), p.*.overflow });
                 self.allocator.free(p.*.asSlice());
             }
             self.pages.?.deinit();
@@ -585,6 +585,7 @@ pub const TX = struct {
         const p = try self.db.?.allocatePage(count);
         // Save to our page cache.
         self.pages.?.put(p.id, p) catch unreachable;
+        assert(p.id > 1, "the page id is invalid: {}", .{p.id});
         // Update statistics.
         self.stats.pageCount += 1;
         self.stats.pageAlloc += count * self.db.?.pageSize;

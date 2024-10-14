@@ -231,7 +231,6 @@ pub const FreeList = struct {
         //
         // Update the header flag.
         p.flags |= consts.intFromFlags(.freeList);
-        p.overflow = 0;
 
         // The page.Count can only hold up to 64k elements so if we overflow that
         // number then we handle it by putting the size in the first element.
