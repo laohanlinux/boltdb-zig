@@ -242,7 +242,7 @@ pub const Node = struct {
         self.safeCheck();
         const vLen: usize = if (inodeRef.value) |v| v.len else 0;
         std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
-        std.log.info("create a new bucket: {s}", .{newKey});
+        std.log.info("create a new key: {s}", .{newKey});
         return inodeRef;
     }
 
@@ -252,10 +252,10 @@ pub const Node = struct {
         const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) orelse return;
         const inode = self.inodes.orderedRemove(index);
         assert(std.mem.eql(u8, inode.key.?, key), "the key is not equal to the inode key, key: {s}, inode key: {s}", .{ key, inode.key.? });
-        //inode.deinit(self.allocator);
+        assert(std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) == null, "the key is should be deleted, key: {s}", .{key});
         // Mark the node as needing rebalancing.
         self.unbalance = true;
-        // std.log.info("ptr: 0x{x}, id: {d}, succeed to delete key: {s}, len: {d}, before count: {d}", .{ self.nodePtrInt(), self.id, key, self.inodes.items.len, beforeCount });
+        // self.printKeysString();
     }
 
     /// Read initializes the node from a page.
@@ -355,7 +355,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            // std.log.info("inode: btr: {}, {any}, value: {any}", .{ @intFromPtr(b.ptr), inode.key.?, inode.value });
+            std.log.info("inode: btr: {}, {s}", .{ @intFromPtr(b.ptr), inode.key.? });
         }
         // const deump = p.asSlice();
         // std.log.info("deump: {any}", .{deump});
@@ -373,10 +373,10 @@ pub const Node = struct {
             const count = curNode.inodes.items.len;
             const a, const b = curNode.splitTwo(_pageSize);
             nodes.append(a.?) catch unreachable;
-
+            // a.?.printKeysString();
             // If we can't split then exit the loop.
             if (b == null) {
-                std.log.info("the node is not need to split, id: {d}, key: {s}", .{ curNode.pgid, curNode.key orelse "empty" });
+                std.log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
                 break;
             } else {
                 std.log.info("the node[{d} -> a: {d}, b: {d}] is need to split, isLeaf: {}", .{ count, a.?.inodes.items.len, b.?.inodes.items.len, a.?.isLeaf });
@@ -506,7 +506,7 @@ pub const Node = struct {
             {},
             lessFn,
         );
-        self.safeCheck();
+
         for (self.children.items, 0..) |child, i| {
             if (i > 0) {
                 assert(std.mem.order(u8, self.children.items[i].key.?, self.children.items[i - 1].key.?) == .gt, "the children node is not in order", .{});
@@ -540,13 +540,13 @@ pub const Node = struct {
             // Insert into parent inodes
             if (node.parent) |parent| {
                 const key: []const u8 = node.key orelse node.inodes.items[0].key.?;
-                const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 const oldKey = self.allocator.dupe(u8, key) catch unreachable;
+                const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 _ = parent.put(oldKey, newKey, null, node.pgid, 0);
                 if (node.key != null) {
                     self.allocator.free(node.key.?);
                 }
-                node.key = self.allocator.dupe(u8, newKey) catch unreachable;
+                node.key = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
@@ -745,10 +745,27 @@ pub const Node = struct {
             const iKey = self.inodes.items[0].key.?;
             assert(std.mem.eql(u8, pKey, "") or std.mem.order(u8, pKey, iKey) == .eq, "the parent key({s}) is not equal to the self key({s})", .{ pKey, iKey });
         }
-        // if (self.key) |_key| {
-        //     const iKey = self.inodes.items[0].key.?;
-        //     assert(std.mem.order(u8, _key, iKey) == .eq, "the key is not equal to the self key", .{});
-        // }
+        const isRoot = self.parent == null;
+        if (!isRoot) {
+            if (self.key) |_key| {
+                const iKey = self.inodes.items[0].key.?;
+                assert(std.mem.order(u8, _key, iKey) == .eq, "the key is not equal to the self key, key: {s}, iKey: {s}", .{ _key, iKey });
+            }
+        }
+    }
+
+    fn printKeysString(self: *const Self) void {
+        var keyStr = std.ArrayList(u8).init(self.allocator);
+        defer keyStr.deinit();
+        const cKey = self.key orelse "empty";
+        keyStr.writer().writeAll(cKey) catch unreachable;
+        keyStr.writer().writeAll("=>") catch unreachable;
+        for (self.inodes.items) |inode| {
+            const key = inode.key.?;
+            keyStr.writer().writeAll(key) catch unreachable;
+            keyStr.writer().writeByte(',') catch unreachable;
+        }
+        std.log.debug("{s}", .{keyStr.items});
     }
 };
 

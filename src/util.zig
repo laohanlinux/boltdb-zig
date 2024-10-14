@@ -136,14 +136,23 @@ test "arm" {
     // _ = std.posix.close(file_descriptor.handle);
 }
 
-// test "lowerBound" {
-//     const cmp = struct {
-//         fn cmp(findKey: []const u8, b: []const u8) std.math.Order {
-//             return cmpBytes(b, findKey);
-//         }
-//     };
-//     const slice = [_][]const u8{"hello"};
-//     const key: []const u8 = "hello";
-//     const index = std.sort.lowerBound([]const u8, &slice, key, cmp.cmp);
-//     assert(index == 0, "index should be 0, but got {}", .{index});
-// }
+test "lowerBound" {
+    const cmp = struct {
+        fn cmp(context: []const u8, b: []const u8) std.math.Order {
+            return std.mem.order(u8, context, b);
+        }
+    };
+    var slice = std.ArrayList([]const u8).init(std.testing.allocator);
+    defer slice.deinit();
+    try slice.append("0000000493");
+    try slice.append("0000000494");
+    try slice.append("0000000495");
+    try slice.append("0000000496");
+    try slice.append("0000000497");
+    const key: []const u8 = "0000000493";
+    const index = std.sort.binarySearch([]const u8, slice.items, key, cmp.cmp);
+    assert(index.? == 0, "index should be 0, but got {}", .{index.?});
+    _ = slice.orderedRemove(index.?);
+    const index2 = std.sort.binarySearch([]const u8, slice.items[0..], key, cmp.cmp);
+    assert(index2 == null, "index should be null, but got {any}", .{index2});
+}

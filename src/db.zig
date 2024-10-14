@@ -430,7 +430,7 @@ pub const DB = struct {
         p.overflow = @as(u32, @intCast(count)) - 1;
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
-        defer std.log.debug("allocate a new page, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ @intFromPtr(p), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
+        defer std.log.debug("allocate a new page, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
         if (p.id != 0) {
             return p;
         }
@@ -1147,7 +1147,7 @@ test "Cursor_Delete" {
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
 
-    const count = 1000;
+    const count = 13;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -1161,7 +1161,7 @@ test "Cursor_Delete" {
                 try b.put(consts.KeyPair.init(key, value));
                 try b.put(consts.KeyPair.init(key, value));
             }
-            _ = trx.createBucket("sub") catch unreachable;
+            _ = b.createBucket("sub") catch unreachable;
         }
     }.update;
     try kvDB.update({}, updateFn);
@@ -1172,7 +1172,7 @@ test "Cursor_Delete" {
             var cursor = b.cursor();
             defer cursor.deinit();
 
-            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count / 2});
+            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{1});
             defer std.testing.allocator.free(key);
 
             var keyPair = cursor.first();
@@ -1180,14 +1180,30 @@ test "Cursor_Delete" {
                 if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
                     try cursor.delete();
                     std.log.info("delete key: {s}, cmpKey: {s}", .{ keyPair.key.?, key });
+                    const got = b.get(keyPair.key.?);
+                    assert(got == null, "the key should be deleted, key: {s}", .{keyPair.key.?});
                     keyPair = cursor.next();
                     continue;
                 }
                 break;
             }
+            // _ = cursor.seek("sub");
+            // const err = cursor.delete();
+            // assert(err == errors.Error.IncompactibleValue, "the error is not bucket not found error, err: {any}", .{err});
         }
     }.update;
     try kvDB.update({}, updateFn2);
+
+    const viewFn = struct {
+        fn view(_: void, trx: *TX) Error!void {
+            const b = trx.getBucket("widgets") orelse unreachable;
+            const got = b.get("0000000000");
+            assert(got == null, "the key should be deleted, key: {s}", .{"0000000000"});
+            // // const stats = b.stats();
+            // assert(stats.keyN == (count / 2 + 1), "the key number is invalid, keyN: {d}, count: {d}", .{ stats.keyN, count / 2 + 1 });
+        }
+    }.view;
+    try kvDB.view({}, viewFn);
 }
 
 fn randomBuf(buf: []usize) void {

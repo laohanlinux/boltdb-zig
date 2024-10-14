@@ -137,10 +137,10 @@ pub const Cursor = struct {
         self._last();
 
         const keyValueRet = self.keyValue();
-        if (keyValueRet.third & consts.BucketLeafFlag != 0) {
-            return KeyPair.init(keyValueRet.first, null);
+        if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
+            return KeyPair.init(keyValueRet.key, null);
         }
-        return KeyPair.init(keyValueRet.first, keyValueRet.second);
+        return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
     /// Moves the cursor to a given key and returns it.
@@ -155,12 +155,12 @@ pub const Cursor = struct {
             // the level page has remove all key?
             keyValueRet = self._next();
         }
-        if (keyValueRet.first == null) {
+        if (keyValueRet.key == null) {
             return KeyPair.init(null, null);
-        } else if (keyValueRet.third & consts.BucketLeafFlag != 0) {
-            return KeyPair.init(keyValueRet.first, null);
+        } else if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
+            return KeyPair.init(keyValueRet.key, null);
         }
-        return KeyPair.init(keyValueRet.first, keyValueRet.second);
+        return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
     /// Removes the current key/value under the cursor from the bucket.
@@ -337,16 +337,26 @@ pub const Cursor = struct {
 
     // Search key from nodes.
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
+        const printNodes = struct {
+            fn print(curNode: *const Node) void {
+                for (curNode.inodes.items, 0..) |iNode, i| {
+                    const iKey = iNode.getKey().?;
+                    std.log.debug("i={}, key={s}, iKey = {s}", .{ i, curNode.key.?, iKey });
+                }
+            }
+        }.print;
+        _ = printNodes;
+        // printNodes(n);
         const searchFn = struct {
-            fn searchFn(_key: []const u8, inode: INode) std.math.Order {
-                return std.mem.order(u8, _key, inode.key.?);
+            fn searchFn(context: []const u8, inode: INode) std.math.Order {
+                return std.mem.order(u8, context, inode.getKey().?);
             }
         }.searchFn;
         const index = std.sort.binarySearch(INode, n.inodes.items, key, searchFn) orelse (n.inodes.items.len - 1);
         // Recursively search to the next node.
         var lastEntry = self.stack.getLast();
         lastEntry.index = index;
-        self.search(key, self.stack.items[index].p.?.id);
+        self.search(key, n.inodes.items[index].pgid);
     }
 
     // Search key from pages
@@ -421,6 +431,7 @@ pub const Cursor = struct {
         if (n == null) {
             // assert(self.stack.items[0].p.?.id > 1, "the page id is not valid, id: {}", .{self.stack.items[0].p.?.id});
             n = self._bucket.node(self.stack.items[0].p.?.id, null);
+            std.log.warn("the node is null, so it is the root node at this bucket, pgid: {}", .{self.stack.items[0].p.?.id});
         }
         // find the node from the stack from the top to the bottom.
         for (self.stack.items[0..(self.stack.items.len - 1)]) |ref| {

@@ -116,6 +116,12 @@ pub const Bucket = struct {
 
     allocator: std.mem.Allocator,
 
+    const travelContext = struct {
+        b: ?*Bucket,
+        s: ?*BucketStats,
+        subStats: ?*BucketStats,
+    };
+
     const Self = @This();
 
     /// Initializes a new bucket.
@@ -364,20 +370,20 @@ pub const Bucket = struct {
         var _cursor = self.cursor();
         defer _cursor.deinit();
         const keyPairRef = _cursor._seek(key);
-        if (keyPairRef.first == null) {
+        if (keyPairRef.key == null) {
             return null;
         }
         // Return nil if this is a bucket.
-        if (keyPairRef.third & consts.BucketLeafFlag != 0) {
+        if (keyPairRef.flag & consts.BucketLeafFlag != 0) {
             return null;
         }
 
         // If our target node isn't the same key as what's passed in then return nil.
-        if (!std.mem.eql(u8, key, keyPairRef.first.?)) {
+        if (!std.mem.eql(u8, key, keyPairRef.key.?)) {
             return null;
         }
 
-        return keyPairRef.second;
+        return keyPairRef.value;
     }
 
     /// Sets the value for a key in the bucket.
@@ -523,11 +529,10 @@ pub const Bucket = struct {
         const pageSize = self.tx.?.db.?.pageSize;
         s.BucketN += 1;
         if (self._b.?.root == 0) {
-            s.InlineBucketN += 1;
+            s.InlineBucketN += 1; // we are inline bucket.
         }
-        const tuple3 = Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats);
-        const tuple3Arg = tuple3{ .first = self, .second = &s, .third = &subStats };
-        self.forEachPage(tuple3Arg, travelStats);
+        const ctx = Self.travelContext{ .b = self, .s = &s, .subStats = &subStats };
+        self.forEachPage(ctx, travelStats);
 
         // Alloc stats can be computed from page counts and pageSize.
         s.BranchAlloc = (s.BranchPageN + s.BranchOverflowN) * pageSize;
@@ -541,17 +546,17 @@ pub const Bucket = struct {
     }
 
     // Travel the bucket and its sub-buckets to collect stats.
-    fn travelStats(context: Tuple.t3(?*Bucket, ?*BucketStats, ?*BucketStats), p: *const page.Page, depth: usize) void {
-        assert(context.first != null, "bucket is null", .{});
-        assert(context.second != null, "bucket stats is null", .{});
-        const b = context.first.?;
-        const s = context.second.?;
+    fn travelStats(context: Self.travelContext, p: *const page.Page, depth: usize) void {
+        assert(context.b != null, "bucket is null", .{});
+        assert(context.s != null, "bucket stats is null", .{});
+        const b = context.b.?;
+        const s = context.s.?;
         if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
             s.keyN += @as(usize, p.count);
 
             // used totals the used bytes for the page.
             var used = page.Page.headerSize();
-            std.log.debug("travelStats: depth: {d}, page: {any}", .{ depth, p });
+            std.log.debug("travelStats: depth: {d}, ptr: 0x{x}, page: {any}", .{ depth, p.ptrInt(), p });
             if (p.count != 0) {
                 // If page has any elements, add all element headers.
                 used += page.LeafPageElement.headerSize() * @as(usize, p.count - 1); // TODO why -1.
@@ -563,6 +568,7 @@ pub const Bucket = struct {
                 // It also includes the last element's header.
                 const lastElement = p.leafPageElementRef(@as(usize, p.count - 1));
                 used += @as(usize, lastElement.?.pos + lastElement.?.kSize + lastElement.?.vSize);
+                std.log.debug("travelStats leaf: depth: {d}, used: {d}, key={s}", .{ depth, used, lastElement.?.key() });
             }
 
             if (b._b.?.root == 0) {
@@ -582,8 +588,11 @@ pub const Bucket = struct {
                     if (elem.flags & consts.BucketLeafFlag != 0) {
                         // For any bucket elements. open the element value
                         // and recursively call Stats on the contained bucket.
+                        const bucketName = elem.value();
+                        std.log.debug("travel subBucket: {s}, element: {any}", .{ bucketName, elem });
                         s.add(&b.openBucket(elem.value()).stats());
                     }
+                    // std.log.debug("travelStats branch: depth: {d}, used: {d}, key={s}", .{ depth, used, elem.key() });
                 }
             }
         } else if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
@@ -603,7 +612,7 @@ pub const Bucket = struct {
         }
 
         // Keep track of maximum page depth.
-        if (depth + 1 > context.second.?.depth) {
+        if (depth + 1 > context.subStats.?.depth) {
             s.depth = (depth + 1);
         }
     }
@@ -882,7 +891,8 @@ pub const Bucket = struct {
         }
         // Read the page into the node and cacht it.
         n.read(p.?);
-        std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}", .{ pgid, n.nodePtrInt(), parentNode == null });
+        const parentPtrInt = if (parentNode == null) 0 else @intFromPtr(parentNode.?);
+        std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}, parentPtr: 0x{x}", .{ pgid, n.nodePtrInt(), parentNode == null, parentPtrInt });
         const entry = self.nodes.getOrPut(pgid) catch unreachable;
         assert(!entry.found_existing, "the node is already exist, pgid: {d}, ptr: 0x{x}", .{ pgid, n.nodePtrInt() });
         entry.value_ptr.* = n;
