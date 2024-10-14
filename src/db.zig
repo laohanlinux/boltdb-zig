@@ -1147,7 +1147,7 @@ test "Cursor_Delete" {
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
 
-    const count = 13;
+    const count = 130;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -1159,7 +1159,7 @@ test "Cursor_Delete" {
                 defer std.testing.allocator.free(value);
                 std.log.info("insert key: {s}, value: {s}", .{ key, value });
                 try b.put(consts.KeyPair.init(key, value));
-                try b.put(consts.KeyPair.init(key, value));
+                //try b.put(consts.KeyPair.init(key, value));
             }
             _ = b.createBucket("sub") catch unreachable;
         }
@@ -1172,7 +1172,7 @@ test "Cursor_Delete" {
             var cursor = b.cursor();
             defer cursor.deinit();
 
-            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{1});
+            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count / 2});
             defer std.testing.allocator.free(key);
 
             var keyPair = cursor.first();
@@ -1187,9 +1187,9 @@ test "Cursor_Delete" {
                 }
                 break;
             }
-            // _ = cursor.seek("sub");
-            // const err = cursor.delete();
-            // assert(err == errors.Error.IncompactibleValue, "the error is not bucket not found error, err: {any}", .{err});
+            _ = cursor.seek("sub");
+            const err = cursor.delete();
+            assert(err == errors.Error.IncompactibleValue, "the error is not bucket not found error, err: {any}", .{err});
         }
     }.update;
     try kvDB.update({}, updateFn2);

@@ -86,7 +86,10 @@ pub const AutoFreeObject = struct {
         {
             var it = self.autoFreeBytes.iterator();
             while (it.next()) |entry| {
-                std.log.debug("free auto free bytes: {d}, ptr: 0x{x}, bytes: {any}", .{ entry.value_ptr.*.len, @intFromPtr(entry.value_ptr.*.ptr), entry.value_ptr.* });
+                // std.log.debug("free auto free bytes: {d}, ptr: 0x{x}", .{
+                //     entry.value_ptr.*.len,
+                //     @intFromPtr(entry.value_ptr.*.ptr),
+                // });
                 allocator.free(entry.value_ptr.*);
             }
             self.autoFreeBytes.deinit();
@@ -150,7 +153,7 @@ pub const Bucket = struct {
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
-        const rootId = self._b.?.root;
+        // const rootId = self._b.?.root;
         // defer std.log.debug("finish deinit bucket, rid: {}", .{rootId});
         // std.log.debug("start deinit bucket, rid: {}, root: {}", .{ rootId, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
@@ -172,7 +175,7 @@ pub const Bucket = struct {
             // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
             var nodeIter = self.nodes.iterator();
             while (nodeIter.next()) |nextNode| {
-                std.log.debug("--> {}, {}, 0x{x}", .{ rootId, nextNode.key_ptr.*, nextNode.value_ptr.*.nodePtrInt() });
+                // std.log.debug("--> {}, {}, 0x{x}", .{ rootId, nextNode.key_ptr.*, nextNode.value_ptr.*.nodePtrInt() });
                 nextNode.value_ptr.*.deinit();
                 self.allocator.destroy(nextNode.value_ptr.*);
             }
@@ -877,6 +880,7 @@ pub const Bucket = struct {
         // Otherwise create a node and cache it.
         const n = Node.init(self.allocator);
         n.bucket = self;
+        n.parent = parentNode;
         if (parentNode != null) {
             // the node is not the root node, so add it to the parent node's children that contact with it.
             parentNode.?.children.append(n) catch unreachable;

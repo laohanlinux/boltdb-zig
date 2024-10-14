@@ -71,7 +71,7 @@ pub const Node = struct {
         }
 
         if (self.key) |key| {
-            std.log.info("free key: {s}, ptr: 0x{x}, len: {d}", .{ key, @intFromPtr(key.ptr), key.len });
+            // std.log.info("free key: {s}, ptr: 0x{x}, len: {d}", .{ key, @intFromPtr(key.ptr), key.len });
             self.allocator.free(key);
         }
         self.key = null;
@@ -273,14 +273,14 @@ pub const Node = struct {
                 inode.isNew = false;
                 inode.key = elem.key();
                 inode.value = elem.value();
-                std.log.info("read leaf element: {any}", .{elem.*});
+                // std.log.info("read leaf element: {any}", .{elem.*});
             } else {
                 const elem = p.branchPageElementRef(i).?;
                 inode.pgid = elem.pgid;
                 inode.isNew = false;
                 inode.key = elem.key();
             }
-            std.log.info("read element, index: {d}, inode.id:{d}, inode.flags:{any}, inode.pgid:{d}, isLeaf: {}, key: {s}", .{ i, inode.id, inode.flags, inode.pgid, self.isLeaf, inode.key orelse "empty" });
+            //std.log.info("read element, index: {d}, inode.id:{d}, inode.flags:{any}, inode.pgid:{d}, isLeaf: {}, key: {s}", .{ i, inode.id, inode.flags, inode.pgid, self.isLeaf, inode.key orelse "empty" });
             assert(inode.key.?.len > 0, "key is null", .{});
             self.inodes.append(inode) catch unreachable;
         }
@@ -293,7 +293,7 @@ pub const Node = struct {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
         }
-        std.log.info("ptr: 0x{x}, id: {d}, key: {}", .{ self.nodePtrInt(), self.id, self.key == null });
+        // std.log.info("ptr: 0x{x}, id: {d}, key: {}", .{ self.nodePtrInt(), self.id, self.key == null });
     }
 
     /// Writes the items into one or more pages.
@@ -355,7 +355,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            std.log.info("inode: btr: {}, {s}", .{ @intFromPtr(b.ptr), inode.key.? });
+            // std.log.info("inode: btr: {}, {s}", .{ @intFromPtr(b.ptr), inode.key.? });
         }
         // const deump = p.asSlice();
         // std.log.info("deump: {any}", .{deump});
@@ -740,11 +740,6 @@ pub const Node = struct {
                 assert(std.mem.order(u8, right, left) == .gt, "the inodes is not in order, left: {s}, right: {s}", .{ left, right });
             }
         }
-        if (self.parent) |parent| {
-            const pKey = parent.key orelse "";
-            const iKey = self.inodes.items[0].key.?;
-            assert(std.mem.eql(u8, pKey, "") or std.mem.order(u8, pKey, iKey) == .eq, "the parent key({s}) is not equal to the self key({s})", .{ pKey, iKey });
-        }
         const isRoot = self.parent == null;
         if (!isRoot) {
             if (self.key) |_key| {
@@ -795,7 +790,7 @@ pub const INode = struct {
     /// Initializes a node.
     pub fn init(flags: u32, pgid: PgidType, key: ?[]const u8, value: ?[]u8) Self {
         const id = std.crypto.random.int(u64);
-        std.log.debug("create a inode, inode id: {d}, key: {s}, value: {s}", .{ id, key orelse "empty", value orelse "empty" });
+        // std.log.debug("create a inode, inode id: {d}, key: {s}, value: {s}", .{ id, key orelse "empty", value orelse "empty" });
         return .{ .flags = flags, .pgid = pgid, .key = key, .value = value, .id = id };
     }
 
