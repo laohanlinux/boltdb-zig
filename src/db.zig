@@ -1147,7 +1147,7 @@ test "Cursor_Delete" {
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
 
-    const count = 130;
+    const count = 1000;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -1157,9 +1157,7 @@ test "Cursor_Delete" {
                 defer std.testing.allocator.free(key);
                 const value = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count + i});
                 defer std.testing.allocator.free(value);
-                std.log.info("insert key: {s}, value: {s}", .{ key, value });
                 try b.put(consts.KeyPair.init(key, value));
-                //try b.put(consts.KeyPair.init(key, value));
             }
             _ = b.createBucket("sub") catch unreachable;
         }
@@ -1179,7 +1177,6 @@ test "Cursor_Delete" {
             while (!keyPair.isNotFound()) {
                 if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
                     try cursor.delete();
-                    std.log.info("delete key: {s}, cmpKey: {s}", .{ keyPair.key.?, key });
                     const got = b.get(keyPair.key.?);
                     assert(got == null, "the key should be deleted, key: {s}", .{keyPair.key.?});
                     keyPair = cursor.next();
@@ -1199,8 +1196,8 @@ test "Cursor_Delete" {
             const b = trx.getBucket("widgets") orelse unreachable;
             const got = b.get("0000000000");
             assert(got == null, "the key should be deleted, key: {s}", .{"0000000000"});
-            // // const stats = b.stats();
-            // assert(stats.keyN == (count / 2 + 1), "the key number is invalid, keyN: {d}, count: {d}", .{ stats.keyN, count / 2 + 1 });
+            const stats = b.stats();
+            assert(stats.keyN == (count / 2 + 1), "the key number is invalid, keyN: {d}, count: {d}", .{ stats.keyN, count / 2 + 1 });
         }
     }.view;
     try kvDB.view({}, viewFn);

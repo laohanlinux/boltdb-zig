@@ -486,7 +486,6 @@ pub const TX = struct {
             self.db.?.freelist.rollback(self.meta.txid);
             self.db.?.freelist.reload(self.db.?.pageById(self.db.?.getMeta().freelist));
         }
-
         self.close();
     }
 

@@ -723,7 +723,6 @@ pub const Node = struct {
     pub fn free(self: *Self) void {
         if (self.pgid != 0) {
             self.bucket.?.tx.?.db.?.freelist.free(self.bucket.?.tx.?.meta.txid, self.bucket.?.tx.?.getPage(self.pgid)) catch unreachable;
-            // TODO why reset the node
             self.pgid = 0;
         }
     }

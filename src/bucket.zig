@@ -593,7 +593,10 @@ pub const Bucket = struct {
                         // and recursively call Stats on the contained bucket.
                         const bucketName = elem.value();
                         std.log.debug("travel subBucket: {s}, element: {any}", .{ bucketName, elem });
-                        s.add(&b.openBucket(elem.value()).stats());
+                        const childBucket = b.openBucket(elem.value());
+                        s.add(&childBucket.stats());
+                        childBucket.free();
+                        b.allocator.destroy(childBucket);
                     }
                     // std.log.debug("travelStats branch: depth: {d}, used: {d}, key={s}", .{ depth, used, elem.key() });
                 }
