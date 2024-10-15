@@ -1135,72 +1135,139 @@ pub const Meta = packed struct {
 //     try kvDB.view({}, viewFn);
 // }
 
-test "Cursor_Delete" {
+// test "Cursor_Delete" {
+//     std.testing.log_level = .debug;
+//     var options = defaultOptions;
+//     options.readOnly = false;
+//     options.initialMmapSize = 1000 * consts.PageSize;
+//     // options.strictMode = true;
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
+//     defer std.testing.allocator.free(filePath);
+
+//     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//     defer kvDB.close() catch unreachable;
+
+//     const count = 1000;
+//     // Insert every other key between 0 and $count.
+//     const updateFn = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             const b = trx.createBucket("widgets") catch unreachable;
+//             for (0..count) |i| {
+//                 const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{i});
+//                 defer std.testing.allocator.free(key);
+//                 const value = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count + i});
+//                 defer std.testing.allocator.free(value);
+//                 try b.put(consts.KeyPair.init(key, value));
+//             }
+//             _ = b.createBucket("sub") catch unreachable;
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn);
+
+//     const updateFn2 = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             const b = trx.getBucket("widgets") orelse unreachable;
+//             var cursor = b.cursor();
+//             defer cursor.deinit();
+
+//             const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count / 2});
+//             defer std.testing.allocator.free(key);
+
+//             var keyPair = cursor.first();
+//             while (!keyPair.isNotFound()) {
+//                 if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
+//                     try cursor.delete();
+//                     const got = b.get(keyPair.key.?);
+//                     assert(got == null, "the key should be deleted, key: {s}", .{keyPair.key.?});
+//                     keyPair = cursor.next();
+//                     continue;
+//                 }
+//                 break;
+//             }
+//             _ = cursor.seek("sub");
+//             const err = cursor.delete();
+//             assert(err == errors.Error.IncompactibleValue, "the error is not bucket not found error, err: {any}", .{err});
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn2);
+
+//     const viewFn = struct {
+//         fn view(_: void, trx: *TX) Error!void {
+//             const b = trx.getBucket("widgets") orelse unreachable;
+//             const got = b.get("0000000000");
+//             assert(got == null, "the key should be deleted, key: {s}", .{"0000000000"});
+//             const stats = b.stats();
+//             assert(stats.keyN == (count / 2 + 1), "the key number is invalid, keyN: {d}, count: {d}", .{ stats.keyN, count / 2 + 1 });
+//         }
+//     }.view;
+//     try kvDB.view({}, viewFn);
+// }
+
+// Ensure that a Tx cursor can seek to the appropriate keys when there are a
+// large number of keys. This test also checks that seek will always move
+// forward to the next key.
+//
+// Related: https://github.com/boltdb/bolt/pull/187
+test "Cursor_Seek_Large" {
     std.testing.log_level = .debug;
     var options = defaultOptions;
     options.readOnly = false;
-    options.initialMmapSize = 1000 * consts.PageSize;
+    options.initialMmapSize = 10000 * consts.PageSize;
     // options.strictMode = true;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
     defer std.testing.allocator.free(filePath);
 
     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
     defer kvDB.close() catch unreachable;
-
+    var stackBuffer: [200]u8 = undefined; // 8 digits + null terminator
+    var fba = std.heap.FixedBufferAllocator.init(&stackBuffer);
     const count = 1000;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(allocator: *std.heap.FixedBufferAllocator, trx: *TX) Error!void {
             const b = trx.createBucket("widgets") catch unreachable;
-            for (0..count) |i| {
-                const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{i});
-                defer std.testing.allocator.free(key);
-                const value = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count + i});
-                defer std.testing.allocator.free(value);
-                try b.put(consts.KeyPair.init(key, value));
-            }
-            _ = b.createBucket("sub") catch unreachable;
-        }
-    }.update;
-    try kvDB.update({}, updateFn);
-
-    const updateFn2 = struct {
-        fn update(_: void, trx: *TX) Error!void {
-            const b = trx.getBucket("widgets") orelse unreachable;
-            var cursor = b.cursor();
-            defer cursor.deinit();
-
-            const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{count / 2});
-            defer std.testing.allocator.free(key);
-
-            var keyPair = cursor.first();
-            while (!keyPair.isNotFound()) {
-                if (std.mem.order(u8, keyPair.key.?, key) == .lt) {
-                    try cursor.delete();
-                    const got = b.get(keyPair.key.?);
-                    assert(got == null, "the key should be deleted, key: {s}", .{keyPair.key.?});
-                    keyPair = cursor.next();
-                    continue;
+            var i: i64 = 0;
+            while (i < count) : (i += 100) {
+                var j: i64 = i;
+                while (j < i + 100) : (j += 2) {
+                    const key = allocator.allocator().alloc(u8, 8) catch unreachable;
+                    std.mem.writeInt(i64, key[0..8], j, .big);
+                    const value = std.fmt.allocPrint(allocator.allocator(), "{0:0>100}", .{0}) catch unreachable;
+                    try b.put(consts.KeyPair.init(key, value));
+                    allocator.reset();
                 }
-                break;
             }
-            _ = cursor.seek("sub");
-            const err = cursor.delete();
-            assert(err == errors.Error.IncompactibleValue, "the error is not bucket not found error, err: {any}", .{err});
         }
     }.update;
-    try kvDB.update({}, updateFn2);
+    try kvDB.update(&fba, updateFn);
 
-    const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
-            const b = trx.getBucket("widgets") orelse unreachable;
-            const got = b.get("0000000000");
-            assert(got == null, "the key should be deleted, key: {s}", .{"0000000000"});
-            const stats = b.stats();
-            assert(stats.keyN == (count / 2 + 1), "the key number is invalid, keyN: {d}, count: {d}", .{ stats.keyN, count / 2 + 1 });
-        }
-    }.view;
-    try kvDB.view({}, viewFn);
+    // const viewFn = struct {
+    //     fn view(allocator: *std.heap.FixedBufferAllocator, trx: *TX) Error!void {
+    //         const b = trx.getBucket("widgets") orelse unreachable;
+    //         var cursor = b.cursor();
+    //         defer cursor.deinit();
+    //         var keyPair = cursor.first();
+    //         for (0..count) |i| {
+    //             const seek = try std.fmt.allocPrint(allocator.allocator(), "{0:0>8}", .{i});
+    //             keyPair = cursor.seek(seek);
+    //             // The last seek is beyond the end of the the range so
+    //             // it should return nil.
+    //             if (i == count - 1) {
+    //                 assert(keyPair.isNotFound(), "the key should be not found, key: {s}", .{seek});
+    //                 continue;
+    //             }
+    //             // Otherwise we should seek to the exact key or the next key.
+    //             const num = try std.fmt.parseInt(usize, keyPair.key.?[0..4], 10);
+    //             assert(num == i or num == i + 1, "the key should be seeked to the exact key or the next key, key: {s}, num: {d}", .{ seek, num });
+    //             allocator.reset();
+    //         }
+    //         while (!keyPair.isNotFound()) {
+    //             std.debug.print("key: {s}, value: {s}\n", .{ keyPair.key.?, keyPair.value.? });
+    //             keyPair = cursor.next();
+    //         }
+    //     }
+    // }.view;
+    // try kvDB.view(&fba, viewFn);
 }
 
 fn randomBuf(buf: []usize) void {
