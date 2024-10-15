@@ -1221,7 +1221,7 @@ test "Cursor_Seek_Large" {
     defer kvDB.close() catch unreachable;
     var stackBuffer: [200]u8 = undefined; // 8 digits + null terminator
     var fba = std.heap.FixedBufferAllocator.init(&stackBuffer);
-    const count = 1000;
+    const count: i64 = 1000;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
         fn update(allocator: *std.heap.FixedBufferAllocator, trx: *TX) Error!void {
@@ -1241,33 +1241,34 @@ test "Cursor_Seek_Large" {
     }.update;
     try kvDB.update(&fba, updateFn);
 
-    // const viewFn = struct {
-    //     fn view(allocator: *std.heap.FixedBufferAllocator, trx: *TX) Error!void {
-    //         const b = trx.getBucket("widgets") orelse unreachable;
-    //         var cursor = b.cursor();
-    //         defer cursor.deinit();
-    //         var keyPair = cursor.first();
-    //         for (0..count) |i| {
-    //             const seek = try std.fmt.allocPrint(allocator.allocator(), "{0:0>8}", .{i});
-    //             keyPair = cursor.seek(seek);
-    //             // The last seek is beyond the end of the the range so
-    //             // it should return nil.
-    //             if (i == count - 1) {
-    //                 assert(keyPair.isNotFound(), "the key should be not found, key: {s}", .{seek});
-    //                 continue;
-    //             }
-    //             // Otherwise we should seek to the exact key or the next key.
-    //             const num = try std.fmt.parseInt(usize, keyPair.key.?[0..4], 10);
-    //             assert(num == i or num == i + 1, "the key should be seeked to the exact key or the next key, key: {s}, num: {d}", .{ seek, num });
-    //             allocator.reset();
-    //         }
-    //         while (!keyPair.isNotFound()) {
-    //             std.debug.print("key: {s}, value: {s}\n", .{ keyPair.key.?, keyPair.value.? });
-    //             keyPair = cursor.next();
-    //         }
-    //     }
-    // }.view;
-    // try kvDB.view(&fba, viewFn);
+    const viewFn = struct {
+        fn view(_: void, trx: *TX) Error!void {
+            const b = trx.getBucket("widgets") orelse unreachable;
+            var cursor = b.cursor();
+            defer cursor.deinit();
+            var keyPair = cursor.first();
+            for (0..count) |i| {
+                var seek: [8]u8 = undefined;
+                const keyNum: i64 = @intCast(i);
+                std.mem.writeInt(i64, seek[0..8], keyNum, .big);
+                keyPair = cursor.seek(seek[0..]);
+                // The last seek is beyond the end of the the range so
+                // it should return nil.
+                if (i == count - 1) {
+                    assert(keyPair.isNotFound(), "the key should be not found, key: {s}", .{seek});
+                    continue;
+                }
+                // Otherwise we should seek to the exact key or the next key.
+                const num = std.mem.readInt(i64, seek[0..8], .big);
+                assert(num == i or num == i + 1, "the key should be seeked to the exact key or the next key, key: {s}, num: {d}", .{ seek, num });
+            }
+            while (!keyPair.isNotFound()) {
+                std.debug.print("key: {s}, value: {s}\n", .{ keyPair.key.?, keyPair.value.? });
+                keyPair = cursor.next();
+            }
+        }
+    }.view;
+    try kvDB.view({}, viewFn);
 }
 
 fn randomBuf(buf: []usize) void {

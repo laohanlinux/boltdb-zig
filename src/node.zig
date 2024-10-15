@@ -832,7 +832,7 @@ pub const INode = struct {
         }
         // TODO: Print the value address.(Eg: the value is a inline bucket value)
         if (self.value) |value| {
-            std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
+            //std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
             allocator.free(value);
             self.value = null;
         }
