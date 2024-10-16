@@ -121,7 +121,7 @@ pub const Cursor = struct {
     /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
     /// The returned key and value are only valid for the life of the transaction.
     pub fn prev(self: *Self) KeyPair {
-        assert(self._bucket.?.tx.?.db != null, "tx closed", .{});
+        assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Attempt to move back one element until we're successful.
         // Move up the stack as we hit the beginning of each page in our stack.
         var i: isize = self.stack.items.len - 1;

@@ -165,7 +165,8 @@ test "Cursor_Iterate_Leaf" {
     assert(kv3.isNotFound(), "the key should be not found", .{});
 }
 
-test "Cursor_Iterate_Leaf" {
+// Ensure that a cursor can reverse iterate over a single root with a couple elements.
+test "Cursor_LeafRootReverse" {
     const testCtx = tests.setup() catch unreachable;
     defer tests.teardown(testCtx);
     const kvDB = testCtx.db;
@@ -173,3 +174,32 @@ test "Cursor_Iterate_Leaf" {
     const updateFn = struct {
         fn update(ctx: *Context, trx: *TX) Error!void {
             _ = ctx; // autofix
+            const b = trx.createBucket("widgets") catch unreachable;
+            try b.put(consts.KeyPair.init("baz", ""));
+            try b.put(consts.KeyPair.init("foo", &[_]u8{0}));
+            try b.put(consts.KeyPair.init("bar", &[_]u8{1}));
+        }
+    }.update;
+    var ctx = Context{};
+    try kvDB.update(&ctx, updateFn);
+
+    const trx = kvDB.begin(false) catch unreachable;
+    const bt = trx.getBucket("widgets");
+    assert(bt != null, "the bucket should not be null", .{});
+    var c = bt.?.cursor();
+    defer c.deinit();
+    const keyPair = c.last();
+    assert(std.mem.eql(u8, keyPair.key.?, "foo"), "the key should be 'foo'", .{});
+    assert(std.mem.eql(u8, keyPair.value.?, &[_]u8{0}), "the value should be [0]", .{});
+
+    const kv2 = c.prev();
+    assert(std.mem.eql(u8, kv2.key.?, "baz"), "the key should be 'baz'", .{});
+    assert(std.mem.eql(u8, kv2.value.?, &[_]u8{}), "the value should be []", .{});
+
+    const kv = c.prev();
+    assert(std.mem.eql(u8, kv.key.?, "bar"), "the key should be 'bar'", .{});
+    assert(std.mem.eql(u8, kv.value.?, &[_]u8{1}), "the value should be [1]", .{});
+
+    const kv3 = c.prev();
+    assert(kv3.isNotFound(), "the key should be not found", .{});
+}
