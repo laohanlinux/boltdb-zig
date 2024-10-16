@@ -26,14 +26,14 @@ const AutoFreeObject = bucket.AutoFreeObject;
 /// are using them. A long running read transaction can cause the database to
 /// quickly grow.
 pub const TX = struct {
-    writable: bool,
-    managed: bool,
-    db: ?*DB,
+    writable: bool = false,
+    managed: bool = false,
+    db: ?*DB = null,
     meta: *Meta,
     root: *Bucket, // the root bucket of the transaction, the bucket root is reference to the meta.root
     pages: ?std.AutoHashMap(PgidType, *Page),
     autoFreeNodes: AutoFreeObject,
-    stats: TxStats,
+    stats: TxStats = .{},
 
     _commitHandlers: std.ArrayList(onCommitFn),
     // WriteFlag specifies the flag for write-related methods like WriteTo().
@@ -68,6 +68,7 @@ pub const TX = struct {
         self.root.rootNode = null;
         self.autoFreeNodes = AutoFreeObject.init(_db.allocator);
         self.allocator = _db.allocator;
+        self.managed = false;
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
             self.meta.txid += 1;

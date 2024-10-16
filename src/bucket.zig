@@ -222,7 +222,6 @@ pub const Bucket = struct {
         if (keyPairRef.key == null) {
             return null;
         }
-
         // Return nil if the key dosn't exist or it is not a bucket.
         if (!std.mem.eql(u8, name, keyPairRef.key.?) or keyPairRef.flag & consts.BucketLeafFlag == 0) {
             return null;
