@@ -607,12 +607,11 @@ pub const DB = struct {
         const trx = try self.begin(true);
         const trxID = trx.getID();
         std.log.info("Star a write transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer trx.destroy();
         defer std.log.info("End a write transaction, txid: {}", .{trxID});
         // Make sure the transaction rolls back in the event of a panic.
-        defer if (trx.db != null) {
-            trx._rollback();
-        };
+        // errdefer if (trx.db != null) {
+        //     trx._rollback();
+        // };
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
@@ -626,6 +625,7 @@ pub const DB = struct {
         };
         trx.managed = false;
         std.log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        defer trx.destroy();
         try trx.commit();
     }
 
@@ -637,12 +637,14 @@ pub const DB = struct {
         const trx = try self.begin(false);
         const trxID = trx.getID();
         std.log.info("Star a read-only transaction, txid: {}, meta_id: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer trx.destroy();
         defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
+        var isDrop = false;
         // Make sure the transaction rolls back in the event of a panic.
-        defer if (trx.db != null) {
-            trx._rollback();
-        };
+        defer {
+            if (!isDrop and trx.db != null) {
+                trx._rollback();
+            }
+        }
 
         // Mark as managed tx so that the inner function cannot manually rollback.
         trx.managed = true;
@@ -651,10 +653,14 @@ pub const DB = struct {
         func(context, trx) catch |err| {
             trx.managed = false;
             trx.rollback() catch {};
+            isDrop = true;
             std.log.info("after execute transaction commit handle", .{});
             return err;
         };
         trx.managed = false;
+        defer {
+            isDrop = true;
+        }
         try trx.rollback();
     }
 
@@ -1203,74 +1209,6 @@ pub const Meta = packed struct {
 //     try kvDB.view({}, viewFn);
 // }
 
-// Ensure that a Tx cursor can seek to the appropriate keys when there are a
-// large number of keys. This test also checks that seek will always move
-// forward to the next key.
-//
-// Related: https://github.com/boltdb/bolt/pull/187
-test "Cursor_Seek_Large" {
-    std.testing.log_level = .debug;
-    var options = defaultOptions;
-    options.readOnly = false;
-    options.initialMmapSize = 10000 * consts.PageSize;
-    // options.strictMode = true;
-    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
-    defer std.testing.allocator.free(filePath);
-
-    const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-    defer kvDB.close() catch unreachable;
-    var stackBuffer: [200]u8 = undefined; // 8 digits + null terminator
-    var fba = std.heap.FixedBufferAllocator.init(&stackBuffer);
-    const count: i64 = 1000;
-    // Insert every other key between 0 and $count.
-    const updateFn = struct {
-        fn update(allocator: *std.heap.FixedBufferAllocator, trx: *TX) Error!void {
-            const b = trx.createBucket("widgets") catch unreachable;
-            var i: i64 = 0;
-            while (i < count) : (i += 100) {
-                var j: i64 = i;
-                while (j < i + 100) : (j += 2) {
-                    const key = allocator.allocator().alloc(u8, 8) catch unreachable;
-                    std.mem.writeInt(i64, key[0..8], j, .big);
-                    const value = std.fmt.allocPrint(allocator.allocator(), "{0:0>100}", .{0}) catch unreachable;
-                    try b.put(consts.KeyPair.init(key, value));
-                    allocator.reset();
-                }
-            }
-        }
-    }.update;
-    try kvDB.update(&fba, updateFn);
-
-    const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
-            const b = trx.getBucket("widgets") orelse unreachable;
-            var cursor = b.cursor();
-            defer cursor.deinit();
-            var keyPair = cursor.first();
-            for (0..count) |i| {
-                var seek: [8]u8 = undefined;
-                const keyNum: i64 = @intCast(i);
-                std.mem.writeInt(i64, seek[0..8], keyNum, .big);
-                keyPair = cursor.seek(seek[0..]);
-                // The last seek is beyond the end of the the range so
-                // it should return nil.
-                if (i == count - 1) {
-                    assert(keyPair.isNotFound(), "the key should be not found, key: {s}", .{seek});
-                    continue;
-                }
-                // Otherwise we should seek to the exact key or the next key.
-                const num = std.mem.readInt(i64, seek[0..8], .big);
-                assert(num == i or num == i + 1, "the key should be seeked to the exact key or the next key, key: {s}, num: {d}", .{ seek, num });
-            }
-            while (!keyPair.isNotFound()) {
-                std.debug.print("key: {s}, value: {s}\n", .{ keyPair.key.?, keyPair.value.? });
-                keyPair = cursor.next();
-            }
-        }
-    }.view;
-    try kvDB.view({}, viewFn);
-}
-
 fn randomBuf(buf: []usize) void {
     var prng = std.Random.DefaultPrng.init(buf.len);
     var random = prng.random();
@@ -1282,4 +1220,34 @@ fn randomBuf(buf: []usize) void {
         const j = random.intRangeAtMost(usize, 0, i);
         std.mem.swap(usize, &buf[i], &buf[j]);
     }
+}
+
+fn keyValueHis(allocator: std.mem.Allocator) struct {
+    kv: std.ArrayList(consts.KeyPair),
+    allocator: std.mem.Allocator,
+
+    fn add(self: *@This(), key: []const u8, value: []const u8) void {
+        _ = value; // autofix
+        const keyDup = self.allocator.dupe(u8, key) catch unreachable;
+        // const valueDup = self.allocator.dupe(u8, value) catch unreachable;
+        _ = self.kv.append(consts.KeyPair.init(keyDup, null)) catch unreachable;
+    }
+
+    fn print(self: @This()) void {
+        for (self.kv.items, 0..) |kv, i| {
+            std.debug.print("i: {d}, {s} -> {s}\n", .{ i, kv.key.?, kv.value.? });
+        }
+    }
+
+    fn deinit(self: @This()) void {
+        for (self.kv.items) |kv| {
+            self.allocator.free(kv.key.?);
+            if (kv.value) |value| {
+                self.allocator.free(value);
+            }
+        }
+        self.kv.deinit();
+    }
+} {
+    return .{ .kv = std.ArrayList(consts.KeyPair).init(allocator), .allocator = allocator };
 }

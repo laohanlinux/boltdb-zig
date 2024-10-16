@@ -78,15 +78,20 @@ pub const Cursor = struct {
 
     /// Moves the cursor to the last item in the bucket and returns its key and value.
     /// If the bucket is empty then a nil key and value are returned.
-    pub fn last(self: *Self) [2]?[]u8 {
-        assert(self._bucket.tx.?.db == null, "tx closed", .{});
+    pub fn last(self: *Self) KeyPair {
+        assert(self._bucket.tx.?.db != null, "tx closed", .{});
         self.stack.resize(0) catch unreachable;
-        const pNode = self._bucket.?.pageNode(self._bucket.?._b.root);
-        var ref = ElementRef{ .page = pNode.page, .node = pNode.node, .index = 0 };
-        ref.index = ref.count() - 1;
+        const pNode = self._bucket.pageNode(self._bucket._b.?.root);
+        var ref = ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 };
+        if (ref.count() > 0) {
+            ref.index = ref.count() - 1;
+        }
         self.stack.append(ref) catch unreachable;
         self._last();
         const keyValueRet = self.keyValue();
+        if (keyValueRet.key == null) {
+            return KeyPair.init(null, null);
+        }
         // Return an error if current value is a bucket.
         if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.key, null);
@@ -240,7 +245,7 @@ pub const Cursor = struct {
             }
 
             const pNode = self._bucket.pageNode(pgid);
-            var nextRef = ElementRef{ .p = pNode.first, .node = pNode.second, .index = 0 };
+            var nextRef = ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 };
             nextRef.index = nextRef.count() - 1;
             self.stack.append(nextRef) catch unreachable;
         }
@@ -487,5 +492,3 @@ const ElementRef = struct {
         return @as(usize, self.p.?.count);
     }
 };
-
-test "cursor" {}

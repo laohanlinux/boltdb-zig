@@ -308,6 +308,7 @@ pub const TX = struct {
             return Error.TxClosed;
         }
         self._rollback();
+        self.destroy();
     }
 
     /// Writes any dirty pages to disk.
