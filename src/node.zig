@@ -229,7 +229,7 @@ pub const Node = struct {
                 if (value != null) {
                     assert(@intFromPtr(inodeRef.value.?.ptr) != @intFromPtr(value.?.ptr), "the value is null", .{});
                 }
-                std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
+                // std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
                 // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
                 self.allocator.free(inodeRef.value.?);
                 inodeRef.value = null;

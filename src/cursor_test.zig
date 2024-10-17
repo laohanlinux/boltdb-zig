@@ -130,21 +130,17 @@ test "Cursor_Iterate_Leaf" {
     const testCtx = tests.setup() catch unreachable;
     defer tests.teardown(testCtx);
     const kvDB = testCtx.db;
-    const Context = struct {};
     const updateFn = struct {
-        fn update(ctx: *Context, trx: *TX) Error!void {
-            _ = ctx; // autofix
+        fn update(_: void, trx: *TX) Error!void {
             const b = trx.createBucket("widgets") catch unreachable;
             try b.put(consts.KeyPair.init("baz", ""));
             try b.put(consts.KeyPair.init("foo", &[_]u8{0}));
             try b.put(consts.KeyPair.init("bar", &[_]u8{1}));
         }
     }.update;
-    var ctx = Context{};
-    try kvDB.update(&ctx, updateFn);
+    try kvDB.update({}, updateFn);
 
     const trx = kvDB.begin(false) catch unreachable;
-    defer trx.rollback() catch unreachable;
     const bt = trx.getBucket("widgets");
     assert(bt != null, "the bucket should not be null", .{});
     var c = bt.?.cursor();
@@ -163,6 +159,11 @@ test "Cursor_Iterate_Leaf" {
 
     const kv3 = c.next();
     assert(kv3.isNotFound(), "the key should be not found", .{});
+
+    const kv4 = c.next();
+    assert(kv4.isNotFound(), "the key should be not found", .{});
+
+    try trx.rollback();
 }
 
 // Ensure that a cursor can reverse iterate over a single root with a couple elements.
@@ -170,18 +171,15 @@ test "Cursor_LeafRootReverse" {
     const testCtx = tests.setup() catch unreachable;
     defer tests.teardown(testCtx);
     const kvDB = testCtx.db;
-    const Context = struct {};
     const updateFn = struct {
-        fn update(ctx: *Context, trx: *TX) Error!void {
-            _ = ctx; // autofix
+        fn update(_: void, trx: *TX) Error!void {
             const b = trx.createBucket("widgets") catch unreachable;
             try b.put(consts.KeyPair.init("baz", ""));
             try b.put(consts.KeyPair.init("foo", &[_]u8{0}));
             try b.put(consts.KeyPair.init("bar", &[_]u8{1}));
         }
     }.update;
-    var ctx = Context{};
-    try kvDB.update(&ctx, updateFn);
+    try kvDB.update({}, updateFn);
 
     const trx = kvDB.begin(false) catch unreachable;
     const bt = trx.getBucket("widgets");
@@ -202,4 +200,89 @@ test "Cursor_LeafRootReverse" {
 
     const kv3 = c.prev();
     assert(kv3.isNotFound(), "the key should be not found", .{});
+
+    const kv4 = c.prev();
+    assert(kv4.isNotFound(), "the key should be not found", .{});
+
+    try trx.rollback();
+}
+
+// Ensure that a Tx cursor can restart from the beginning.
+test "Cursor_Restart" {
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const kvDB = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, trx: *TX) Error!void {
+            const b = trx.createBucket("widgets") catch unreachable;
+            try b.put(consts.KeyPair.init("bar", ""));
+            try b.put(consts.KeyPair.init("foo", ""));
+        }
+    }.update;
+    try kvDB.update({}, updateFn);
+
+    const trx = kvDB.begin(false) catch unreachable;
+    const bt = trx.getBucket("widgets");
+    assert(bt != null, "the bucket should not be null", .{});
+    var c = bt.?.cursor();
+    defer c.deinit();
+    const keyPair = c.first();
+    assert(std.mem.eql(u8, keyPair.key.?, "bar"), "the key should be 'bar'", .{});
+
+    const keyPair2 = c.next();
+    assert(std.mem.eql(u8, keyPair2.key.?, "foo"), "the key should be 'foo'", .{});
+
+    const keyPair3 = c.first();
+    assert(std.mem.eql(u8, keyPair3.key.?, "bar"), "the key should be 'bar'", .{});
+
+    const keyPair4 = c.next();
+    assert(std.mem.eql(u8, keyPair4.key.?, "foo"), "the key should be 'foo'", .{});
+
+    try trx.rollback();
+}
+
+// Ensure that a cursor can skip over empty pages that have been deleted.
+test "Cursor_First_EmptyPages" {
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const kvDB = testCtx.db;
+    // Create 1000 keys in the "widgets" bucket.
+    const updateFn = struct {
+        fn update(_: void, trx: *TX) Error!void {
+            const b = trx.createBucket("widgets") catch unreachable;
+            var key: [8]u8 = undefined;
+            for (0..23) |i| {
+                const keyNum: i64 = @intCast(i);
+                std.mem.writeInt(i64, key[0..8], keyNum, .big);
+                try b.put(consts.KeyPair.init(key[0..8], ""));
+                @memset(key[0..8], 0);
+            }
+        }
+    }.update;
+    try kvDB.update({}, updateFn);
+
+    // Delete half the keys and then try to iterate.
+    const updateFn2 = struct {
+        fn update(_: void, trx: *TX) Error!void {
+            const b = trx.getBucket("widgets") orelse unreachable;
+            var key: [8]u8 = undefined;
+            for (0..1) |i| {
+                const keyNum: i64 = @intCast(i);
+                std.mem.writeInt(i64, key[0..8], keyNum, .big);
+                try b.delete(key[0..8]);
+                @memset(key[0..8], 0);
+            }
+
+            var c = b.cursor();
+            defer c.deinit();
+            var n: usize = 0;
+            var keyPair = c.first();
+            while (!keyPair.isNotFound()) {
+                keyPair = c.next();
+                n += 1;
+            }
+            assert(n == 400, "the number of keys should be 400, but got {d}", .{n});
+        }
+    }.update;
+    try kvDB.update({}, updateFn2);
 }

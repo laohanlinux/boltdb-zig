@@ -124,14 +124,14 @@ pub const Cursor = struct {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Attempt to move back one element until we're successful.
         // Move up the stack as we hit the beginning of each page in our stack.
-        var i: isize = self.stack.items.len - 1;
+        var i: isize = @as(isize, @intCast(self.stack.items.len)) - 1;
         while (i >= 0) : (i -= 1) {
-            const elem = &self.stack.items[i];
+            const elem = &self.stack.items[@as(usize, @intCast(i))];
             if (elem.index > 0) {
                 elem.index -= 1;
                 break;
             }
-            self.stack.resize(i);
+            self.stack.resize(@as(usize, @intCast(i))) catch unreachable;
         }
 
         // If we've hit the end then return nil.
@@ -142,6 +142,9 @@ pub const Cursor = struct {
         self._last();
 
         const keyValueRet = self.keyValue();
+        if (keyValueRet.key == null) {
+            return KeyPair.init(null, null);
+        }
         if (keyValueRet.flag & consts.BucketLeafFlag != 0) {
             return KeyPair.init(keyValueRet.key, null);
         }
@@ -260,7 +263,7 @@ pub const Cursor = struct {
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
             var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
-            std.log.info("the i is {}", .{i});
+            // std.log.info("the i is {}", .{i});
             while (i >= 0) : (i -= 1) {
                 const elem = &self.stack.items[@as(usize, @intCast(i))];
                 if ((elem.index + 1) < elem.count()) { // iterate the current inode elements

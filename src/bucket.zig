@@ -428,9 +428,9 @@ pub const Bucket = struct {
     /// If the key does not exist then nothing is done and a nil error is returned.
     /// Returns an error if the bucket was created from a read-only transaction.
     pub fn delete(self: *Self, key: []const u8) Error!void {
-        if (self.tx.db == null) {
+        if (self.tx.?.db == null) {
             return Error.TxClosed;
-        } else if (!self.tx.writable) {
+        } else if (!self.tx.?.writable) {
             return Error.TxNotWriteable;
         }
 
@@ -438,9 +438,11 @@ pub const Bucket = struct {
         var c = self.cursor();
         defer c.deinit();
         const keyPairRef = c._seek(key);
-
+        if (keyPairRef.key == null) {
+            return;
+        }
         // Return on error if there is already existing bucket value.
-        if (keyPairRef.third & consts.BucketLeafFlag != 0) {
+        if (keyPairRef.flag & consts.BucketLeafFlag != 0) {
             return Error.IncompactibleValue;
         }
 
