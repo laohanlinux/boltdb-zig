@@ -208,6 +208,7 @@ pub const Cursor = struct {
     // Moves the cursor to the first leaf element under that last page in the stack.
     fn _first(self: *Self) void {
         while (true) {
+            std.log.info("the stack is {}", .{self.stack.items.len});
             // Exit when we hit a leaf page.
             const ref = self.stack.getLast();
             if (ref.isLeaf()) {
@@ -217,12 +218,14 @@ pub const Cursor = struct {
             // Keep adding pages pointing to the first element to the stack.
             var pgid: PgidType = 0;
             if (ref.node) |n| {
-                pgid = n.pgid;
+                pgid = n.inodes.items[ref.index].pgid;
             } else {
                 assert(ref.index < ref.p.?.count, "the index is out of range, index: {}, count: {}", .{ ref.index, ref.p.?.count });
                 pgid = ref.p.?.branchPageElementRef(ref.index).?.pgid;
             }
             const pNode = self._bucket.pageNode(pgid);
+            // assert(self.stack.items.len < 3, "the stack is too long, stack: {any}", .{self.stack.items});
+            // std.log.info("the pNode is {any}", .{pNode});
             self.stack.append(ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 }) catch unreachable;
             assert(self.stack.getLast().index == 0, "the index is not 0, index: {}", .{self.stack.getLast().index});
         }

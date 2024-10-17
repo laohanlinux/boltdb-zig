@@ -760,6 +760,7 @@ pub const Node = struct {
             keyStr.writer().writeByte(',') catch unreachable;
         }
         std.log.debug("{s}", .{keyStr.items});
+        std.log.debug("id:{}, pgid:{}, inodes len: {d}", .{ self.id, self.pgid, self.inodes.items.len });
     }
 };
 

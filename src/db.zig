@@ -424,6 +424,7 @@ pub const DB = struct {
     /// Allocates a count pages
     pub fn allocatePage(self: *Self, count: usize) !*Page {
         // TODO Allocate a tempory buffer for the page.
+        // TODO Use PageAllocator.
         const buf = try self.allocator.alloc(u8, count * self.pageSize);
         @memset(buf, 0);
         const p = Page.init(buf);
