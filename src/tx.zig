@@ -220,9 +220,9 @@ pub const TX = struct {
         }
         const _db = self.getDB();
         // std.log.debug("before commit: {any}", .{self.root._b.?});
-        self.print() catch |err| {
-            std.log.err("Failed to print transaction info: {any}", .{err});
-        };
+        // self.print() catch |err| {
+        //     std.log.err("Failed to print transaction info: {any}", .{err});
+        // };
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;

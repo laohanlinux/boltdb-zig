@@ -208,7 +208,7 @@ pub const Cursor = struct {
     // Moves the cursor to the first leaf element under that last page in the stack.
     fn _first(self: *Self) void {
         while (true) {
-            std.log.info("the stack is {}", .{self.stack.items.len});
+            // std.log.info("the stack is {}", .{self.stack.items.len});
             // Exit when we hit a leaf page.
             const ref = self.stack.getLast();
             if (ref.isLeaf()) {
@@ -260,7 +260,7 @@ pub const Cursor = struct {
     /// Moves to the next leaf element and returns the key and value.
     /// If the cursor is at the last leaf element then it stays there and return null.
     pub fn _next(self: *Self) KeyValueRef {
-        defer std.log.info("the stack is {}", .{self.stack.items.len});
+            // defer std.log.info("the stack is {}", .{self.stack.items.len});
         while (true) {
             // assert(self.stack.items.len > 0, "the stack is empty", .{});
             // Attempt to move over one element until we're successful.

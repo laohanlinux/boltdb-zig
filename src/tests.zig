@@ -12,7 +12,10 @@ pub const TestContext = struct {
 
 /// Setup a test context.
 pub fn setup() !TestContext {
-    std.testing.log_level = .debug;
+    if (std.testing.log_level != .err) {
+        std.testing.log_level = .debug;
+    }
+    // std.testing.log_level = .debug;
     var options = db.defaultOptions;
     options.readOnly = false;
     options.initialMmapSize = 10000 * consts.PageSize;

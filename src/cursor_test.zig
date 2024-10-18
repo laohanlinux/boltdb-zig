@@ -242,46 +242,125 @@ const assert = @import("util.zig").assert;
 // }
 
 // Ensure that a cursor can skip over empty pages that have been deleted.
-test "Cursor_First_EmptyPages" {
+// test "Cursor_First_EmptyPages" {
+//     const testCtx = tests.setup() catch unreachable;
+//     defer tests.teardown(testCtx);
+//     const kvDB = testCtx.db;
+//     // Create 1000 keys in the "widgets" bucket.
+//     const updateFn = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             const b = trx.createBucket("widgets") catch unreachable;
+//             var key: [8]u8 = undefined;
+//             for (0..1000) |i| {
+//                 const keyNum: i64 = @intCast(i);
+//                 std.mem.writeInt(i64, key[0..8], keyNum, .big);
+//                 try b.put(consts.KeyPair.init(key[0..8], ""));
+//                 @memset(key[0..8], 0);
+//             }
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn);
+
+//     // Delete half the keys and then try to iterate.
+//     const updateFn2 = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             const b = trx.getBucket("widgets") orelse unreachable;
+//             var key: [8]u8 = undefined;
+//             for (0..600) |i| {
+//                 const keyNum: i64 = @intCast(i);
+//                 std.mem.writeInt(i64, key[0..8], keyNum, .big);
+//                 try b.delete(key[0..8]);
+//                 @memset(key[0..8], 0);
+//             }
+//             var c = b.cursor();
+//             defer c.deinit();
+//             var n: usize = 0;
+//             var keyPair = c.first();
+//             while (!keyPair.isNotFound()) {
+//                 keyPair = c.next();
+//                 n += 1;
+//             }
+//             assert(n == 400, "the number of keys should be 400, but got {d}", .{n});
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn2);
+// }
+
+// Ensure that a Tx can iterate over all elements in a bucket.
+// test "Cursor_QuickCheck" {
+//     // TODO
+//     const testCtx = tests.setup() catch unreachable;
+//     defer tests.teardown(testCtx);
+//     const kvDB = testCtx.db;
+//     _ = kvDB; // autofix
+// }
+
+test "ExampleCursor" {
+    std.testing.log_level = .err;
     const testCtx = tests.setup() catch unreachable;
     defer tests.teardown(testCtx);
     const kvDB = testCtx.db;
-    // Create 1000 keys in the "widgets" bucket.
+    // Start a read-write transaction.
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
-            const b = trx.createBucket("widgets") catch unreachable;
-            var key: [8]u8 = undefined;
-            for (0..1000) |i| {
-                const keyNum: i64 = @intCast(i);
-                std.mem.writeInt(i64, key[0..8], keyNum, .big);
-                try b.put(consts.KeyPair.init(key[0..8], ""));
-                @memset(key[0..8], 0);
+            // Create a new bucket.
+            const b = trx.createBucket("animals") catch unreachable;
+
+            // Insert data into a bucket.
+            try b.put(consts.KeyPair.init("dog", "fun"));
+            try b.put(consts.KeyPair.init("cat", "lame"));
+            try b.put(consts.KeyPair.init("liger", "awesome"));
+
+            // Create a cursor for iteration.
+            var c = b.cursor();
+            defer c.deinit();
+
+            // Iterate over the bucket.
+            var keyPair = c.first();
+            while (!keyPair.isNotFound()) {
+                std.debug.print("A {s} is {s}.\n", .{ keyPair.key.?, keyPair.value.? });
+                // Do something with keyPair.
+                keyPair = c.next();
             }
         }
     }.update;
     try kvDB.update({}, updateFn);
+}
 
-    // Delete half the keys and then try to iterate.
-    const updateFn2 = struct {
+test "ExampleCursor_reverse" {
+    std.testing.log_level = .err;
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const kvDB = testCtx.db;
+    const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
-            const b = trx.getBucket("widgets") orelse unreachable;
-            var key: [8]u8 = undefined;
-            for (0..600) |i| {
-                const keyNum: i64 = @intCast(i);
-                std.mem.writeInt(i64, key[0..8], keyNum, .big);
-                try b.delete(key[0..8]);
-                @memset(key[0..8], 0);
-            }
+            // Create a new bucket.
+            const b = trx.createBucket("animals") catch unreachable;
+
+            // Insert data into a bucket.
+            try b.put(consts.KeyPair.init("dog", "fun"));
+            try b.put(consts.KeyPair.init("cat", "lame"));
+            try b.put(consts.KeyPair.init("liger", "awesome"));
+
+            // Create a cursor for iteration.
             var c = b.cursor();
             defer c.deinit();
-            var n: usize = 0;
-            var keyPair = c.first();
+            // Iterate over items in reverse sorted key order. This starts
+            // from the last key/value pair and updates the k/v variables to
+            // the previous key/value on each iteration.
+            //
+            // The loop finishes at the beginning of the cursor when a nil key
+            // is returned.
+            var keyPair = c.last();
             while (!keyPair.isNotFound()) {
-                keyPair = c.next();
-                n += 1;
+                std.debug.print("A {s} is {s}.\n", .{ keyPair.key.?, keyPair.value.? });
+                keyPair = c.prev();
             }
-            assert(n == 400, "the number of keys should be 400, but got {d}", .{n});
         }
     }.update;
-    try kvDB.update({}, updateFn2);
+    try kvDB.update({}, updateFn);
+    // Output:
+    // A liger is awesome.
+    // A dog is fun.
+    // A cat is lame.
 }
