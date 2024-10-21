@@ -25,5 +25,7 @@ jobs:
 
     - name: Build and test
       run: |
+        mkdir $HOME/zig/zig/dirty 
         $HOME/zig/zig build
         $HOME/zig/zig build test
+        $HOME/zig/zig test src/cursor_test.zig

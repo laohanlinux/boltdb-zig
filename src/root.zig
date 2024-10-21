@@ -26,13 +26,4 @@ test "basic add functionality" {
             try entry.value_ptr.append(j);
         }
     }
-
-    var arrayList = std.testing.allocator.create(std.ArrayList(usize)) catch unreachable;
-    arrayList.* = std.ArrayList(usize).init(testing.allocator);
-    defer std.testing.allocator.destroy(arrayList);
-    defer arrayList.deinit();
-    for (0..1000) |i| {
-        arrayList.append(i) catch unreachable;
-        std.log.info("arrayList.items.len: {}", .{arrayList.items.len});
-    }
 }
