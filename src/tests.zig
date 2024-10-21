@@ -8,6 +8,17 @@ const consts = @import("consts.zig");
 pub const TestContext = struct {
     allocator: std.mem.Allocator,
     db: *DB,
+    pub fn generateBytes(self: @This(), bufSize: usize) []u8 {
+        const buffer = self.allocator.alloc(u8, bufSize) catch unreachable;
+        randomBuf(buffer);
+        return buffer;
+    }
+
+    pub fn repeat(self: @This(), c: u8, bufferSize: usize) []u8 {
+        const buffer = self.allocator.alloc(u8, bufferSize) catch unreachable;
+        @memset(buffer, c);
+        return buffer;
+    }
 };
 
 /// Setup a test context.
