@@ -335,6 +335,50 @@ test "Cursor_QuickCheck" {
     try f(std.testing.allocator, 500);
 }
 
+test "Cursor_QuickCheck_Reverse" {
+    // TODO
+    std.testing.log_level = .err;
+    const f = struct {
+        fn quickCheckReverse(allocator: std.mem.Allocator, size: usize) !void {
+            // TODO
+            var q = tests.Quick.init(allocator);
+            q.maxItems = size;
+            _ = try q.generate(allocator);
+            defer q.deinit();
+            const testCtx = tests.setup() catch unreachable;
+            defer tests.teardown(testCtx);
+            const kvDB = testCtx.db;
+            // Bulk insert all values.
+            {
+                const trx = kvDB.begin(true) catch unreachable;
+                const b = trx.createBucket("widgets") catch unreachable;
+                for (q.items.items) |item| {
+                    try b.put(consts.KeyPair.init(item.key, item.value));
+                }
+                try trx.commitAndDestroy();
+            }
+
+            // Sort test data.
+            q.reverse();
+
+            // Iterate over all items and check consistency.
+            {
+                const trx = kvDB.begin(false) catch unreachable;
+                const b = trx.getBucket("widgets") orelse unreachable;
+                var cursor = b.cursor();
+                defer cursor.deinit();
+                var keyPair = cursor.last();
+                for (q.items.items) |item| {
+                    assert(std.mem.eql(u8, keyPair.key.?, item.key), "the key should be {s}", .{item.key});
+                    keyPair = cursor.prev();
+                }
+                try trx.rollback();
+            }
+        }
+    }.quickCheckReverse;
+    try f(std.testing.allocator, 500);
+}
+
 // test "ExampleCursor" {
 //     std.testing.log_level = .err;
 //     const testCtx = tests.setup() catch unreachable;

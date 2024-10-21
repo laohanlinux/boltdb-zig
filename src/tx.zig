@@ -210,6 +210,14 @@ pub const TX = struct {
     /// Writes all changes to disk and updates the meta page.
     /// Returns an error if a disk write error occurs, or if commit is
     /// called on a ready-only transaction.
+    pub fn commitAndDestroy(self: *Self) Error!void {
+        defer self.destroy();
+        try self.commit();
+    }
+
+    /// Writes all changes to disk and updates the meta page.
+    /// Returns an error if a disk write error occurs, or if commit is
+    /// called on a ready-only transaction.
     pub fn commit(self: *Self) Error!void {
         defer std.log.debug("finish commit", .{});
         assert(!self.managed, "mananged tx commit not allowed", .{});
