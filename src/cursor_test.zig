@@ -379,6 +379,7 @@ const assert = @import("util.zig").assert;
 //     try f(std.testing.allocator, 500);
 // }
 
+// Ensure that a Tx cursor can iterate over subbuckets.
 test "Cursor_QuickCheck_BucketsOnly" {
     // TODO
     std.testing.log_level = .err;
@@ -408,6 +409,44 @@ test "Cursor_QuickCheck_BucketsOnly" {
                 assert(std.mem.eql(u8, keyPair.key.?, expected_bucket_names[i]), "the key should be {s}", .{expected_bucket_names[i]});
                 assert(keyPair.value == null, "the value should be null", .{});
                 keyPair = cursor.next();
+                i += 1;
+            }
+            assert(i == bucket_names.len, "the number of keys should be {d}, but got {d}", .{ bucket_names.len, i });
+        }
+    }.view;
+    try kvDB.view({}, viewFn);
+}
+
+// Ensure that a Tx cursor can reverse iterate over subbuckets.
+test "Cursor_QuickCheck_BucketsOnly_Reverse" {
+    // TODO
+    std.testing.log_level = .err;
+    const db = tests.setup() catch unreachable;
+    defer tests.teardown(db);
+    const kvDB = db.db;
+    const bucket_names = [_][]const u8{ "foo", "bar", "baz" };
+    const expected_bucket_names = [_][]const u8{ "foo", "baz", "bar" };
+    const updateFn = struct {
+        fn update(_: void, trx: *TX) Error!void {
+            const b = try trx.createBucket("widgets");
+            for (bucket_names) |name| {
+                _ = try b.createBucket(name);
+            }
+        }
+    }.update;
+    try kvDB.update({}, updateFn);
+
+    const viewFn = struct {
+        fn view(_: void, trx: *TX) Error!void {
+            // TODO
+            const b = trx.getBucket("widgets") orelse unreachable;
+            var cursor = b.cursor();
+            defer cursor.deinit();
+            var keyPair = cursor.last();
+            var i: usize = 0;
+            while (!keyPair.isNotFound()) {
+                assert(std.mem.eql(u8, keyPair.key.?, expected_bucket_names[i]), "the key should be {s}={s}", .{ expected_bucket_names[i], keyPair.key.? });
+                keyPair = cursor.prev();
                 i += 1;
             }
             assert(i == bucket_names.len, "the number of keys should be {d}, but got {d}", .{ bucket_names.len, i });
