@@ -86,10 +86,6 @@ pub const AutoFreeObject = struct {
         {
             var it = self.autoFreeBytes.iterator();
             while (it.next()) |entry| {
-                // std.log.debug("free auto free bytes: {d}, ptr: 0x{x}", .{
-                //     entry.value_ptr.*.len,
-                //     @intFromPtr(entry.value_ptr.*.ptr),
-                // });
                 allocator.free(entry.value_ptr.*);
             }
             self.autoFreeBytes.deinit();

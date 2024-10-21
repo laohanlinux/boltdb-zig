@@ -49,6 +49,12 @@ pub const GC = struct {
         }
     }
 
+    pub fn addArrayList(self: *Self, list: std.ArrayList(u8)) !void {
+        const bytes = try list.toOwnedSlice();
+        const allocator = list.allocator;
+        try self.add(allocator, bytes);
+    }
+
     /// Triggers the GC to free all slices.
     pub fn trigger(self: *Self) void {
         var itr = self.slices.iterator();

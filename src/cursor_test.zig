@@ -287,80 +287,120 @@ const assert = @import("util.zig").assert;
 // }
 
 // Ensure that a Tx can iterate over all elements in a bucket.
-// test "Cursor_QuickCheck" {
-//     // TODO
+test "Cursor_QuickCheck" {
+    // TODO
+    std.testing.log_level = .err;
+
+    const f = struct {
+        fn quickCheck(allocator: std.mem.Allocator, size: usize) !void {
+            var q = tests.Quick.init(allocator);
+            q.maxItems = size;
+            // q.maxKeySize = 10;
+            // q.maxValueSize = 10;
+            _ = try q.generate(allocator);
+            defer q.deinit();
+
+            std.debug.print("QuickCheck passed for size {d}.\n", .{size});
+            const testCtx = tests.setup() catch unreachable;
+            defer tests.teardown(testCtx);
+            const kvDB = testCtx.db;
+            {
+                const trx = kvDB.begin(true) catch unreachable;
+                const b = trx.createBucket("widgets") catch unreachable;
+                for (q.items.items) |item| {
+                    try b.put(consts.KeyPair.init(item.key, item.value));
+                }
+
+                try trx.commit();
+                trx.destroy();
+            }
+            q.sort();
+
+            // Iterate over all items and check consistency.
+            {
+                const trx = kvDB.begin(false) catch unreachable;
+                const b = trx.getBucket("widgets") orelse unreachable;
+                var cursor = b.cursor();
+                defer cursor.deinit();
+                var keyPair = cursor.first();
+                for (q.items.items) |item| {
+                    assert(std.mem.eql(u8, keyPair.key.?, item.key), "the key should be {s}", .{item.key});
+                    assert(std.mem.eql(u8, keyPair.value.?, item.value), "the value should be {s}", .{item.value});
+                    keyPair = cursor.next();
+                }
+                try trx.rollback();
+            }
+        }
+    }.quickCheck;
+    try f(std.testing.allocator, 500);
+}
+
+// test "ExampleCursor" {
+//     std.testing.log_level = .err;
 //     const testCtx = tests.setup() catch unreachable;
 //     defer tests.teardown(testCtx);
 //     const kvDB = testCtx.db;
-//     _ = kvDB; // autofix
+//     // Start a read-write transaction.
+//     const updateFn = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             // Create a new bucket.
+//             const b = trx.createBucket("animals") catch unreachable;
+
+//             // Insert data into a bucket.
+//             try b.put(consts.KeyPair.init("dog", "fun"));
+//             try b.put(consts.KeyPair.init("cat", "lame"));
+//             try b.put(consts.KeyPair.init("liger", "awesome"));
+
+//             // Create a cursor for iteration.
+//             var c = b.cursor();
+//             defer c.deinit();
+
+//             // Iterate over the bucket.
+//             var keyPair = c.first();
+//             while (!keyPair.isNotFound()) {
+//                 std.debug.print("A {s} is {s}.\n", .{ keyPair.key.?, keyPair.value.? });
+//                 // Do something with keyPair.
+//                 keyPair = c.next();
+//             }
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn);
 // }
 
-test "ExampleCursor" {
-    std.testing.log_level = .err;
-    const testCtx = tests.setup() catch unreachable;
-    defer tests.teardown(testCtx);
-    const kvDB = testCtx.db;
-    // Start a read-write transaction.
-    const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
-            // Create a new bucket.
-            const b = trx.createBucket("animals") catch unreachable;
+// test "ExampleCursor_reverse" {
+//     std.testing.log_level = .err;
+//     const testCtx = tests.setup() catch unreachable;
+//     defer tests.teardown(testCtx);
+//     const kvDB = testCtx.db;
+//     const updateFn = struct {
+//         fn update(_: void, trx: *TX) Error!void {
+//             // Create a new bucket.
+//             const b = trx.createBucket("animals") catch unreachable;
 
-            // Insert data into a bucket.
-            try b.put(consts.KeyPair.init("dog", "fun"));
-            try b.put(consts.KeyPair.init("cat", "lame"));
-            try b.put(consts.KeyPair.init("liger", "awesome"));
+//             // Insert data into a bucket.
+//             try b.put(consts.KeyPair.init("dog", "fun"));
+//             try b.put(consts.KeyPair.init("cat", "lame"));
+//             try b.put(consts.KeyPair.init("liger", "awesome"));
 
-            // Create a cursor for iteration.
-            var c = b.cursor();
-            defer c.deinit();
-
-            // Iterate over the bucket.
-            var keyPair = c.first();
-            while (!keyPair.isNotFound()) {
-                std.debug.print("A {s} is {s}.\n", .{ keyPair.key.?, keyPair.value.? });
-                // Do something with keyPair.
-                keyPair = c.next();
-            }
-        }
-    }.update;
-    try kvDB.update({}, updateFn);
-}
-
-test "ExampleCursor_reverse" {
-    std.testing.log_level = .err;
-    const testCtx = tests.setup() catch unreachable;
-    defer tests.teardown(testCtx);
-    const kvDB = testCtx.db;
-    const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
-            // Create a new bucket.
-            const b = trx.createBucket("animals") catch unreachable;
-
-            // Insert data into a bucket.
-            try b.put(consts.KeyPair.init("dog", "fun"));
-            try b.put(consts.KeyPair.init("cat", "lame"));
-            try b.put(consts.KeyPair.init("liger", "awesome"));
-
-            // Create a cursor for iteration.
-            var c = b.cursor();
-            defer c.deinit();
-            // Iterate over items in reverse sorted key order. This starts
-            // from the last key/value pair and updates the k/v variables to
-            // the previous key/value on each iteration.
-            //
-            // The loop finishes at the beginning of the cursor when a nil key
-            // is returned.
-            var keyPair = c.last();
-            while (!keyPair.isNotFound()) {
-                std.debug.print("A {s} is {s}.\n", .{ keyPair.key.?, keyPair.value.? });
-                keyPair = c.prev();
-            }
-        }
-    }.update;
-    try kvDB.update({}, updateFn);
-    // Output:
-    // A liger is awesome.
-    // A dog is fun.
-    // A cat is lame.
-}
+//             // Create a cursor for iteration.
+//             var c = b.cursor();
+//             defer c.deinit();
+//             // Iterate over items in reverse sorted key order. This starts
+//             // from the last key/value pair and updates the k/v variables to
+//             // the previous key/value on each iteration.
+//             //
+//             // The loop finishes at the beginning of the cursor when a nil key
+//             // is returned.
+//             var keyPair = c.last();
+//             while (!keyPair.isNotFound()) {
+//                 std.debug.print("A {s} is {s}.\n", .{ keyPair.key.?, keyPair.value.? });
+//                 keyPair = c.prev();
+//             }
+//         }
+//     }.update;
+//     try kvDB.update({}, updateFn);
+//     // Output:
+//     // A liger is awesome.
+//     // A dog is fun.
+//     // A cat is lame.
+// }
