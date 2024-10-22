@@ -321,7 +321,7 @@ pub const Bucket = struct {
     pub fn createBucketIfNotExists(self: *Self, key: []const u8) Error!*Bucket {
         const child = self.createBucket(key) catch |err| switch (err) {
             Error.BucketExists => {
-                return self.getBucket(key);
+                return self.getBucket(key) orelse unreachable;
             },
             else => {
                 return err;

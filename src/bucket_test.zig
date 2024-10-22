@@ -134,7 +134,7 @@ test "Bucket_Put_Repeat" {
 }
 
 // Ensure that a bucket can write a bunch of large values.
-test "Bucket_Put_LargeValues" {
+test "Bucket_Put_LargeValue" {
     std.testing.log_level = .err;
     const testCtx = tests.setup() catch unreachable;
     defer tests.teardown(testCtx);
@@ -173,4 +173,41 @@ test "Bucket_Put_LargeValues" {
     }.view;
 
     try db.view(testCtx, viewFn);
+}
+
+// Ensure that a database can perform multiple large appends safely.
+test "Bucket_Put_VeryLarge" {
+    std.testing.log_level = .err;
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const db = testCtx.db;
+    const n = 400000;
+    const batchN = 200000;
+    const vSize: usize = 500;
+    const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
+    var ctx = ContextTuple{
+        .first = testCtx,
+        .second = 0,
+    };
+
+    for (0..n) |i| {
+        ctx.second = i;
+        const updateFn = struct {
+            fn update(context: ContextTuple, tx: *TX) Error!void {
+                const b = tx.createBucketIfNotExists("widgets") catch unreachable;
+                const value = context.first.repeat('A', vSize);
+                var key = [4]u8{ 0, 0, 0, 0 };
+                for (0..batchN) |j| {
+                    const keyNum = @as(u32, @intCast(context.second + j));
+                    std.mem.writeInt(u32, key[0..4], keyNum, .big);
+                    try b.put(KeyPair.init(key[0..], value));
+                    if (j % 500 == 0) {
+                        std.log.err("step: {}: {}", .{ context.second, j });
+                    }
+                }
+                context.first.allocator.free(value);
+            }
+        }.update;
+        try db.update(ctx, updateFn);
+    }
 }

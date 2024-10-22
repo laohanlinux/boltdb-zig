@@ -4,12 +4,29 @@ const DB = db.DB;
 const node = @import("node.zig");
 const consts = @import("consts.zig");
 
+// A tuple of two values.
+pub const Tuple = struct {
+    pub fn t2(comptime firstType: type, comptime secondType: type) type {
+        return struct {
+            first: firstType,
+            second: secondType,
+        };
+    }
+    pub fn t3(comptime firstType: type, comptime secondType: type, comptime thirdType: type) type {
+        return struct {
+            first: firstType,
+            second: secondType,
+            third: thirdType,
+        };
+    }
+};
+
 /// A test context.
 pub const TestContext = struct {
     allocator: std.mem.Allocator,
     db: *DB,
-    pub fn generateBytes(self: @This(), bufSize: usize) []u8 {
-        const buffer = self.allocator.alloc(u8, bufSize) catch unreachable;
+    pub fn generateBytes(self: @This(), bufSize: usize) []usize {
+        const buffer = self.allocator.alloc(usize, bufSize) catch unreachable;
         randomBuf(buffer);
         return buffer;
     }
@@ -29,7 +46,7 @@ pub fn setup() !TestContext {
     // std.testing.log_level = .debug;
     var options = db.defaultOptions;
     options.readOnly = false;
-    options.initialMmapSize = 10000 * consts.PageSize;
+    options.initialMmapSize = 100000 * consts.PageSize;
     // options.strictMode = true;
     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
     defer std.testing.allocator.free(filePath);

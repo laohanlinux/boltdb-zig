@@ -1,4 +1,5 @@
 const std = @import("std");
+const Page = @import("page.zig").Page;
 
 /// A simple garbage collector that frees slices of memory when triggered.
 pub const GC = struct {
@@ -62,5 +63,16 @@ pub const GC = struct {
             entry.value_ptr.allocator.free(entry.value_ptr.bytes);
         }
         self.slices.clearAndFree();
+    }
+};
+
+pub const PagePool = struct {
+    allocator: std.mem.Allocator,
+    free: std.ArrayList(*Page),
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return {.allocator = allocator, .free = std.ArrayList.init(allocator)};
     }
 };

@@ -47,8 +47,8 @@ pub const PgidType = u64;
 /// A slice of page ids.
 pub const PgIds = []PgidType;
 /// The size of a page.
-// pub const PageSize: usize = std.mem.page_size;
-pub const PageSize: usize = 512;
+pub const PageSize: usize = std.mem.page_size;
+// pub const PageSize: usize = 512;
 
 /// Returns the size of a page given the page size and branching factor.
 pub fn intFromFlags(pageFlage: PageFlag) u16 {
