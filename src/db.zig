@@ -377,11 +377,12 @@ pub const DB = struct {
     /// Retrives a page reference from the mmap based on the current page size.
     /// TODO if the page is overflowed?
     pub fn pageById(self: *const Self, id: consts.PgidType) *Page {
-        std.log.debug("retrive a page by pgid: {}, pageSize: {}", .{ id, self.pageSize });
         const pos: u64 = id * @as(u64, self.pageSize);
         assert(self.dataRef.?.len >= (pos + self.pageSize), "dataRef.len: {}, pos: {}, pageSize: {}, id: {}", .{ self.dataRef.?.len, pos, self.pageSize, id });
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
-        return Page.init(buf);
+        const p = Page.init(buf);
+        std.log.debug("retrive a page by pgid: {}, pageSize: {}, count: {}, overflow: {}", .{ id, self.pageSize, p.count, p.overflow });
+        return p;
     }
 
     /// Retrives a page reference from a given byte array based on the current page size.
@@ -1060,4 +1061,3 @@ pub const Meta = packed struct {
 //     // test "DB-read" {
 //     {}
 // }
-

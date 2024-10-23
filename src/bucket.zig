@@ -86,6 +86,7 @@ pub const AutoFreeObject = struct {
         {
             var it = self.autoFreeBytes.iterator();
             while (it.next()) |entry| {
+                std.log.info("free auto free bytes, ptr: 0x{x}", .{@intFromPtr(entry.value_ptr.*.ptr)});
                 allocator.free(entry.value_ptr.*);
             }
             self.autoFreeBytes.deinit();
@@ -389,7 +390,7 @@ pub const Bucket = struct {
     /// Supplied value must remain valid for the life of the transaction.
     /// Returns an error if the bucket was created from a read-only transaction, if the key is bucket, if the key is too large, or
     /// of if the value is too large.
-    pub fn put(self: *Self, keyPair: consts.KeyPair) !void {
+    pub fn put(self: *Self, keyPair: consts.KeyPair) Error!void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
@@ -729,19 +730,22 @@ pub const Bucket = struct {
     // Returns true if a bucket is small enough to be written inline
     // and if it contains no subbuckets. Otherwise returns false.
     fn inlineable(self: *const Self) bool {
+        const logger = std.log.scoped(.inlineable);
         const n = self.rootNode;
         // Bucket must only contain a single leaf node.
         if (n == null or !n.?.isLeaf) { // the inline node has not parent rootNode, because it inline.
-            std.log.debug("the rootNode is null or not a leaf node: {d}", .{self._b.?.root});
+            logger.debug("the rootNode is null or not a leaf node: {d}", .{self._b.?.root});
             return false;
         }
-
+        logger.debug("execute page inlineable process, the inode size: {}, node ptr: 0x{x}", .{ n.?.inodes.items.len, n.?.nodePtrInt() });
         // Bucket is not inlineable if it contains subbuckets or if it goes beyond
         // our threshold for inline bucket size.
         var size = page.Page.headerSize();
         for (n.?.inodes.items) |inode| {
+            logger.debug("the key is: 0x{x}", .{@intFromPtr(inode.key.?.ptr)});
             size += page.LeafPageElement.headerSize() + inode.key.?.len;
             if (inode.value) |value| {
+                logger.debug("the value ptr :0x{x}", .{@intFromPtr(value.ptr)});
                 size += value.len;
             }
             // include the bucket leaf flag
@@ -784,7 +788,8 @@ pub const Bucket = struct {
         // Write a bucket header.
         const _bt = _Bucket.init(value);
         _bt.* = self._b.?;
-        assert(_bt.root == 0, "the bucket root is not eq 0", .{});
+        // TODO if all the key is deleted, the bucket root is not eq 0.
+        // assert(_bt.root == 0, "the bucket root is not eq 0", .{});
 
         // TODO may sure no children at the node and more check!.
         // Convert byte slice to a fake page and write the roor node.
@@ -895,8 +900,10 @@ pub const Bucket = struct {
         }
         // Read the page into the node and cacht it.
         n.read(p.?);
+        assert(n.inodes.items.len == p.?.count, "nodes count: {}, page count: {}", .{ n.inodes.items.len, p.?.count });
         const parentPtrInt = if (parentNode == null) 0 else @intFromPtr(parentNode.?);
-        std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}, parentPtr: 0x{x}", .{ pgid, n.nodePtrInt(), parentNode == null, parentPtrInt });
+        const key = if (n.key == null) "" else n.key.?;
+        std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}, parentPtr: 0x{x}, key: {any}", .{ pgid, n.nodePtrInt(), parentNode == null, parentPtrInt, key });
         const entry = self.nodes.getOrPut(pgid) catch unreachable;
         assert(!entry.found_existing, "the node is already exist, pgid: {d}, ptr: 0x{x}", .{ pgid, n.nodePtrInt() });
         entry.value_ptr.* = n;

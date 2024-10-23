@@ -67,12 +67,40 @@ pub const GC = struct {
 };
 
 pub const PagePool = struct {
-    allocator: std.mem.Allocator,
     free: std.ArrayList(*Page),
+    arena: std.heap.ArenaAllocator,
 
-    const Self = @This();
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        return .{ .arena = std.heap.ArenaAllocator.init(allocator), .free = std.ArrayList(*Page).init(allocator) };
+    }
 
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return {.allocator = allocator, .free = std.ArrayList.init(allocator)};
+    pub fn deinit(self: *@This()) void {
+        self.free.deinit();
+        self.arena.deinit();
+    }
+
+    pub fn new(self: *@This(), pageSize: usize) !*Page {
+        const p = if (self.free.popOrNull()) |hasPage| hasPage else {
+            const buffer = try self.arena.allocator().alloc(u8, pageSize);
+            @memset(buffer, 0);
+            return Page.init(buffer);
+        };
+        return p;
+    }
+
+    pub fn delete(self: *@This(), p: *Page) void {
+        const buffer = p.asSlice();
+        @memset(buffer, 0);
+        self.free.append(p) catch unreachable;
     }
 };
+
+test "Page Pool" {
+    const consts = @import("consts.zig");
+    var pagePool = PagePool.init(std.testing.allocator);
+    defer pagePool.deinit();
+    for (0..10000) |_| {
+        const p = try pagePool.new(consts.PageSize);
+        pagePool.delete(p);
+    }
+}

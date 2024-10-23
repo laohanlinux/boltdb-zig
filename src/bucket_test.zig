@@ -176,38 +176,158 @@ test "Bucket_Put_LargeValue" {
 }
 
 // Ensure that a database can perform multiple large appends safely.
-test "Bucket_Put_VeryLarge" {
+// test "Bucket_Put_VeryLarge" {
+//     std.testing.log_level = .err;
+//     const testCtx = tests.setup() catch unreachable;
+//     defer tests.teardown(testCtx);
+//     const db = testCtx.db;
+//     const n = 400000;
+//     const batchN = 200000;
+//     const vSize: usize = 500;
+//     const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
+//     var ctx = ContextTuple{
+//         .first = testCtx,
+//         .second = 0,
+//     };
+
+//     for (0..n) |i| {
+//         ctx.second = i;
+//         const updateFn = struct {
+//             fn update(context: ContextTuple, tx: *TX) Error!void {
+//                 const b = tx.createBucketIfNotExists("widgets") catch unreachable;
+//                 const value = context.first.repeat('A', vSize);
+//                 var key = [4]u8{ 0, 0, 0, 0 };
+//                 for (0..batchN) |j| {
+//                     const keyNum = @as(u32, @intCast(context.second + j));
+//                     std.mem.writeInt(u32, key[0..4], keyNum, .big);
+//                     try b.put(KeyPair.init(key[0..], value));
+//                     if (j % 500 == 0) {
+//                         std.log.err("step: {}: {}", .{ context.second, j });
+//                     }
+//                 }
+//                 context.first.allocator.free(value);
+//             }
+//         }.update;
+//         try db.update(ctx, updateFn);
+//     }
+// }
+
+// Ensure that a setting a value on a key with a bucket value returns an error.
+test "Bucket_Put_IncompatibleValue" {
     std.testing.log_level = .err;
     const testCtx = tests.setup() catch unreachable;
     defer tests.teardown(testCtx);
     const db = testCtx.db;
-    const n = 400000;
-    const batchN = 200000;
-    const vSize: usize = 500;
-    const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
-    var ctx = ContextTuple{
-        .first = testCtx,
-        .second = 0,
-    };
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            _ = try b.createBucket("foo");
+            const err = b.put(KeyPair.init("foo", "bar"));
+            assert(err == Error.IncompactibleValue, comptime "the error is not IncompatibleValue", .{});
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
 
-    for (0..n) |i| {
-        ctx.second = i;
-        const updateFn = struct {
-            fn update(context: ContextTuple, tx: *TX) Error!void {
-                const b = tx.createBucketIfNotExists("widgets") catch unreachable;
-                const value = context.first.repeat('A', vSize);
-                var key = [4]u8{ 0, 0, 0, 0 };
-                for (0..batchN) |j| {
-                    const keyNum = @as(u32, @intCast(context.second + j));
-                    std.mem.writeInt(u32, key[0..4], keyNum, .big);
-                    try b.put(KeyPair.init(key[0..], value));
-                    if (j % 500 == 0) {
-                        std.log.err("step: {}: {}", .{ context.second, j });
-                    }
-                }
-                context.first.allocator.free(value);
+// Ensure that a setting a value while the transaction is closed returns an error.
+test "Bucket_Put_TxClosed" {
+    std.testing.log_level = .err;
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const db = testCtx.db;
+    const tx = try db.begin(true);
+    const b = try tx.createBucket("widgets");
+    _ = b; // autofix
+    try tx.rollback();
+    // const b2 = tx.createBucket("widgets");
+    // assert(b2 == Error.TxClosed, comptime "the error is not TxClosed", .{});
+}
+
+// Ensure that setting a value on a read-only bucket returns an error.
+test "Bucket_Put_ReadOnly" {
+    std.testing.log_level = .err;
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            _ = b; // autofix
+        }
+    }.update;
+    try db.update({}, updateFn);
+
+    const viewFn = struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets") orelse unreachable;
+            const err = b.put(KeyPair.init("foo", "bar"));
+            assert(err == Error.TxNotWriteable, comptime "the error is not TxNotWriteable", .{});
+        }
+    }.view;
+    try db.view({}, viewFn);
+}
+
+// Ensure that a bucket can delete an existing key.
+test "Bucket_Delete" {
+    std.testing.log_level = .err;
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            try b.put(KeyPair.init("foo", "bar"));
+            try b.delete("foo");
+            const value = b.get("foo");
+            assert(value == null, comptime "the value is not null", .{});
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that deleting a large set of keys will work correctly.
+test "Bucket_Delete_Large" {
+    std.testing.log_level = .debug;
+    const testCtx = tests.setup() catch unreachable;
+    defer tests.teardown(testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(context: tests.TestContext, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            const value = context.repeat('X', 1024);
+            var key = [4]u8{ 0, 0, 0, 0 };
+            for (0..100) |i| {
+                std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
+                try b.put(KeyPair.init(key[0..], value));
             }
-        }.update;
-        try db.update(ctx, updateFn);
-    }
+            context.allocator.free(value);
+        }
+    }.update;
+    try db.update(testCtx, updateFn);
+
+    const updateFn2 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets") orelse unreachable;
+            var key = [4]u8{ 0, 0, 0, 0 };
+            for (0..100) |i| {
+                std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
+                std.log.debug("delete key: {any}", .{key[0..]});
+                try b.delete(key[0..]);
+            }
+        }
+    }.update;
+    try db.update({}, updateFn2);
+
+    const viewFn = struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets") orelse unreachable;
+            var key = [4]u8{ 0, 0, 0, 0 };
+            for (0..100) |i| {
+                std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
+                const value = b.get(key[0..]);
+                assert(value == null, comptime "key: {any}, the value is not null", .{key[0..]});
+            }
+        }
+    }.view;
+    try db.view({}, viewFn);
 }

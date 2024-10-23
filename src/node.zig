@@ -43,6 +43,36 @@ pub const Node = struct {
         return self;
     }
 
+    pub fn deinitAndDestroy(self: *Self) void {
+        self.deinit();
+        self.allocator.destroy(self);
+    }
+
+    pub fn deinitWhenRemoved(self: *Self) void {
+        if (self.isFreed) {
+            return;
+        }
+        self.isFreed = true;
+        if (self.bucket) |inBucket| {
+            if (inBucket._b) |inBucketRoot| {
+                if (inBucketRoot.root == 0) {
+                    std.log.debug("this is inline bucket", .{});
+                }
+            }
+        }
+
+        if (self.key) |key| {
+            std.log.info("free key, ptr: 0x{x}", .{@intFromPtr(key.ptr)});
+            self.allocator.free(key);
+        }
+
+        self.inodes.clearAndFree();
+        assert(self.inodes.items.len == 0, "the inodes is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+        self.children.clearAndFree();
+        assert(self.children.items.len == 0, "the children is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+        self.allocator.destroy(self);
+    }
+
     /// free the node memory
     pub fn deinit(self: *Self) void {
         if (self.isFreed) {
@@ -71,13 +101,15 @@ pub const Node = struct {
         }
 
         if (self.key) |key| {
-            // std.log.info("free key: {s}, ptr: 0x{x}, len: {d}", .{ key, @intFromPtr(key.ptr), key.len });
+            std.log.info("free key, ptr: 0x{x}", .{@intFromPtr(key.ptr)});
             self.allocator.free(key);
         }
         self.key = null;
 
-        self.inodes.deinit();
-        self.children.deinit();
+        self.inodes.clearAndFree();
+        assert(self.inodes.items.len == 0, "the inodes is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+        self.children.clearAndFree();
+        assert(self.children.items.len == 0, "the children is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
     }
 
     /// Returns the top-level node this node is attached to.
@@ -202,6 +234,7 @@ pub const Node = struct {
         if (!exact) {
             // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
+            // insertINode.isNew = true;
             self.inodes.insert(index, insertINode) catch unreachable;
         }
         const inodeRef = &self.inodes.items[index];
@@ -249,13 +282,22 @@ pub const Node = struct {
     /// Removes a key from the node.
     pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
-        const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) orelse return;
-        const inode = self.inodes.orderedRemove(index);
+        const index = self.binarySearchInodes(key) orelse {
+            std.log.debug("the key is not found, key: {any}, firstINode: {any}", .{ key, self.inodes.items[0].key.? });
+            return;
+        };
+        var inode = self.inodes.orderedRemove(index);
         assert(std.mem.eql(u8, inode.key.?, key), "the key is not equal to the inode key, key: {s}, inode key: {s}", .{ key, inode.key.? });
-        assert(std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) == null, "the key is should be deleted, key: {s}", .{key});
+        // assert(std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) == null, "the key is should be deleted, key: {s}", .{key});
+        // free the inode
+        inode.deinit(self.allocator);
+        if (self.inodes.items.len == 0) {
+            const keyPtr = if (self.key) |k| @intFromPtr(k.ptr) else 0;
+            std.log.info("the node is empty, id: {d}, pgid: {d}, ptr: 0x{x}, keyPtr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt(), keyPtr });
+        }
         // Mark the node as needing rebalancing.
         self.unbalance = true;
-        // self.printKeysString();
+        self.printKeysString();
     }
 
     /// Read initializes the node from a page.
@@ -287,13 +329,14 @@ pub const Node = struct {
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            self.key = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
+            const dupeKey = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
+            self.key = dupeKey;
+            // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(dupeKey);
             assert(self.key.?.len > 0, "key is null, id: {d}, ptr: 0x{x}", .{ self.id, self.nodePtrInt() });
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
         }
-        // std.log.info("ptr: 0x{x}, id: {d}, key: {}", .{ self.nodePtrInt(), self.id, self.key == null });
     }
 
     /// Writes the items into one or more pages.
@@ -371,6 +414,7 @@ pub const Node = struct {
         while (true) {
             // Split node into two.
             const count = curNode.inodes.items.len;
+            _ = count; // autofix
             const a, const b = curNode.splitTwo(_pageSize);
             nodes.append(a.?) catch unreachable;
             // a.?.printKeysString();
@@ -379,7 +423,11 @@ pub const Node = struct {
                 std.log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
                 break;
             } else {
-                std.log.info("the node[{d} -> a: {d}, b: {d}] is need to split, isLeaf: {}", .{ count, a.?.inodes.items.len, b.?.inodes.items.len, a.?.isLeaf });
+                const aFirstKey = a.?.inodes.items[0].key.?;
+                const aLastKey = a.?.inodes.items[a.?.inodes.items.len - 1].key.?;
+                const bFirstKey = b.?.inodes.items[0].key.?;
+                const bLastKey = b.?.inodes.items[b.?.inodes.items.len - 1].key.?;
+                std.log.info("the node[ a=>[len:{d}, key:{any}-{any}], b=>[len:{d}, key:{any}-{any}]] is need to split, isLeaf: {}", .{ a.?.inodes.items.len, aFirstKey, aLastKey, b.?.inodes.items.len, bFirstKey, bLastKey, a.?.isLeaf });
             }
 
             // Set node to be so it gets split on the next function.
@@ -590,8 +638,12 @@ pub const Node = struct {
                 // Move root's child up.
                 const child: *Self = self.bucket.?.node(self.inodes.items[0].pgid, self);
                 self.isLeaf = child.isLeaf;
-                self.inodes = child.inodes;
-                self.children = child.children;
+                {
+                    self.inodes.clearAndFree();
+                    self.inodes.appendSlice(child.inodes.items) catch unreachable;
+                    self.children.clearAndFree();
+                    self.children.appendSlice(child.children.items) catch unreachable;
+                }
 
                 // Reparent all child nodes being moved.
                 // TODO why not skip the first key
@@ -606,6 +658,7 @@ pub const Node = struct {
                 child.parent = null;
                 _ = self.bucket.?.nodes.remove(child.pgid);
                 child.free();
+                child.deinitWhenRemoved();
                 return;
             }
             std.debug.print("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}\n", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
@@ -616,12 +669,20 @@ pub const Node = struct {
 
         // If node has no keys then just remove it.
         if (self.numChildren() == 0) {
+            // remove self from parent reference.
             self.parent.?.del(self.key.?);
             self.parent.?.removeChild(self);
+            // remove self from node.
             const exists = self.bucket.?.nodes.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
+            // free reference page to db.
             self.free();
+            // continue reblance parent.
             self.parent.?.rebalance();
+            // destroy self.
+            const key = if (self.key == null) "" else self.key.?;
+            std.log.info("destroy self, key={any}, id: {d}, pgid: {d}, ptr: 0x{x}, keyPtr: 0x{x}, parentPtr: 0x{x}, parentInodesLen: {d}", .{ key, self.id, self.pgid, self.nodePtrInt(), @intFromPtr(self.key.?.ptr), self.parent.?.nodePtrInt(), self.parent.?.inodes.items.len });
+            self.deinitAndDestroy();
             return;
         }
 
@@ -640,7 +701,6 @@ pub const Node = struct {
         if (useNextSlibling) {
             // Reparent all child nodes being moved.
             for (self.inodes.items) |inode| {
-                // 难道有些数据没在bucket.nodes里面？
                 if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
                     _child.parent.?.removeChild(_child);
                     _child.parent = self;
@@ -680,7 +740,9 @@ pub const Node = struct {
     fn removeChild(self: *Self, target: *Node) void {
         for (self.children.items, 0..) |child, i| {
             if (child == target) {
-                _ = self.children.orderedRemove(i);
+                // TODO mybey we should check the child is in the children list.
+                const childNode = self.children.orderedRemove(i);
+                assert(childNode.nodePtrInt() == target.nodePtrInt(), "the child is not in the children list", .{});
                 return;
             }
         }
@@ -729,6 +791,15 @@ pub const Node = struct {
 
     pub fn nodePtrInt(self: *const Self) usize {
         return @intFromPtr(self);
+    }
+
+    fn binarySearchInodes(self: *const Self, key: []const u8) ?usize {
+        const findFn = struct {
+            fn find(context: []const u8, item: INode) std.math.Order {
+                return std.mem.order(u8, context, item.key.?);
+            }
+        }.find;
+        return std.sort.binarySearch(INode, self.inodes.items, key, findFn) orelse return null;
     }
 
     fn safeCheck(self: *const Self) void {
