@@ -337,6 +337,10 @@ pub const Node = struct {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
         }
+        const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
+        const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
+        std.log.info("read node from page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
+    
     }
 
     /// Writes the items into one or more pages.
@@ -363,7 +367,9 @@ pub const Node = struct {
         var b = p.asSlice()[dataStart..];
         // assert(b.len >= (self.pageElementSize() * self.inodes.items.len), "the page({d}) is too small to write all inodes, data size: {d}, need size: {d}", .{ p.id, dataSlice.len, self.pageElementSize() * self.inodes.items.len });
         var written: usize = 0;
-        std.log.info("write node into page(ptr: 0x{x}, id: {d}, flags: {any}), countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), p.count, p.overflow, p.asSlice().len, b.len });
+        const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
+        const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
+        std.log.info("write node into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
