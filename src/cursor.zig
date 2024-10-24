@@ -260,7 +260,7 @@ pub const Cursor = struct {
     /// Moves to the next leaf element and returns the key and value.
     /// If the cursor is at the last leaf element then it stays there and return null.
     pub fn _next(self: *Self) KeyValueRef {
-            // defer std.log.info("the stack is {}", .{self.stack.items.len});
+        // defer std.log.info("the stack is {}", .{self.stack.items.len});
         while (true) {
             // assert(self.stack.items.len > 0, "the stack is empty", .{});
             // Attempt to move over one element until we're successful.
@@ -315,7 +315,6 @@ pub const Cursor = struct {
             self.nsearch(key);
             return;
         }
-
         if (n) |_node| {
             self.searchNode(key, _node);
             return;
@@ -334,7 +333,6 @@ pub const Cursor = struct {
             std.log.debug("return a topRef node", .{});
             return topRef.node;
         }
-
         // Start from root and traveerse down the hierarchy.
         var n = self.stack.items[0].node orelse self._bucket.node(self.stack.items[0].p.?.id, null);
         for (self.stack.items[0 .. self.stack.items.len - 1]) |ref| {
@@ -343,6 +341,7 @@ pub const Cursor = struct {
         }
 
         assert(n.isLeaf, "expect leaf node", .{});
+        std.log.debug("return a node, pgid: {}", .{n.pgid});
         return n;
     }
 
@@ -352,18 +351,17 @@ pub const Cursor = struct {
             fn print(curNode: *const Node) void {
                 for (curNode.inodes.items, 0..) |iNode, i| {
                     const iKey = iNode.getKey().?;
-                    std.log.debug("i={}, key={s}, iKey = {s}", .{ i, curNode.key.?, iKey });
+                    std.log.debug("i={}, key={any}, len={}, iKey = {any}, len={}", .{ i, curNode.key.?, curNode.key.?.len, iKey, iKey.len });
                 }
             }
         }.print;
-        _ = printNodes;
-        // printNodes(n);
-        const searchFn = struct {
-            fn searchFn(context: []const u8, inode: INode) std.math.Order {
-                return std.mem.order(u8, context, inode.getKey().?);
-            }
-        }.searchFn;
-        const index = std.sort.binarySearch(INode, n.inodes.items, key, searchFn) orelse (n.inodes.items.len - 1);
+        // _ = printNodes;
+        printNodes(n);
+        var index = n.upperBoundInodes(key);
+        if (index > 0) {
+            index -= 1;
+        }
+        std.log.debug("find index: {}", .{index});
         // Recursively search to the next node.
         var lastEntry = self.stack.getLast();
         lastEntry.index = index;

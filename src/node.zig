@@ -283,7 +283,7 @@ pub const Node = struct {
     pub fn del(self: *Self, key: []const u8) void {
         // Find index of key.
         const index = self.binarySearchInodes(key) orelse {
-            std.log.debug("the key is not found, key: {any}, firstINode: {any}", .{ key, self.inodes.items[0].key.? });
+            // std.log.debug("the key is not found, key: {any}, firstINode: {any}", .{ key, self.inodes.items[0].key.? });
             return;
         };
         var inode = self.inodes.orderedRemove(index);
@@ -339,8 +339,7 @@ pub const Node = struct {
         }
         const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
         const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
-        std.log.info("read node from page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
-    
+        std.log.info("read node from page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len });
     }
 
     /// Writes the items into one or more pages.
@@ -799,13 +798,31 @@ pub const Node = struct {
         return @intFromPtr(self);
     }
 
-    fn binarySearchInodes(self: *const Self, key: []const u8) ?usize {
+    pub fn binarySearchInodes(self: *const Self, key: []const u8) ?usize {
         const findFn = struct {
             fn find(context: []const u8, item: INode) std.math.Order {
                 return std.mem.order(u8, context, item.key.?);
             }
         }.find;
-        return std.sort.binarySearch(INode, self.inodes.items, key, findFn) orelse return null;
+        return std.sort.binarySearch(INode, self.inodes.items, key, findFn);
+    }
+
+    pub fn lowerBoundInodes(self: *const Self, key: []const u8) usize {
+        const lowerBoundFn = struct {
+            fn lower(context: []const u8, item: INode) std.math.Order {
+                return std.mem.order(u8, context, item.key.?);
+            }
+        }.lower;
+        return std.sort.lowerBound(INode, self.inodes.items, key, lowerBoundFn);
+    }
+
+    pub fn upperBoundInodes(self: *const Self, key: []const u8) usize {
+        const upperBoundFn = struct {
+            fn upper(context: []const u8, item: INode) std.math.Order {
+                return std.mem.order(u8, context, item.key.?);
+            }
+        }.upper;
+        return std.sort.upperBound(INode, self.inodes.items, key, upperBoundFn);
     }
 
     fn safeCheck(self: *const Self) void {

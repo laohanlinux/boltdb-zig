@@ -430,6 +430,7 @@ pub const Bucket = struct {
         } else if (!self.tx.?.writable) {
             return Error.TxNotWriteable;
         }
+        std.log.debug("---------------1", .{});
 
         // Move cursor to correct position.
         var c = self.cursor();
@@ -442,6 +443,7 @@ pub const Bucket = struct {
         if (keyPairRef.flag & consts.BucketLeafFlag != 0) {
             return Error.IncompactibleValue;
         }
+        std.log.debug("---------------2", .{});
 
         // Delete the node if we have a matching key.
         c.node().?.del(key);
