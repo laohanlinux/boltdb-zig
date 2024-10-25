@@ -620,6 +620,7 @@ pub const Node = struct {
     /// size is below a threshold or if there are not enough keys.
     pub fn rebalance(self: *Self) void {
         if (!self.unbalance) {
+            std.log.debug("i has rebalance, pgid: {}", .{self.pgid});
             return;
         }
         self.unbalance = false;
@@ -664,6 +665,7 @@ pub const Node = struct {
                 _ = self.bucket.?.nodes.remove(child.pgid);
                 child.free();
                 child.deinitWhenRemoved();
+                std.log.debug("only one child, merge it, pgid: {d}, key={any}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
                 return;
             }
             std.debug.print("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}\n", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
