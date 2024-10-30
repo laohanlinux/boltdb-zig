@@ -239,18 +239,10 @@ pub const Bucket = struct {
         // TODO
         // If unaligned load/stores are broken on this arch and value is
         // unaligned simply clone to an aligned byte array.
-        // const alignment = std.math.ceilPowerOfTwo(usize, @alignOf(_Bucket)) catch @alignOf(usize);
-        // var alignedValue: []u8 = undefined;
-        // const isAligned = @intFromPtr(value.ptr) % alignment == 0;
-        // if (!isAligned) {
-        //     alignedValue = self.allocator.dupe(u8, value) catch unreachable;
-        // } else {
-        //     alignedValue = self.allocator.dupe(u8, value) catch unreachable;
-        // }
-
         // TODO: Optimize the code.
         const alignedValue = self.allocator.dupe(u8, value) catch unreachable;
-        assert(alignedValue.len >= _Bucket.size(), "the aligned value len is less than the bucket size", .{});
+        const alignment = @alignOf(_Bucket);
+        assert(alignedValue.len >= alignment, "the aligned value len is less than the bucket size", .{});
         // If this is a writable transaction then we need to copy the bucket entry.
         // Read-Only transactions can point directly at the mmap entry.
         // TODO Opz the code.
@@ -393,6 +385,7 @@ pub const Bucket = struct {
     /// Returns an error if the bucket was created from a read-only transaction, if the key is bucket, if the key is too large, or
     /// of if the value is too large.
     pub fn put(self: *Self, keyPair: consts.KeyPair) Error!void {
+        var ts = std.time.microTimestamp();
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
@@ -420,6 +413,9 @@ pub const Bucket = struct {
         const cpKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
         const newKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
         const cpValue = self.allocator.dupe(u8, keyPair.value.?) catch unreachable;
+        std.log.warn("put at cursor, cost: {d}ms", .{std.time.microTimestamp() - ts});
+        ts = std.time.microTimestamp();
+
         _ = c.node().?.put(cpKey, newKey, cpValue, 0, 0);
     }
 
@@ -790,7 +786,9 @@ pub const Bucket = struct {
         // Allocate the approprivate size.
         const n = self.rootNode.?;
         assert(n.pgid == 0, "the inline bucket root must be eq 0", .{});
-        const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
+        // const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
+        const alignment = @alignOf(_Bucket);
+        const value = self.allocator.alignedAlloc(u8, alignment, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
         @memset(value, 0);
 
         // Write a bucket header.

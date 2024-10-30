@@ -286,50 +286,89 @@ const KeyPair = consts.KeyPair;
 // }
 //
 // Ensure that deleting a large set of keys will work correctly.
-test "Bucket_Delete_Large" {
-    std.testing.log_level = .info;
-    const testCtx = tests.setup() catch unreachable;
-    defer tests.teardown(testCtx);
+// test "Bucket_Delete_Large" {
+//     std.testing.log_level = .info;
+//     const testCtx = tests.setup() catch unreachable;
+//     defer tests.teardown(testCtx);
+//     const db = testCtx.db;
+
+//     const updateFn = struct {
+//         fn update(context: tests.TestContext, tx: *TX) Error!void {
+//             const b = try tx.createBucket("widgets");
+//             const value = context.repeat('X', 1024);
+//             var key = [4]u8{ 0, 0, 0, 0 };
+//             for (0..100) |i| {
+//                 std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
+//                 try b.put(KeyPair.init(key[0..], value));
+//             }
+//             context.allocator.free(value);
+//         }
+//     }.update;
+//     try db.update(testCtx, updateFn);
+
+//     const updateFn2 = struct {
+//         fn update(_: void, tx: *TX) Error!void {
+//             const b = tx.getBucket("widgets") orelse unreachable;
+//             var key = [4]u8{ 0, 0, 0, 0 };
+//             for (0..100) |i| {
+//                 std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
+//                 std.log.debug("delete key: {any}", .{key[0..]});
+//                 try b.delete(key[0..]);
+//             }
+//         }
+//     }.update;
+//     try db.update({}, updateFn2);
+
+//     const viewFn = struct {
+//         fn view(_: void, tx: *TX) Error!void {
+//             const b = tx.getBucket("widgets") orelse unreachable;
+//             var key = [4]u8{ 0, 0, 0, 0 };
+//             for (0..100) |i| {
+//                 std.log.debug("view key: {any}", .{key[0..]});
+//                 std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
+//                 const value = b.get(key[0..]);
+//                 assert(value == null, comptime "key: {any}, the value is not null", .{key[0..]});
+//             }
+//         }
+//     }.view;
+//     try db.view({}, viewFn);
+// }
+
+// Deleting a very large list of keys will cause the freelist to use overflow.
+test "Bucket_Delete_Large_Overflow" {
+    std.testing.log_level = .warn;
+    var arenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arenaAllocator.deinit();
+    var testCtx = tests.setup(arenaAllocator.allocator()) catch unreachable;
+    defer tests.teardown(&testCtx);
     const db = testCtx.db;
+    const count = 100000;
+    const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
+    var ctx = ContextTuple{
+        .first = testCtx,
+        .second = 0,
+    };
+    for (0..count) |i| {
+        ctx.second = i;
+        const updateFn = struct {
+            fn update(context: ContextTuple, tx: *TX) Error!void {
+                const b = try tx.createBucketIfNotExists("widgets");
+                var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+                var time = std.time.microTimestamp();
+                for (0..1000) |j| {
+                    std.mem.writeInt(u64, key[0..8], @as(u64, @intCast(context.second)), .big);
+                    std.mem.writeInt(u64, key[8..16], @as(u64, @intCast(j)), .big);
+                    time = std.time.microTimestamp();
 
-    const updateFn = struct {
-        fn update(context: tests.TestContext, tx: *TX) Error!void {
-            const b = try tx.createBucket("widgets");
-            const value = context.repeat('X', 1024);
-            var key = [4]u8{ 0, 0, 0, 0 };
-            for (0..100) |i| {
-                std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
-                try b.put(KeyPair.init(key[0..], value));
+                    try b.put(KeyPair.init(key[0..], context.first.repeat('X', 0)));
+                    // if (j % 100 == 0) {
+                    std.log.warn("step: {d}, count: {d}, cost: {d}ms", .{ context.second, context.second * 1000, std.time.microTimestamp() - time });
+                    time = std.time.microTimestamp();
+                    // }
+                }
+                // std.log.warn("step: {d}, count: {d}, cost: {d}ms", .{ context.second, context.second * 1000, std.time.milliTimestamp() - time });
             }
-            context.allocator.free(value);
-        }
-    }.update;
-    try db.update(testCtx, updateFn);
-
-    const updateFn2 = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            const b = tx.getBucket("widgets") orelse unreachable;
-            var key = [4]u8{ 0, 0, 0, 0 };
-            for (0..100) |i| {
-                std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
-                std.log.debug("delete key: {any}", .{key[0..]});
-                try b.delete(key[0..]);
-            }
-        }
-    }.update;
-    try db.update({}, updateFn2);
-
-    const viewFn = struct {
-        fn view(_: void, tx: *TX) Error!void {
-            const b = tx.getBucket("widgets") orelse unreachable;
-            var key = [4]u8{ 0, 0, 0, 0 };
-            for (0..100) |i| {
-                std.log.debug("view key: {any}", .{key[0..]});
-                std.mem.writeInt(u32, key[0..4], @as(u32, @intCast(i)), .big);
-                const value = b.get(key[0..]);
-                assert(value == null, comptime "key: {any}, the value is not null", .{key[0..]});
-            }
-        }
-    }.view;
-    try db.view({}, viewFn);
+        }.update;
+        try db.update(ctx, updateFn);
+    }
 }

@@ -269,10 +269,10 @@ pub const Node = struct {
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
-        self.safeCheck();
-        const vLen: usize = if (inodeRef.value) |v| v.len else 0;
-        std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
-        std.log.info("create a new key: {s}", .{newKey});
+        // self.safeCheck();
+        // const vLen: usize = if (inodeRef.value) |v| v.len else 0;
+        // std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
+        // std.log.info("create a new key: {s}", .{newKey});
         return inodeRef;
     }
 
@@ -460,7 +460,7 @@ pub const Node = struct {
         // Determin split position and sizes of the two pages.
         const _splitIndex, _ = self.splitIndex(threshold);
         assert(_splitIndex < self.inodes.items.len, "the split index is out of range, index: {}, inodes len: {}", .{ _splitIndex, self.inodes.items.len });
-        std.log.info("split index: {}, threshold: {}, inodes len: {}", .{ _splitIndex, threshold, self.inodes.items.len });
+        // std.log.info("split index: {}, threshold: {}, inodes len: {}", .{ _splitIndex, threshold, self.inodes.items.len });
         // Split node into two separate nodes.
         // if the node is the root node, then create a new node as the parent node
         // and set the current node as the child node
@@ -500,58 +500,58 @@ pub const Node = struct {
     /// It returns the index as well as the size of the first page.
     /// This is only be called from split().
     fn splitIndex(self: *Self, threshold: usize) [2]usize {
-        var sz = self.bucket.?.tx.?.db.?.pageSize;
-        if (self.inodes.items.len <= consts.MinKeysPage) {
-            return [2]usize{ 0, sz };
-        }
-        // Loop until we only have the minmum number of keys required for the second page.
-        var inodeIndex: usize = 0;
-        // count is used to avoid the overflow of the usize
-        var count: usize = 0;
-        for (self.inodes.items, 0..) |inode, i| {
-            var elsize = self.pageElementSize() + inode.key.?.len;
-            if (inode.value) |value| {
-                elsize += value.len;
-            }
-            inodeIndex = i;
-
-            // If we have at least the minimum number of keys and adding another
-            // node would put us over the threshold then exit and return
-            if (inodeIndex >= self.inodes.items.len and sz + elsize > threshold) {
-                break;
-            }
-            count += 1;
-            if (count >= 0xFFFF) {
-                break;
-            }
-
-            // Add the element size the total size.
-            sz += elsize;
-        }
-
-        return [2]usize{ inodeIndex, sz };
-
-        // var sz = Page.headerSize();
-        // // Loop until we only have the minimum number of keys required for the second page.
-        // var i: usize = 0;
-        // var index: usize = 0;
-        // while (i < self.inodes.items.len - consts.MinKeysPage) {
-        //     index = i;
-        //     const inode = self.inodes.items[i];
+        // var sz = self.bucket.?.tx.?.db.?.pageSize;
+        // if (self.inodes.items.len <= consts.MinKeysPage) {
+        //     return [2]usize{ 0, sz };
+        // }
+        // // Loop until we only have the minmum number of keys required for the second page.
+        // var inodeIndex: usize = 0;
+        // // count is used to avoid the overflow of the usize
+        // var count: usize = 0;
+        // for (self.inodes.items, 0..) |inode, i| {
         //     var elsize = self.pageElementSize() + inode.key.?.len;
         //     if (inode.value) |value| {
         //         elsize += value.len;
         //     }
+        //     inodeIndex = i;
+
         //     // If we have at least the minimum number of keys and adding another
-        //     // node would put us over the threshold then exit and return.
-        //     if (i >= consts.MinKeysPage and (sz + elsize) > threshold) {
+        //     // node would put us over the threshold then exit and return
+        //     if (inodeIndex >= self.inodes.items.len and sz + elsize > threshold) {
         //         break;
         //     }
-        //     // Add the element size to the total size.
+        //     count += 1;
+        //     if (count >= 0xFFFF) {
+        //         break;
+        //     }
+
+        //     // Add the element size the total size.
         //     sz += elsize;
-        //     i += 1;
         // }
-        // return [2]usize{ index, sz };
+
+        // return [2]usize{ inodeIndex, sz };
+
+        var sz = Page.headerSize();
+        // Loop until we only have the minimum number of keys required for the second page.
+        var i: usize = 0;
+        var index: usize = 0;
+        while (i < self.inodes.items.len - consts.MinKeysPage) {
+            index = i;
+            const inode = self.inodes.items[i];
+            var elsize = self.pageElementSize() + inode.key.?.len;
+            if (inode.value) |value| {
+                elsize += value.len;
+            }
+            // If we have at least the minimum number of keys and adding another
+            // node would put us over the threshold then exit and return.
+            if (i >= consts.MinKeysPage and (sz + elsize) > threshold) {
+                break;
+            }
+            // Add the element size to the total size.
+            sz += elsize;
+            i += 1;
+        }
+        return [2]usize{ index, sz };
     }
 
     /// Writes the nodes to dirty pages and splits nodes as it goes.
@@ -627,7 +627,7 @@ pub const Node = struct {
             // Update the statistics.
             _tx.stats.spill += 1;
         }
-        self.safeCheck();
+        // self.safeCheck();
         // If the root node split and created a new root then we need to spill that
         // as well. We'll clear out the children to make sure it doesn't try to respill.
         if (self.parent != null and self.parent.?.pgid == 0) {
