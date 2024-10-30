@@ -95,7 +95,6 @@ pub const FreeList = struct {
 
         var initial: usize = 0;
         const previd: usize = 0;
-        std.log.debug("1, allocate n: {d}, ids: {any}", .{ n, self.ids.items });
         for (self.ids.items, 0..) |id, i| {
             assert(id > 1, "invalid page({}) allocation", .{id});
 
@@ -106,6 +105,8 @@ pub const FreeList = struct {
             // If we found a contignous block then remove it and return it.
             if ((id - initial) + 1 == @as(PgidType, n)) {
                 const beforeCount = self.ids.items.len;
+                const beforeIds = self.allocator.alloc(PgidType, self.ids.items.len) catch unreachable;
+                std.mem.copyForwards(PgidType, beforeIds, self.ids.items);
                 // If we're allocating off the beginning then take the fast path
                 // and just adjust then existing slice. This will use extra memory
                 // temporarilly but then append() in free() will realloc the slice
@@ -117,18 +118,16 @@ pub const FreeList = struct {
                     std.mem.copyForwards(PgidType, self.ids.items[i - n + 1 ..], self.ids.items[(i + 1)..]);
                     self.ids.resize(self.ids.items.len - n) catch unreachable;
                 }
-
                 assert(beforeCount == (n + self.ids.items.len), "beforeCount == n + self.ids.items.len, beforeCount: {d}, n: {d}, self.ids.items.len: {d}", .{ beforeCount, n, self.ids.items.len });
-
                 // Remove from the free cache.
-                // TODO Notice
                 for (0..n) |ii| {
                     const have = self.cache.remove(initial + ii);
                     assert(have, "page {} not found in cache", .{initial + ii});
                 }
                 const afterCount = self.ids.items.len;
                 assert(beforeCount == (n + afterCount), "{} != {}", .{ beforeCount, afterCount });
-                std.log.debug("2, allocate a new page, pgid: {d}, n: {d}, initial: {d}", .{ initial, n, initial });
+                std.log.debug("allocate a new page from freelist, pgid: {d}, n: {d}, ids from {any} change to {any}", .{ initial, n, beforeIds, self.ids.items });
+                self.allocator.free(beforeIds);
                 return initial;
             }
         }
@@ -142,13 +141,11 @@ pub const FreeList = struct {
         // Free page and all its overflow pages.
         const ids = try self.pending.getOrPutValue(txid, std.ArrayList(PgidType).init(self.allocator));
         for (p.id..(p.id + p.overflow + 1)) |id| {
-            // Verify that page is not already free.
-            assert(!self.cache.contains(id), "page({}) already free", .{id});
-            std.log.debug("free a page, id: {}", .{id});
             // Add to the freelist and cache.
             try self.cache.putNoClobber(id, true);
             try ids.value_ptr.append(id);
         }
+        std.log.debug("after free a page, txid: {}, pending ids: {any}", .{ txid, ids.value_ptr.items });
     }
 
     /// Moves all page ids for a transaction id (or older) to the freelist.
@@ -226,7 +223,6 @@ pub const FreeList = struct {
     /// saved to disk since in the event of a program crash, all pending ids will
     /// become free.
     pub fn write(self: *Self, p: *Page) Error!void {
-        defer std.log.info("after write freelist to page: {}", .{p.id});
         // Combine the old free pgids and pgids waiting on an open transaction.
         //
         // Update the header flag.
@@ -247,6 +243,7 @@ pub const FreeList = struct {
             p.overflow = @as(u32, @intCast(lenids));
             self.copyAll(overflow[1..]);
         }
+        std.log.info("𓃠 after write freelist to page, pgid: {}, ids: {any}", .{ p.id, p.freelistPageElements().? });
     }
 
     /// Reads the freelist from a page and filters out pending itmes.

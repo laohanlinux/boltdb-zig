@@ -303,7 +303,7 @@ pub const TX = struct {
             return err;
         };
         self.stats.writeTime += startTime.lap();
-        std.log.info("write cost time: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
+        // std.log.info("write cost time: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
         // Finalize the transaction.
         self.close();
         std.log.debug("after close transaction.", .{});
@@ -320,12 +320,6 @@ pub const TX = struct {
         self.destroy();
     }
 
-    // /// Rollback and destroy the transaction.
-    // pub fn rollbackAndDestroy(self: *Self) Error!void {
-    //     defer self.destroy();
-    //     try self.rollback();
-    // }
-
     /// Writes any dirty pages to disk.
     pub fn write(self: *Self) Error!void {
         // Sort pages by id.
@@ -341,22 +335,17 @@ pub const TX = struct {
             }
         }.inner;
         std.mem.sort(*Page, pagesSlice.items, {}, asc);
-        std.log.info("ready to write dirty pages into disk, page count: {}", .{pagesSlice.items.len});
+        std.log.info("𓃠 ready to write dirty pages into disk, page count: {}", .{pagesSlice.items.len});
         const _db = self.db.?;
         const opts = _db.opts.?;
-        for (pagesSlice.items) |p| {
+        for (pagesSlice.items, 0..) |p, i| {
             // Write out page in 'max allocation' sized chunks.
             const slice = p.asSlice();
             const offset = p.id * @as(u64, _db.pageSize);
             _ = try opts(_db.file, slice, offset);
             // Update statistics
             self.stats.write += 1;
-            // if (p.id == 117) {
-            //     const k1 = p.branchPageElement(0).?;
-            //     const k2 = p.branchPageElement(1).?;
-            //     std.log.debug("k1: {any}, k2: {any}\n", .{ k1, k2 });
-            // }
-            // std.log.debug("write page into disk: pgid: {}, flags: {}, offset: {}, size: {}, any: {any}", .{ p.id, consts.toFlags(p.flags), offset, slice.len, slice });
+            std.log.debug("𓃠 {}: write page into disk: pgid: {}, flags: {}, offset: {}, size: {}", .{ i, p.id, consts.toFlags(p.flags), offset, slice.len });
         }
 
         // Ignore file sync if flag is set on DB.
@@ -535,12 +524,12 @@ pub const TX = struct {
         std.log.info("before clear all reference", .{});
         // Clear all reference.
         self.allocator.destroy(self.meta);
-        std.log.info("after clear meta", .{});
+        // std.log.info("after clear meta", .{});
         self.db = null;
         if (self.pages) |_pages| {
             var itr = _pages.valueIterator();
             while (itr.next()) |p| {
-                std.log.debug("free page: {}, ptr: 0x{x}, overflow: {}", .{ p.*.id, p.*.ptrInt(), p.*.overflow });
+                std.log.debug("free page object: pgid: {}, overflow: {}", .{ p.*.id, p.*.overflow });
                 self.allocator.free(p.*.asSlice());
             }
             self.pages.?.deinit();
@@ -548,7 +537,7 @@ pub const TX = struct {
         }
         self.autoFreeNodes.deinit(self.allocator);
         self.root.deinit();
-        std.log.info("after clear root", .{});
+        // std.log.info("after clear root", .{});
         // Execute commit handlers now that the locks have been removed.
         std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});
         for (self._commitHandlers.items) |func| {

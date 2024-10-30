@@ -271,6 +271,8 @@ pub const Bucket = struct {
             assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
             assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
+        } else {
+            std.log.info("The bucket is not inline, pgid: {}", .{child._b.?.root});
         }
         self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
         return child;
@@ -366,9 +368,9 @@ pub const Bucket = struct {
     /// Return a nil value if the key does not exist or if the key is a nested bucket.
     /// The returned value is only valid for the life of the transaction.
     pub fn get(self: *Self, key: []const u8) ?[]u8 {
-        var _cursor = self.cursor();
-        defer _cursor.deinit();
-        const keyPairRef = _cursor._seek(key);
+        var itr = self.cursor();
+        defer itr.deinit();
+        const keyPairRef = itr._seek(key);
         if (keyPairRef.key == null) {
             return null;
         }
@@ -424,14 +426,13 @@ pub const Bucket = struct {
     /// Removes a key from the bucket.
     /// If the key does not exist then nothing is done and a nil error is returned.
     /// Returns an error if the bucket was created from a read-only transaction.
+    /// TODO: add bool return indicate the key is deleted or not.
     pub fn delete(self: *Self, key: []const u8) Error!void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
             return Error.TxNotWriteable;
         }
-        std.log.debug("---------------1", .{});
-
         // Move cursor to correct position.
         var c = self.cursor();
         defer c.deinit();
@@ -443,10 +444,9 @@ pub const Bucket = struct {
         if (keyPairRef.flag & consts.BucketLeafFlag != 0) {
             return Error.IncompactibleValue;
         }
-        std.log.debug("---------------2", .{});
-
         // Delete the node if we have a matching key.
-        c.node().?.del(key);
+        const index = c.node().?.del(key);
+        assert(index != null, "the key is not found, key: {any}", .{key});
     }
 
     /// Returns the current integer for the bucket without incrementing it.
@@ -677,14 +677,16 @@ pub const Bucket = struct {
         var itr = self.buckets.iterator();
         while (itr.next()) |entry| {
             var value: std.ArrayList(u8) = undefined;
-            std.log.info("Run at bucket({s}) spill!", .{entry.key_ptr.*});
+            std.log.info("\t\tRun at bucket({s}) spill!\t\t", .{entry.key_ptr.*});
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
             if (entry.value_ptr.*.inlineable()) {
+                // free the child bucket
+                entry.value_ptr.*.free();
                 const valBuffer = entry.value_ptr.*.write();
                 value = std.ArrayList(u8).fromOwnedSlice(self.allocator, valBuffer);
-                std.log.info("spill a inlineable bucket({s}) done!", .{entry.key_ptr.*});
+                std.log.info("\t\tspill a inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
             } else {
                 try entry.value_ptr.*.spill(); // TODO Opz code
                 // Update the child bucket header in this bucket.
@@ -692,6 +694,7 @@ pub const Bucket = struct {
                 value.appendNTimes(0, _Bucket.size()) catch unreachable;
                 const bt = _Bucket.init(value.items[0..]);
                 bt.* = entry.value_ptr.*._b.?;
+                std.log.info("\t\tspill a non-inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
             }
 
             // Skip writing the bucket if there are no matterialized nodes.
@@ -709,8 +712,9 @@ pub const Bucket = struct {
             assert(keyPairRef.flag & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.flag});
             const newKey = keyPairRef.dupeKey(self.allocator).?;
             const oldKey = self.allocator.dupe(u8, entry.key_ptr.*) catch unreachable;
-            // _ = c.node().?.put(entry.key_ptr.*[0..], entry.key_ptr.*[0..], value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
-            _ = c.node().?.put(oldKey, newKey, value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
+            const keyNode = c.node().?;
+            std.log.info("update the bucket header, oldKey: {s}, newKey: {s}, header.node.pgid: {d}, nodePtr: 0x{x}", .{ oldKey, newKey, keyNode.pgid, keyNode.nodePtrInt() });
+            _ = keyNode.put(oldKey, newKey, value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
             value.deinit();
         }
@@ -720,13 +724,14 @@ pub const Bucket = struct {
             std.log.debug("the rootNode is null", .{});
             return;
         }
+        const oldRootNode = self.rootNode.?;
         // Spill nodes.
         self.rootNode.?.spill() catch unreachable;
         self.rootNode = self.rootNode.?.root();
         // Update the root node for this bucket.
         assert(self.rootNode.?.pgid < self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
         self._b.?.root = self.rootNode.?.pgid;
-        std.log.info("the rootNode update to {d}, isLeaf:{}, inodes: {any}\n", .{ self._b.?.root, self.rootNode.?.isLeaf, self.rootNode.?.inodes.items.len });
+        std.log.info("the rootNode from {d} updated to {d}, isLeaf:{}, inodes: {any}\n", .{ oldRootNode.pgid, self._b.?.root, self.rootNode.?.isLeaf, self.rootNode.?.inodes.items.len });
     }
 
     // Returns true if a bucket is small enough to be written inline
@@ -784,21 +789,21 @@ pub const Bucket = struct {
     fn write(self: *Self) []u8 {
         // Allocate the approprivate size.
         const n = self.rootNode.?;
+        assert(n.pgid == 0, "the inline bucket root must be eq 0", .{});
         const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
         @memset(value, 0);
 
         // Write a bucket header.
         const _bt = _Bucket.init(value);
         _bt.* = self._b.?;
-        // TODO if all the key is deleted, the bucket root is not eq 0.
-        // assert(_bt.root == 0, "the bucket root is not eq 0", .{});
+        assert(_bt.root == 0, "the inline bucket root must be eq 0", .{});
 
         // TODO may sure no children at the node and more check!.
         // Convert byte slice to a fake page and write the roor node.
         const p = Page.init(value[Bucket.bucketHeaderSize()..]);
         const written = n.write(p) + Page.headerSize();
         assert(written == n.size(), "the written size is not equal to the node size, written: {d}, need size: {d}", .{ written, n.size() });
-        std.log.info("after write bucket to page, the vPtr: 0x{x}, vLen:{d}, data: {any}", .{ @intFromPtr(value.ptr), value.len, value });
+        std.log.info("after write bucket to page, nodePtr: 0x{x}, keyCount:{d}, bucketRoot: {d}, the vPtr: 0x{x}, vLen:{d}, data: {any}", .{ n.nodePtrInt(), n.inodes.items.len, _bt.root, @intFromPtr(value.ptr), value.len, value });
         return value;
     }
 
@@ -813,6 +818,7 @@ pub const Bucket = struct {
         while (itr.next()) |child| {
             child.*.rebalance();
         }
+        // std.log.info("after rebalance bucket done, {any}", .{self.nodes});
     }
 
     /// Returns the size of the bucket header.
@@ -825,7 +831,7 @@ pub const Bucket = struct {
         if (self._b == null or self._b.?.root == 0) {
             return;
         }
-
+        std.log.info("free bucket associated pages and nodes, pgid: {d}, it will be set to 0", .{self._b.?.root});
         const trx = self.tx.?;
         self.forEachPageNode(trx, freeTravel);
         self._b.?.root = 0;
@@ -861,7 +867,7 @@ pub const Bucket = struct {
         // Inline buckets have a fake page embedded in their value so treat them
         // differently. We'll return the rootNode (if available) or the fake page.
         if (self._b == null or self._b.?.root == 0) {
-            std.log.info("this is a inline bucket, be embedded at page, pgid: {d}", .{id});
+            // std.log.info("this is a inline bucket, be embedded at page, pgid: {d}", .{id});
             assert(id == 0, "inline bucket non-zero page access(2): {} != 0", .{id});
             if (self.rootNode) |rNode| {
                 return PageOrNode{ .page = null, .node = rNode };

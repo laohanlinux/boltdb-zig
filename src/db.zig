@@ -399,7 +399,7 @@ pub const DB = struct {
         // in a consistent state. metaA is the one with thwe higher txid.
         var metaA = self.meta0;
         var metaB = self.meta1;
-        std.log.debug("meta0: {}, meta1: {}", .{ metaA.txid, metaB.txid });
+        // std.log.debug("meta0: {}, meta1: {}", .{ metaA.txid, metaB.txid });
 
         if (self.meta1.txid > self.meta0.txid) {
             metaA = self.meta1;
@@ -638,7 +638,7 @@ pub const DB = struct {
     pub fn view(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
         const trxID = trx.getID();
-        std.log.info("Star a read-only transaction, txid: {}, meta_id: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        std.log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
         var isDrop = false;
         // Make sure the transaction rolls back in the event of a panic.

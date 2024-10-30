@@ -40,9 +40,9 @@ pub const TestContext = struct {
 
 /// Setup a test context.
 pub fn setup() !TestContext {
-    if (std.testing.log_level != .err) {
-        std.testing.log_level = .debug;
-    }
+    // if (std.testing.log_level != .err) {
+    //     std.testing.log_level = .debug;
+    // }
     // std.testing.log_level = .debug;
     var options = db.defaultOptions;
     options.readOnly = false;
@@ -57,7 +57,11 @@ pub fn setup() !TestContext {
 
 /// Teardown a test context.
 pub fn teardown(ctx: TestContext) void {
+    const path = ctx.allocator.dupe(u8, ctx.db.path()) catch unreachable;
+    defer ctx.allocator.free(path);
     ctx.db.close() catch unreachable;
+    std.fs.cwd().deleteFile(path) catch unreachable;
+    std.log.debug("delete dirty file: {s}\n", .{path});
 }
 
 /// Generate a random buffer.

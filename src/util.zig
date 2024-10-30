@@ -64,6 +64,31 @@ pub fn munmap(ptr: []u8) void {
     }
 }
 
+/// binary search the key in the items, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
+pub fn binarySearch(
+    comptime T: type,
+    items: []const T,
+    context: anytype,
+    comptime compareFn: fn (@TypeOf(context), T) std.math.Order,
+) struct { index: usize, exact: bool } {
+    if (items.len == 0) {
+        return .{ .index = 0, .exact = false };
+    }
+    var left: usize = 0;
+    var right: usize = items.len;
+    while (left < right) {
+        const mid = left + (right - left) / 2;
+        const element = items[mid];
+        const cmp = compareFn(context, element);
+        switch (cmp) {
+            .eq => return .{ .index = mid, .exact = true },
+            .lt => left = mid + 1,
+            .gt => right = mid,
+        }
+    }
+    return .{ .index = left, .exact = false };
+}
+
 pub fn Closure(comptime T: type) type {
     return struct {
         captureVar: *T,
