@@ -6,7 +6,7 @@ const PgIds = consts.PgIds;
 const util = @import("util.zig");
 
 /// A page.
-pub const Page = struct {
+pub const Page = packed struct {
     // The page identifier.
     id: PgidType,
     // The page flags.
