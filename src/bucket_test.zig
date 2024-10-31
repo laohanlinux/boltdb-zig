@@ -336,7 +336,7 @@ const KeyPair = consts.KeyPair;
 
 // Deleting a very large list of keys will cause the freelist to use overflow.
 test "Bucket_Delete_Large_Overflow" {
-    std.testing.log_level = .warn;
+    std.testing.log_level = .debug;
     var arenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arenaAllocator.deinit();
     var testCtx = tests.setup(arenaAllocator.allocator()) catch unreachable;

@@ -261,7 +261,7 @@ pub const Bucket = struct {
             // The page is a 12-byte body.
             child.page = page.Page.init(alignedValue[Bucket.bucketHeaderSize()..]);
             assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
-            assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) is a leaf page", .{child.page.?.id});
+            assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}, {}) is a leaf page", .{ child.page.?.id, consts.toFlags(child.page.?.flags) });
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
         } else {
             std.log.info("The bucket is not inline, pgid: {}", .{child._b.?.root});
@@ -687,7 +687,10 @@ pub const Bucket = struct {
                 try entry.value_ptr.*.spill(); // TODO Opz code
                 // Update the child bucket header in this bucket.
                 value = std.ArrayList(u8).init(self.allocator);
-                value.appendNTimes(0, _Bucket.size()) catch unreachable;
+                const alignment = @alignOf(_Bucket);
+                const size = _Bucket.size() * 2;
+                const aligned_size = std.mem.alignForward(usize, size, alignment);
+                try value.appendNTimes(0, aligned_size);
                 const bt = _Bucket.init(value.items[0..]);
                 bt.* = entry.value_ptr.*._b.?;
                 std.log.info("\t\tspill a non-inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
@@ -745,10 +748,10 @@ pub const Bucket = struct {
         // our threshold for inline bucket size.
         var size = page.Page.headerSize();
         for (n.?.inodes.items) |inode| {
-            logger.debug("the key is: 0x{x}", .{@intFromPtr(inode.key.?.ptr)});
+            // logger.debug("the key is: 0x{x}", .{@intFromPtr(inode.key.?.ptr)});
             size += page.LeafPageElement.headerSize() + inode.key.?.len;
             if (inode.value) |value| {
-                logger.debug("the value ptr :0x{x}", .{@intFromPtr(value.ptr)});
+                // logger.debug("the value ptr :0x{x}", .{@intFromPtr(value.ptr)});
                 size += value.len;
             }
             // include the bucket leaf flag
@@ -787,8 +790,10 @@ pub const Bucket = struct {
         const n = self.rootNode.?;
         assert(n.pgid == 0, "the inline bucket root must be eq 0", .{});
         // const value = self.allocator.alloc(u8, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
-        const alignment = @alignOf(_Bucket);
-        const value = self.allocator.alignedAlloc(u8, alignment, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
+        const bucket_alignment = @alignOf(_Bucket);
+        const total_size = std.mem.alignForward(usize, Bucket.bucketHeaderSize() + n.size(), bucket_alignment);
+
+        const value = self.allocator.alignedAlloc(u8, bucket_alignment, total_size) catch unreachable;
         @memset(value, 0);
 
         // Write a bucket header.
@@ -938,9 +943,10 @@ pub const _Bucket = packed struct {
     /// Init _Bucket with a given slice
     pub fn init(slice: []u8) *_Bucket {
         util.assert(slice.len >= _Bucket.size(), "slice is too short to init _Bucket", .{});
-        const aligned_slice: []align(@alignOf(_Bucket)) u8 = @alignCast(slice);
-        const ptr: *_Bucket = @ptrCast(aligned_slice.ptr);
-        return ptr;
+        const alignment = @alignOf(_Bucket);
+        const ptr = @intFromPtr(slice.ptr);
+        const aligned_ptr = std.mem.alignForward(usize, ptr, alignment);
+        return @ptrFromInt(aligned_ptr);
     }
 
     fn size() usize {

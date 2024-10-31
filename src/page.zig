@@ -3,6 +3,7 @@ const db = @import("db.zig");
 const consts = @import("consts.zig");
 const PgidType = consts.PgidType;
 const PgIds = consts.PgIds;
+const util = @import("util.zig");
 
 /// A page.
 pub const Page = struct {
@@ -68,8 +69,11 @@ pub const Page = struct {
         if (self.count <= index) {
             return null;
         }
-        const ptr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
-        const dPtr: *BranchPageElement = @ptrFromInt(ptr);
+        const basePtr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
+        const aligned_ptr = std.mem.alignForward(usize, basePtr + index * BranchPageElement.headerSize(), @alignOf(BranchPageElement));
+        const dPtr: *BranchPageElement = @ptrFromInt(aligned_ptr);
+
+        // const dPtr: *BranchPageElement = @ptrFromInt(ptr);
         return dPtr;
     }
 
@@ -83,8 +87,9 @@ pub const Page = struct {
         if (self.count <= index) {
             return null;
         }
-        const ptr = self.getDataPtrIntRef() + index * BranchPageElement.headerSize();
-        const dPtr: *const BranchPageElement = @ptrFromInt(ptr);
+        const basePtr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
+        const aligned_ptr = std.mem.alignForward(usize, basePtr + index * BranchPageElement.headerSize(), @alignOf(BranchPageElement));
+        const dPtr: *BranchPageElement = @ptrFromInt(aligned_ptr);
         return dPtr;
     }
 
@@ -225,7 +230,9 @@ pub const BranchPageElement = packed struct {
     const Self = @This();
     /// Returns the size of the branch page element header.
     pub inline fn headerSize() usize {
+        util.assert(@sizeOf(Self) == @alignOf(Self), "", .{});
         return @sizeOf(Self);
+        // return @alignOf(Self);
     }
 
     /// Returns a byte slice of the node key.

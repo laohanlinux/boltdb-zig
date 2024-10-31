@@ -331,7 +331,7 @@ pub const TX = struct {
         }
         const asc = struct {
             fn inner(_: void, a: *Page, b: *Page) bool {
-                return a.id > b.id;
+                return a.id < b.id;
             }
         }.inner;
         std.mem.sort(*Page, pagesSlice.items, {}, asc);
@@ -345,7 +345,15 @@ pub const TX = struct {
             _ = try opts(_db.file, slice, offset);
             // Update statistics
             self.stats.write += 1;
-            std.log.debug("𓃠 {}: write page into disk: pgid: {}, flags: {}, offset: {}, size: {}", .{ i, p.id, consts.toFlags(p.flags), offset, slice.len });
+            var firstKey: []const u8 = "empty";
+            if (p.count > 0) {
+                if (p.flags & consts.intFromFlags(.leaf) != 0) {
+                    firstKey = p.leafPageElementRef(0).?.key();
+                } else if (p.flags & consts.intFromFlags(.branch) != 0) {
+                    firstKey = p.branchPageElementRef(0).?.key();
+                }
+            }
+            std.log.debug("𓃠 {}: write page into disk: pgid: {}, flags: {}, firstKey={any}, offset: {}, size: {}", .{ i, p.id, consts.toFlags(p.flags), firstKey, offset, slice.len });
         }
 
         // Ignore file sync if flag is set on DB.

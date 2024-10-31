@@ -72,7 +72,8 @@ pub fn toFlags(flag: u16) PageFlag {
         return PageFlag.freeList;
     }
 
-    @panic("invalid flag");
+    assert(false, "invalid flag: {}", .{flag});
+    @panic("");
 }
 
 /// Represents the internal transaction indentifier.

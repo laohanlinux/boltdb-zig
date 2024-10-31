@@ -363,7 +363,7 @@ pub const Node = struct {
         var written: usize = 0;
         const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
         const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
-        std.log.info("write node(nodeid: {d}) into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ self.pgid, @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
+        std.log.warn("write node(nodeid: {d}) into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ self.pgid, @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
@@ -389,7 +389,6 @@ pub const Node = struct {
             // See: https://github.com/boltdb/bolt/pull/335
             const kLen = inode.key.?.len;
             const vLen: usize = if (inode.value) |value| value.len else 0;
-            // assert(b.len >= (kLen + vLen), "it should be not happen, i: {d}, key: {s}, kLen: {d}, vLen: {d}, b.len: {d}", .{ i, inode.key.?, kLen, vLen, b.len });
             written += kLen + vLen;
             // Write data for the element to the end of the page.
             std.mem.copyForwards(u8, b[0..kLen], inode.key.?);
