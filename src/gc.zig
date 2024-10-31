@@ -123,10 +123,18 @@ test "Page Pool" {
     const consts = @import("consts.zig");
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    var pagePool = PagePool.init(arena.allocator(), consts.PageSize);
-    defer pagePool.deinit();
-    for (0..10000) |_| {
-        const p = try pagePool.new();
-        pagePool.delete(p);
+
+    for (0..100000) |i| {
+        _ = i; // autofix
+        const allocator = arena.allocator();
+        var pagePool = PagePool.init(allocator, consts.PageSize);
+
+        for (0..10000) |_| {
+            const p = try pagePool.new();
+            pagePool.delete(p);
+        }
+        pagePool.deinit();
+        _ = arena.reset(.free_all);
+        std.Thread.sleep(10 * std.time.ms_per_min);
     }
 }

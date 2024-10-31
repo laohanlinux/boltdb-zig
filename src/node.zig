@@ -136,7 +136,6 @@ pub const Node = struct {
     pub fn size(self: *const Self) usize {
         var sz = page.Page.headerSize();
         const elsz = self.pageElementSize();
-        // std.log.info("node, id: {d}, ptr: 0x{x}, inodes: {any}", .{ self.id, self.nodePtrInt(), self.inodes.items.len });
         for (self.inodes.items) |item| {
             const vLen: usize = if (item.value) |value| value.len else 0;
             sz += elsz + item.key.?.len + vLen;
@@ -321,6 +320,7 @@ pub const Node = struct {
         if (self.inodes.items.len > 0) {
             const dupeKey = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
             self.key = dupeKey;
+            // self.key = self.inodes.items[0].key;
             // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(dupeKey);
             assert(self.key.?.len > 0, "key is null, id: {d}, ptr: 0x{x}", .{ self.id, self.nodePtrInt() });
         } else {
@@ -358,7 +358,7 @@ pub const Node = struct {
         var written: usize = 0;
         const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
         const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
-        std.log.warn("write node(nodeid: {d}) into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ self.pgid, @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
+        std.log.info("write node(nodeid: {d}) into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ self.pgid, @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});

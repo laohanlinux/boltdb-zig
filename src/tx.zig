@@ -45,6 +45,7 @@ pub const TX = struct {
     writeFlag: isize = 0,
 
     allocator: std.mem.Allocator,
+    areaAllocator: std.heap.ArenaAllocator,
 
     const Self = @This();
 
@@ -67,7 +68,9 @@ pub const TX = struct {
         // Note: here the root node is not set
         self.root.rootNode = null;
         self.autoFreeNodes = AutoFreeObject.init(_db.allocator);
-        self.allocator = _db.allocator;
+        // self.allocator = _db.allocator;
+        self.areaAllocator = std.heap.ArenaAllocator.init(_db.allocator);
+        self.allocator = self.areaAllocator.allocator();
         self.managed = false;
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
@@ -80,7 +83,10 @@ pub const TX = struct {
     /// Destroys the transaction and releases all associated resources.
     pub fn destroy(self: *Self) void {
         assert(self.db == null, "db should be null before destroy", .{});
+        var _areaAllocator = self.areaAllocator;
         self.allocator.destroy(self);
+        _ = _areaAllocator.reset(.free_all);
+        _areaAllocator.deinit();
     }
 
     /// Print the transaction information.

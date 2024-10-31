@@ -28,8 +28,8 @@ pub const AutoFreeObject = struct {
     // So, we need to destroy it manually.
     // 2: the nodes of autoFreeNodes is a new node that created after tx.commit(Copy on Write), their are is a spill node, a snapshot node, a new node.
     autoFreeNodes: NodeSet,
-
     freePtrs: std.AutoArrayHashMap(u64, isize),
+    allocSize: usize = 0,
 
     allocator: std.mem.Allocator,
     /// Init the auto free object.
@@ -45,13 +45,14 @@ pub const AutoFreeObject = struct {
     /// Add a node to the auto free object.
     pub fn addNode(self: *AutoFreeObject, node: *Node) void {
         const key = node.key orelse "";
+        self.allocSize += node.size();
         const gop = self.autoFreeNodes.getOrPut(node) catch unreachable;
         const ptr = @intFromPtr(node);
         // assert(gop.found_existing == false, "the node({}: 0x{x}, {d}) is already in the auto free nodes", .{ node.pgid, ptr, node.id });
         // std.log.debug("add node to the auto free nodes, key: {s}, pgid: {d}, ptr: 0x{x}, id: {d}", .{ key, node.pgid, ptr, node.id });
         if (gop.found_existing) {
             std.log.debug("the node({s}, {}: 0x{x}, {d}) is already in the auto free nodes", .{ key, node.pgid, ptr, node.id });
-        }
+        } else {}
     }
 
     /// Add a byte slice to the auto free object.
@@ -62,8 +63,14 @@ pub const AutoFreeObject = struct {
             std.log.debug("the auto free bytes({}: 0x{x}) is already in the auto free bytes", .{ value.len, ptr });
         } else {
             got.value_ptr.* = value;
+            self.allocSize += value.len;
             std.log.debug("add auto free bytes: {d}, ptr: 0x{x}", .{ value.len, ptr });
         }
+    }
+
+    /// Get the alloc size.
+    pub fn getAllocSize(self: *AutoFreeObject) usize {
+        return self.allocSize;
     }
 
     /// Deinit the auto free object.
@@ -298,9 +305,8 @@ pub const Bucket = struct {
         // Create empty, inline bucket.
         const value = self.packetInlineBucketValue();
         const cpKey = self.allocator.dupe(u8, key) catch unreachable;
-        const newKey = self.allocator.dupe(u8, key) catch unreachable;
         // Insert into node
-        _ = c.node().?.put(cpKey, newKey, value, 0, consts.BucketLeafFlag);
+        _ = c.node().?.put(cpKey, cpKey, value, 0, consts.BucketLeafFlag);
         // Since subbuckets are not allowed on inline buckets, we need to
         // dereference the inline page, if it exists. This will cause the bucket
         // to be treated as regular, non-inline bucket for the rest of the tx.
