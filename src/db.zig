@@ -7,6 +7,7 @@ const freelist = @import("freelist.zig");
 const util = @import("util.zig");
 const consts = @import("consts.zig");
 const Error = @import("error.zig").Error;
+const PagePool = @import("gc.zig").PagePool;
 const TX = tx.TX;
 const PageFlag = consts.PageFlag;
 const assert = util.assert;
@@ -85,6 +86,8 @@ pub const DB = struct {
     txs: std.ArrayList(*tx.TX),
     freelist: *freelist.FreeList,
     stats: Stats,
+
+    pagePool: ?*PagePool = null,
 
     rwlock: std.Thread.Mutex, // Allows only one writer a a time.
     metalock: std.Thread.Mutex, // Protects meta page access.
@@ -229,6 +232,8 @@ pub const DB = struct {
         const allocPage = db.pageById(db.getMeta().freelist);
         db.freelist.read(allocPage);
         db.opened = true;
+        db.pagePool = db.allocator.create(PagePool) catch unreachable;
+        db.pagePool.?.* = PagePool.init(db.allocator, db.pageSize);
         return db;
     }
 
@@ -424,12 +429,14 @@ pub const DB = struct {
 
     /// Allocates a count pages
     pub fn allocatePage(self: *Self, count: usize) !*Page {
-        // TODO Allocate a tempory buffer for the page.
-        // TODO Use PageAllocator.
-        // const buf = try self.allocator.alloc(u8, count * self.pageSize);
-        const buf = try self.allocator.alignedAlloc(u8, @alignOf(Page), count * self.pageSize);
-        @memset(buf, 0);
-        const p = Page.init(buf);
+        var p: *Page = undefined;
+        if (count == 1 and self.pagePool != null) {
+            p = try self.pagePool.?.new();
+        } else {
+            const buf = try self.allocator.alloc(u8, count * self.pageSize);
+            @memset(buf, 0);
+            p = Page.init(buf);
+        }
         p.overflow = @as(u32, @intCast(count)) - 1;
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
@@ -712,6 +719,9 @@ pub const DB = struct {
             trx.destroy();
         }
         self.txs.deinit();
+        if (self.pagePool != null) {
+            self.pagePool.?.deinit();
+        }
     }
 
     fn opsWriteAt(fp: std.fs.File, bytes: []const u8, offset: u64) Error!usize {
@@ -802,7 +812,7 @@ pub const Info = packed struct {
 };
 
 /// Represents the meta data of the database.
-pub const Meta = packed struct {
+pub const Meta = struct {
     magic: u32 = 0,
     version: u32 = 0,
     pageSize: u32 = 0,

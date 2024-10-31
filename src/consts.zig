@@ -96,13 +96,6 @@ pub const KeyValueRef = struct {
         }
         return null;
     }
-
-    fn dupeValue(self: *const KeyValueRef, allocator: std.mem.Allocator) ?[]u8 {
-        if (self.value) |value| {
-            return allocator.dupe(u8, value) catch unreachable;
-        }
-        return null;
-    }
 };
 
 /// A key-value pair.
@@ -124,11 +117,3 @@ pub const KeyPair = struct {
         return !self.isNotFound() and self.value == null;
     }
 };
-
-// global general purpose allocator
-const gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
-/// Get the global general purpose allocator.
-pub fn getGpa() *std.heap.GeneralPurposeAllocator {
-    return &gpa;
-}

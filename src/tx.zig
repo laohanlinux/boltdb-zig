@@ -532,13 +532,16 @@ pub const TX = struct {
         std.log.info("before clear all reference", .{});
         // Clear all reference.
         self.allocator.destroy(self.meta);
-        // std.log.info("after clear meta", .{});
         self.db = null;
         if (self.pages) |_pages| {
             var itr = _pages.valueIterator();
             while (itr.next()) |p| {
                 std.log.debug("free page object: pgid: {}, overflow: {}", .{ p.*.id, p.*.overflow });
-                self.allocator.free(p.*.asSlice());
+                if (p.*.overflow <= 0 and _db.pagePool != null) {
+                    _db.pagePool.?.delete(p.*);
+                } else {
+                    self.allocator.free(p.*.asSlice());
+                }
             }
             self.pages.?.deinit();
             self.pages = null;

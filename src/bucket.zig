@@ -260,8 +260,8 @@ pub const Bucket = struct {
             // So, the bucket page is 28 bytes.
             // The page is a 12-byte body.
             child.page = page.Page.init(alignedValue[Bucket.bucketHeaderSize()..]);
-            assert(child.page.?.id == 0, "the page({}) is not inline", .{child.page.?.id});
-            assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}, {}) is a leaf page", .{ child.page.?.id, consts.toFlags(child.page.?.flags) });
+            assert(child.page.?.id == 0, "the page({}) should be inline", .{child.page.?.id});
+            assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) should be a leaf page", .{child.page.?.id});
             std.log.info("Save a reference to the inline page if the bucket is inline", .{});
         } else {
             std.log.info("The bucket is not inline, pgid: {}", .{child._b.?.root});
@@ -411,12 +411,9 @@ pub const Bucket = struct {
 
         // Insert into node.
         const cpKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
-        const newKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
         const cpValue = self.allocator.dupe(u8, keyPair.value.?) catch unreachable;
-        std.log.warn("put at cursor, cost: {d}ms", .{std.time.microTimestamp() - ts});
         ts = std.time.microTimestamp();
-
-        _ = c.node().?.put(cpKey, newKey, cpValue, 0, 0);
+        _ = c.node().?.put(cpKey, cpKey, cpValue, 0, 0);
     }
 
     /// Removes a key from the bucket.
@@ -937,16 +934,14 @@ pub const Bucket = struct {
 // This is stored as the "value" of a bucket key. If the bucket is small enough,
 // then its root page can be stored inline in the "value", after the bucket
 // header, In the case of inline buckets, the "root" will be 0.
-pub const _Bucket = packed struct {
-    root: PgidType = 0, // page id of the bucket's root-level page, if the Bucket is embedded，it's root is zero.
-    sequence: u64 = 0, // montotically incrementing. used by next_sequence().
+pub const _Bucket = struct {
+    root: PgidType align(1) = 0, // page id of the bucket's root-level page, if the Bucket is embedded，it's root is zero.
+    sequence: u64 align(1) = 0, // montotically incrementing. used by next_sequence().
     /// Init _Bucket with a given slice
     pub fn init(slice: []u8) *_Bucket {
         util.assert(slice.len >= _Bucket.size(), "slice is too short to init _Bucket", .{});
-        const alignment = @alignOf(_Bucket);
-        const ptr = @intFromPtr(slice.ptr);
-        const aligned_ptr = std.mem.alignForward(usize, ptr, alignment);
-        return @ptrFromInt(aligned_ptr);
+        const ptr: *_Bucket = @ptrCast(@alignCast(slice));
+        return ptr;
     }
 
     fn size() usize {
@@ -959,12 +954,6 @@ pub const _Bucket = packed struct {
         self.root = 0;
         self.sequence = 0;
         return self;
-    }
-
-    pub fn mustAligned(value: []const u8) void {
-        const alignment = std.math.ceilPowerOfTwo(usize, @alignOf(_Bucket)) catch @alignOf(usize);
-        const isAligned = @intFromPtr(value.ptr) % alignment == 0;
-        util.assert(isAligned, "the value buffer is not aligned", .{});
     }
 
     /// Deinit _Bucket with a given allocator. This is used for writable transaction.

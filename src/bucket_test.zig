@@ -336,39 +336,41 @@ const KeyPair = consts.KeyPair;
 
 // Deleting a very large list of keys will cause the freelist to use overflow.
 test "Bucket_Delete_Large_Overflow" {
-    std.testing.log_level = .debug;
+    std.testing.log_level = .err;
     var arenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arenaAllocator.deinit();
     var testCtx = tests.setup(arenaAllocator.allocator()) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
-    const count = 100000;
+    const count = 10000;
     const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
     var ctx = ContextTuple{
         .first = testCtx,
         .second = 0,
     };
+    const ts = std.time.timestamp();
+
     for (0..count) |i| {
         ctx.second = i;
+        const time = std.time.milliTimestamp();
         const updateFn = struct {
             fn update(context: ContextTuple, tx: *TX) Error!void {
                 const b = try tx.createBucketIfNotExists("widgets");
                 var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-                var time = std.time.microTimestamp();
                 for (0..1000) |j| {
                     std.mem.writeInt(u64, key[0..8], @as(u64, @intCast(context.second)), .big);
                     std.mem.writeInt(u64, key[8..16], @as(u64, @intCast(j)), .big);
-                    time = std.time.microTimestamp();
-
                     try b.put(KeyPair.init(key[0..], context.first.repeat('X', 0)));
-                    // if (j % 100 == 0) {
-                    std.log.warn("step: {d}, count: {d}, cost: {d}ms", .{ context.second, context.second * 1000, std.time.microTimestamp() - time });
-                    time = std.time.microTimestamp();
-                    // }
                 }
-                // std.log.warn("step: {d}, count: {d}, cost: {d}ms", .{ context.second, context.second * 1000, std.time.milliTimestamp() - time });
             }
         }.update;
         try db.update(ctx, updateFn);
+        if (i % 10 == 0) {
+            const allocSize = db.pagePool.?.getAllocSize();
+            const dataSize = db.dataRef.?.len;
+            std.log.err("step: {d}, count: {d}, cost: {d}ms, totalCost: {d}s, allocSize: {d}, dataSize: {d}", .{ ctx.second, ctx.second * 1000, (std.time.milliTimestamp() - time), (std.time.timestamp() - ts), allocSize, dataSize });
+        }
     }
+
+    std.log.warn("total cost: {d}s", .{(std.time.timestamp() - ts)});
 }

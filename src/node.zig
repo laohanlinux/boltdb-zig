@@ -229,22 +229,17 @@ pub const Node = struct {
         } else if (newKey.len <= 0) {
             assert(false, "put: zero-length new key", .{});
         }
-        assert(@intFromPtr(oldKey.ptr) != @intFromPtr(newKey.ptr), "the oldKey and newKey is the same", .{});
-        // std.log.debug("put key: {s}, keyPtr: 0x{x}, valuePtr: 0x{x}", .{ newKey, @intFromPtr(newKey.ptr), @intFromPtr(value.?.ptr) });
         // Find insertion index.
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].getKey().?));
         if (!exact) {
-            // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
-            // insertINode.isNew = true;
             self.inodes.insert(index, insertINode) catch unreachable;
         }
         const inodeRef = &self.inodes.items[index];
         inodeRef.*.flags = flags;
         inodeRef.*.pgid = pgid;
         if (!exact) {
-            // not found, allocate a new memory
             inodeRef.key = newKey;
         } else {
             if (inodeRef.key != null and inodeRef.isNew) {
@@ -257,7 +252,7 @@ pub const Node = struct {
             // Free old value.
             if (inodeRef.value != null and inodeRef.isNew) {
                 if (value != null) {
-                    assert(@intFromPtr(inodeRef.value.?.ptr) != @intFromPtr(value.?.ptr), "the value is null", .{});
+                    assert(inodeRef.value.?.ptr != value.?.ptr, "the value is null", .{});
                 }
                 // std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
                 // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
@@ -265,14 +260,14 @@ pub const Node = struct {
                 inodeRef.value = null;
             }
         }
-        self.allocator.free(oldKey);
+        if (oldKey.ptr != newKey.ptr) {
+            self.allocator.free(oldKey);
+        }
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
         // self.safeCheck();
-        // const vLen: usize = if (inodeRef.value) |v| v.len else 0;
         // std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
-        // std.log.info("create a new key: {s}", .{newKey});
         return inodeRef;
     }
 
@@ -499,37 +494,6 @@ pub const Node = struct {
     /// It returns the index as well as the size of the first page.
     /// This is only be called from split().
     fn splitIndex(self: *Self, threshold: usize) [2]usize {
-        // var sz = self.bucket.?.tx.?.db.?.pageSize;
-        // if (self.inodes.items.len <= consts.MinKeysPage) {
-        //     return [2]usize{ 0, sz };
-        // }
-        // // Loop until we only have the minmum number of keys required for the second page.
-        // var inodeIndex: usize = 0;
-        // // count is used to avoid the overflow of the usize
-        // var count: usize = 0;
-        // for (self.inodes.items, 0..) |inode, i| {
-        //     var elsize = self.pageElementSize() + inode.key.?.len;
-        //     if (inode.value) |value| {
-        //         elsize += value.len;
-        //     }
-        //     inodeIndex = i;
-
-        //     // If we have at least the minimum number of keys and adding another
-        //     // node would put us over the threshold then exit and return
-        //     if (inodeIndex >= self.inodes.items.len and sz + elsize > threshold) {
-        //         break;
-        //     }
-        //     count += 1;
-        //     if (count >= 0xFFFF) {
-        //         break;
-        //     }
-
-        //     // Add the element size the total size.
-        //     sz += elsize;
-        // }
-
-        // return [2]usize{ inodeIndex, sz };
-
         var sz = Page.headerSize();
         // Loop until we only have the minimum number of keys required for the second page.
         var i: usize = 0;
