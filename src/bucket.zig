@@ -52,7 +52,8 @@ pub const AutoFreeObject = struct {
         // std.log.debug("add node to the auto free nodes, key: {s}, pgid: {d}, ptr: 0x{x}, id: {d}", .{ key, node.pgid, ptr, node.id });
         if (gop.found_existing) {
             std.log.debug("the node({s}, {}: 0x{x}, {d}) is already in the auto free nodes", .{ key, node.pgid, ptr, node.id });
-        } else {}
+        }
+        std.log.info("add node to the auto free nodes, key: {s}, pgid: {d}, ptr: 0x{x}, id: {d}, allocSize: {d}", .{ key, node.pgid, ptr, node.id, self.allocSize });
     }
 
     /// Add a byte slice to the auto free object.
@@ -64,7 +65,7 @@ pub const AutoFreeObject = struct {
         } else {
             got.value_ptr.* = value;
             self.allocSize += value.len;
-            std.log.debug("add auto free bytes: {d}, ptr: 0x{x}", .{ value.len, ptr });
+            std.log.info("add auto free bytes, size: {d}, ptr: 0x{x}, allocSize: {d}", .{ value.len, ptr, self.allocSize });
         }
     }
 
@@ -98,6 +99,7 @@ pub const AutoFreeObject = struct {
             }
             self.autoFreeBytes.deinit();
         }
+        std.log.info("auto free object deinit, allocSize: {d}", .{self.allocSize});
     }
 };
 
