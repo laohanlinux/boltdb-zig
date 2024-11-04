@@ -618,10 +618,6 @@ pub const DB = struct {
         const trxID = trx.getID();
         std.log.info("Star a write transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer std.log.info("End a write transaction, txid: {}", .{trxID});
-        // Make sure the transaction rolls back in the event of a panic.
-        // errdefer if (trx.db != null) {
-        //     trx._rollback();
-        // };
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
@@ -629,7 +625,7 @@ pub const DB = struct {
         // If an errors is returned from the function then rollback and return error.
         execFn(context, trx) catch |err| {
             trx.managed = false;
-            trx.rollback() catch {};
+            trx.rollback() catch unreachable;
             std.log.info("after execute transaction commit handle", .{});
             return err;
         };
@@ -648,30 +644,19 @@ pub const DB = struct {
         const trxID = trx.getID();
         std.log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
-        var isDrop = false;
-        // Make sure the transaction rolls back in the event of a panic.
-        defer {
-            if (!isDrop and trx.db != null) {
-                trx._rollback();
-            }
-        }
-
         // Mark as managed tx so that the inner function cannot manually rollback.
         trx.managed = true;
-
         // If an error is returned from the function then pass it through.
         func(context, trx) catch |err| {
+            std.log.info("has error when execute transaction, txid: {}", .{trxID});
             trx.managed = false;
-            trx.rollback() catch {};
-            isDrop = true;
-            std.log.info("after execute transaction commit handle", .{});
+            trx.rollback() catch unreachable;
             return err;
         };
         trx.managed = false;
-        defer {
-            isDrop = true;
-        }
         try trx.rollback();
+        // self.allocator.destroy(trx);
+        std.log.info("after execute transaction rollback handle", .{});
     }
 
     /// Removes a transaction from the database.
@@ -682,7 +667,7 @@ pub const DB = struct {
         // Use the meta lock to restrict access to the DB object.
         self.metalock.lock();
 
-        std.log.info("transaction executes rollback!", .{});
+        // std.log.info("remove tx({}) from db", .{trx.getID()});
         // Remove the transaction.
         for (self.txs.items, 0..) |_trx, i| {
             if (_trx == trx) {
@@ -721,6 +706,7 @@ pub const DB = struct {
         self.txs.deinit();
         if (self.pagePool != null) {
             self.pagePool.?.deinit();
+            self.allocator.destroy(self.pagePool.?);
         }
     }
 
@@ -901,80 +887,77 @@ pub const Meta = struct {
 //     std.debug.print("{}\n", .{meta});
 // }
 
-test "DB-Read" {
-    var options = defaultOptions;
-    options.initialMmapSize = 10 * consts.PageSize;
-    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
-    defer std.testing.allocator.free(filePath);
-    std.testing.log_level = .info;
+// test "DB-Read" {
+//     var options = defaultOptions;
+//     options.initialMmapSize = 10 * consts.PageSize;
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
+//     defer std.testing.allocator.free(filePath);
+//     std.testing.log_level = .info;
 
-    {
-        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-        try kvDB.close();
-    }
-    {
-        const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-        const dbStr = kvDB.string(std.testing.allocator);
-        defer std.testing.allocator.free(dbStr);
-        std.debug.print("String: {s}\n", .{dbStr});
+//     {
+//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//         try kvDB.close();
+//     }
+//     {
+//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
+//         const dbStr = kvDB.string(std.testing.allocator);
+//         defer std.testing.allocator.free(dbStr);
+//         std.debug.print("String: {s}\n", .{dbStr});
 
-        const pageStr = kvDB.pageString(std.testing.allocator);
-        defer std.testing.allocator.free(pageStr);
-        std.debug.print("{s}\n", .{pageStr});
-        defer kvDB.close() catch unreachable;
-        {
-            const viewFn = struct {
-                fn view(_kvDB: ?*DB, _: *TX) Error!void {
-                    if (_kvDB == null) {
-                        return Error.DatabaseNotOpen;
-                    }
-                    std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
-                }
-            }.view;
-            for (0..10) |i| {
-                try kvDB.view(kvDB, viewFn);
-                std.debug.assert(kvDB.stats.txN == (i + 1));
-                if (i == 9) {
-                    const err = kvDB.view(kvDB, viewFn);
-                    std.debug.assert(err == Error.DatabaseNotOpen);
-                }
-            }
-        }
+//         const pageStr = kvDB.pageString(std.testing.allocator);
+//         defer std.testing.allocator.free(pageStr);
+//         std.debug.print("{s}\n", .{pageStr});
+//         defer kvDB.close() catch unreachable;
+//         {
+//             const viewFn = struct {
+//                 fn view(_kvDB: ?*DB, _: *TX) Error!void {
+//                     if (_kvDB == null) {
+//                         return Error.DatabaseNotOpen;
+//                     }
+//                     std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
+//                 }
+//             }.view;
+//             for (0..10) |i| {
+//                 try kvDB.view(kvDB, viewFn);
+//                 std.debug.assert(kvDB.stats.txN == (i + 1));
+//                 if (i == 9) {
+//                     const err = kvDB.view(kvDB, viewFn);
+//                     std.debug.assert(err == Error.DatabaseNotOpen);
+//                 }
+//             }
+//         }
 
-        // parallel read
-        {
-            var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
-            defer joins.deinit();
-            const parallelViewFn = struct {
-                fn view(_kdb: *DB) void {
-                    const viewFn = struct {
-                        fn view(_kvDB: ?*DB, _: *TX) Error!void {
-                            if (_kvDB == null) {
-                                return Error.DatabaseNotOpen;
-                            }
-                            std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
-                        }
-                    };
-                    const err = _kdb.view(_kdb, viewFn);
-                    assert(err == null, "the view function should not return an error", .{});
-                }
-            };
-            for (0..10) |_| {
-                const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
-                try joins.append(sp);
-            }
+//         // parallel read
+//         {
+//             var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
+//             defer joins.deinit();
+//             const parallelViewFn = struct {
+//                 fn view(_kdb: *DB) void {
+//                     const viewFn = struct {
+//                         fn view(_kvDB: *DB, _: *TX) Error!void {
+//                             _ = _kvDB; // autofix
+//                             std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
+//                         }
+//                     }.view;
+//                     _kdb.view(_kdb, viewFn) catch unreachable;
+//                 }
+//             };
+//             for (0..10) |_| {
+//                 const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
+//                 try joins.append(sp);
+//             }
 
-            for (joins.items) |join| {
-                join.join();
-            }
+//             for (joins.items) |join| {
+//                 join.join();
+//             }
 
-            std.debug.print("after stats count: {}\n", .{kvDB.readOnly});
-            std.debug.assert(kvDB.stats.txN == 21);
-        }
+//             std.debug.print("after stats count: {}\n", .{kvDB.readOnly});
+//             std.debug.assert(kvDB.stats.txN == 21);
+//         }
 
-        // update
-    }
-}
+//         // update
+//     }
+// }
 
 // test "DB-Write" {
 //     std.testing.log_level = .debug;

@@ -190,27 +190,27 @@ pub const RevTestData = struct {
     }
 };
 
-test "copy allocator memory" {
-    var gp = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gp.allocator();
-    var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    for (0..10) |i| {
-        _ = i; // autofix
-        const ts = std.time.microTimestamp();
-        const buf = allocator.dupe(u8, key[0..]) catch unreachable;
-        std.debug.print("cost: {}\n", .{std.time.microTimestamp() - ts});
-        allocator.free(buf);
-    }
+// test "copy allocator memory" {
+//     var gp = std.heap.GeneralPurposeAllocator(.{}){};
+//     const allocator = gp.allocator();
+//     var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+//     for (0..10) |i| {
+//         _ = i; // autofix
+//         const ts = std.time.microTimestamp();
+//         const buf = allocator.dupe(u8, key[0..]) catch unreachable;
+//         std.debug.print("cost: {}\n", .{std.time.microTimestamp() - ts});
+//         allocator.free(buf);
+//     }
 
-    var area = std.heap.ArenaAllocator.init(allocator);
-    var arenaAllocator = area.allocator();
-    for (0..10) |i| {
-        _ = i; // autofix
-        const ts = std.time.microTimestamp();
-        const buf = arenaAllocator.dupe(u8, key[0..]) catch unreachable;
-        std.debug.print("cost: {}\n", .{std.time.microTimestamp() - ts});
-        arenaAllocator.free(buf);
-    }
-    area.deinit();
-    _ = gp.deinit();
-}
+//     var area = std.heap.ArenaAllocator.init(allocator);
+//     var arenaAllocator = area.allocator();
+//     for (0..10) |i| {
+//         _ = i; // autofix
+//         const ts = std.time.microTimestamp();
+//         const buf = arenaAllocator.dupe(u8, key[0..]) catch unreachable;
+//         std.debug.print("cost: {}\n", .{std.time.microTimestamp() - ts});
+//         arenaAllocator.free(buf);
+//     }
+//     area.deinit();
+//     _ = gp.deinit();
+// }

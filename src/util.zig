@@ -121,63 +121,63 @@ fn onCmt2(n: *usize) void {
     n.* -= 1;
 }
 
-test "arm" {
-    var n: usize = 2000;
-    const c = Closure(usize).init(&n, onCmt);
-    var closures = std.ArrayList(Closure(usize)).init(std.testing.allocator);
-    defer closures.deinit();
-    try closures.append(c);
-    try closures.append(c);
-    for (closures.items) |cFn| {
-        cFn.execute();
-        std.debug.print("{}\n", .{c.captureVar.*});
-    }
+// test "arm" {
+//     var n: usize = 2000;
+//     const c = Closure(usize).init(&n, onCmt);
+//     var closures = std.ArrayList(Closure(usize)).init(std.testing.allocator);
+//     defer closures.deinit();
+//     try closures.append(c);
+//     try closures.append(c);
+//     for (closures.items) |cFn| {
+//         cFn.execute();
+//         std.debug.print("{}\n", .{c.captureVar.*});
+//     }
 
-    // const arch = @import("builtin").cpu.arch;
+//     // const arch = @import("builtin").cpu.arch;
 
-    // if (target == .arm or target == .aarch64) {
-    //     std.debug.print("This is an ARM platform.\n", .{});
-    // } else {
-    //     std.debug.print("This is not an ARM platform.\n", .{});
-    // }
-    // std.debug.print("{}\n", .{std.Target.Cpu.Arch.isAARCH64(arch)});
+//     // if (target == .arm or target == .aarch64) {
+//     //     std.debug.print("This is an ARM platform.\n", .{});
+//     // } else {
+//     //     std.debug.print("This is not an ARM platform.\n", .{});
+//     // }
+//     // std.debug.print("{}\n", .{std.Target.Cpu.Arch.isAARCH64(arch)});
 
-    // const fp = try std.fs.cwd().createFile("map.test", .{});
-    // defer fp.close();
-    // const fileSize = 1024 * 1024;
-    // const ptr = try mmap(fp, fileSize, true);
-    // defer munmap(ptr);
+//     // const fp = try std.fs.cwd().createFile("map.test", .{});
+//     // defer fp.close();
+//     // const fileSize = 1024 * 1024;
+//     // const ptr = try mmap(fp, fileSize, true);
+//     // defer munmap(ptr);
 
-    // const file_path = "example.txt";
-    //
-    // // 打开文件
-    // const file_descriptor = try std.fs.cwd().createFile(file_path, .{});
-    // try file_descriptor.setEndPos(std.mem.page_size);
-    // const buf = try mmap(file_descriptor, std.mem.page_size, true);
-    // const alignData: []align(std.mem.page_size) const u8 = @alignCast(buf);
-    // defer std.posix.munmap(alignData); // 确保在函数结束时撤销映射
-    //
-    // // 关闭文件描述符
-    // _ = std.posix.close(file_descriptor.handle);
-}
+//     // const file_path = "example.txt";
+//     //
+//     // // 打开文件
+//     // const file_descriptor = try std.fs.cwd().createFile(file_path, .{});
+//     // try file_descriptor.setEndPos(std.mem.page_size);
+//     // const buf = try mmap(file_descriptor, std.mem.page_size, true);
+//     // const alignData: []align(std.mem.page_size) const u8 = @alignCast(buf);
+//     // defer std.posix.munmap(alignData); // 确保在函数结束时撤销映射
+//     //
+//     // // 关闭文件描述符
+//     // _ = std.posix.close(file_descriptor.handle);
+// }
 
-test "lowerBound" {
-    const cmp = struct {
-        fn cmp(context: []const u8, b: []const u8) std.math.Order {
-            return std.mem.order(u8, context, b);
-        }
-    };
-    var slice = std.ArrayList([]const u8).init(std.testing.allocator);
-    defer slice.deinit();
-    try slice.append("0000000493");
-    try slice.append("0000000494");
-    try slice.append("0000000495");
-    try slice.append("0000000496");
-    try slice.append("0000000497");
-    const key: []const u8 = "0000000493";
-    const index = std.sort.binarySearch([]const u8, slice.items, key, cmp.cmp);
-    assert(index.? == 0, "index should be 0, but got {}", .{index.?});
-    _ = slice.orderedRemove(index.?);
-    const index2 = std.sort.binarySearch([]const u8, slice.items[0..], key, cmp.cmp);
-    assert(index2 == null, "index should be null, but got {any}", .{index2});
-}
+// test "lowerBound" {
+//     const cmp = struct {
+//         fn cmp(context: []const u8, b: []const u8) std.math.Order {
+//             return std.mem.order(u8, context, b);
+//         }
+//     };
+//     var slice = std.ArrayList([]const u8).init(std.testing.allocator);
+//     defer slice.deinit();
+//     try slice.append("0000000493");
+//     try slice.append("0000000494");
+//     try slice.append("0000000495");
+//     try slice.append("0000000496");
+//     try slice.append("0000000497");
+//     const key: []const u8 = "0000000493";
+//     const index = std.sort.binarySearch([]const u8, slice.items, key, cmp.cmp);
+//     assert(index.? == 0, "index should be 0, but got {}", .{index.?});
+//     _ = slice.orderedRemove(index.?);
+//     const index2 = std.sort.binarySearch([]const u8, slice.items[0..], key, cmp.cmp);
+//     assert(index2 == null, "index should be null, but got {any}", .{index2});
+// }

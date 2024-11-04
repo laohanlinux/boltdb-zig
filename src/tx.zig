@@ -538,6 +538,7 @@ pub const TX = struct {
         std.log.info("before clear all reference", .{});
         // Clear all reference.
         self.allocator.destroy(self.meta);
+        std.log.info("after destroy meta", .{});
         self.db = null;
         if (self.pages) |_pages| {
             var itr = _pages.valueIterator();
