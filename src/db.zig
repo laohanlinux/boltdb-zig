@@ -233,8 +233,8 @@ pub const DB = struct {
         db.freelist.read(allocPage);
         db.opened = true;
         db.pagePool = null;
-        // db.pagePool = db.allocator.create(PagePool) catch unreachable;
-        // db.pagePool.?.* = PagePool.init(db.allocator, db.pageSize);
+        db.pagePool = db.allocator.create(PagePool) catch unreachable;
+        db.pagePool.?.* = PagePool.init(db.allocator, db.pageSize);
         return db;
     }
 

@@ -45,6 +45,7 @@ pub const TX = struct {
     writeFlag: isize = 0,
 
     allocator: std.mem.Allocator,
+    arenaAllocator: std.heap.ArenaAllocator,
 
     const Self = @This();
 
@@ -68,6 +69,7 @@ pub const TX = struct {
         self.root.rootNode = null;
         self.autoFreeNodes = AutoFreeObject.init(_db.allocator);
         self.allocator = _db.allocator;
+        self.arenaAllocator = std.heap.ArenaAllocator.init(self.allocator);
         self.managed = false;
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
@@ -550,6 +552,7 @@ pub const TX = struct {
         }
         self.autoFreeNodes.deinit(self.allocator);
         self.root.deinit();
+        self.arenaAllocator.deinit();
         // std.log.info("after clear root", .{});
         // Execute commit handlers now that the locks have been removed.
         std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});

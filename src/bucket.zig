@@ -811,7 +811,7 @@ pub const Bucket = struct {
         const p = Page.init(value[Bucket.bucketHeaderSize()..]);
         const written = n.write(p) + Page.headerSize();
         assert(written == n.size(), "the written size is not equal to the node size, written: {d}, need size: {d}", .{ written, n.size() });
-        std.log.info("after write bucket to page, nodePtr: 0x{x}, keyCount:{d}, bucketRoot: {d}, the vPtr: 0x{x}, vLen:{d}, data: {any}", .{ n.nodePtrInt(), n.inodes.items.len, _bt.root, @intFromPtr(value.ptr), value.len, value });
+        // std.log.info("after write bucket to page, nodePtr: 0x{x}, keyCount:{d}, bucketRoot: {d}, the vPtr: 0x{x}, vLen:{d}, data: {any}", .{ n.nodePtrInt(), n.inodes.items.len, _bt.root, @intFromPtr(value.ptr), value.len, value });
         return value;
     }
 

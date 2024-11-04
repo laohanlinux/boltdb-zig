@@ -362,60 +362,45 @@ const KeyPair = consts.KeyPair;
 
 // Deleting a very large list of keys will cause the freelist to use overflow.
 test "Bucket_Delete_Large_Overflow" {
-    std.testing.log_level = .debug;
-    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    std.testing.log_level = .warn;
+    var arenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arenaAllocator.deinit();
+    var testCtx = tests.setup(arenaAllocator.allocator()) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
 
-    // const viewFn = struct {
-    //     fn view(_: void, tx: *TX) Error!void {
-    //         _ = tx; // autofix
-    //     }
-    // }.view;
-    // db.view({}, viewFn) catch unreachable;
+    const count = 1000;
+    const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
+    var ctx = ContextTuple{
+        .first = testCtx,
+        .second = 0,
+    };
+    const ts = std.time.timestamp();
 
-    const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            _ = tx; // autofix
+    for (0..count) |i| {
+        ctx.second = i;
+        const time = std.time.milliTimestamp();
+        const updateFn = struct {
+            fn update(context: ContextTuple, tx: *TX) Error!void {
+                const b = try tx.createBucketIfNotExists("widgets");
+                var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+                var value = [0]u8{};
+                for (0..1000) |j| {
+                    std.mem.writeInt(u64, key[0..8], @as(u64, @intCast(context.second)), .big);
+                    std.mem.writeInt(u64, key[8..16], @as(u64, @intCast(j)), .big);
+                    try b.put(KeyPair.init(key[0..], value[0..]));
+                }
+                // std.log.warn("allocSize: {d}", .{tx.autoFreeNodes.getAllocSize()});
+            }
+        }.update;
+        try db.update(ctx, updateFn);
+        if (i % 200 == 0) {
+            const allocSize = db.pagePool.?.getAllocSize();
+            const dataSize = db.dataRef.?.len;
+            const dbAllocSize = db.allocSize;
+            std.log.warn("step: {d}, count: {d}, cost: {d}ms, totalCost: {d}s, allocSize: {d}, dbAllocSize: {d}, dataSize: {d}", .{ ctx.second, ctx.second * 1000, (std.time.milliTimestamp() - time), (std.time.timestamp() - ts), allocSize, dbAllocSize, dataSize });
         }
-    }.update;
-    db.update({}, updateFn) catch unreachable;
+    }
 
-    // const count = 1;
-    // const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
-    // var ctx = ContextTuple{
-    //     .first = testCtx,
-    //     .second = 0,
-    // };
-    // const ts = std.time.timestamp();
-    // _ = ts; // autofix
-
-    // for (0..count) |i| {
-    //     ctx.second = i;
-    //     const time = std.time.milliTimestamp();
-    //     _ = time; // autofix
-    //     const updateFn = struct {
-    //         fn update(context: ContextTuple, tx: *TX) Error!void {
-    //             const b = try tx.createBucketIfNotExists("widgets");
-    //             var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    //             var value = [0]u8{};
-    //             for (0..1) |j| {
-    //                 std.mem.writeInt(u64, key[0..8], @as(u64, @intCast(context.second)), .big);
-    //                 std.mem.writeInt(u64, key[8..16], @as(u64, @intCast(j)), .big);
-    //                 try b.put(KeyPair.init(key[0..], value[0..]));
-    //             }
-    //             // std.log.warn("allocSize: {d}", .{tx.autoFreeNodes.getAllocSize()});
-    //         }
-    //     }.update;
-    //     try db.update(ctx, updateFn);
-    //     // _ = arenaAllocator.reset(.free_all);
-    //     // if (i % 200 == 0) {
-    //     //     const allocSize = db.pagePool.?.getAllocSize();
-    //     //     const dataSize = db.dataRef.?.len;
-    //     //     const dbAllocSize = db.allocSize;
-    //     //     std.log.warn("step: {d}, count: {d}, cost: {d}ms, totalCost: {d}s, allocSize: {d}, dbAllocSize: {d}, dataSize: {d}", .{ ctx.second, ctx.second * 1000, (std.time.milliTimestamp() - time), (std.time.timestamp() - ts), allocSize, dbAllocSize, dataSize });
-    //     // }
-    // }
-
-    // std.log.warn("total cost: {d}s", .{(std.time.timestamp() - ts)});
+    std.log.warn("total cost: {d}s", .{(std.time.timestamp() - ts)});
 }
