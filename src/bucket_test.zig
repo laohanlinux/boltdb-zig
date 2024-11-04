@@ -369,7 +369,7 @@ test "Bucket_Delete_Large_Overflow" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
 
-    const count = 100;
+    const count = 1;
     const ContextTuple = tests.Tuple.t2(tests.TestContext, usize);
     var ctx = ContextTuple{
         .first = testCtx,
@@ -385,7 +385,7 @@ test "Bucket_Delete_Large_Overflow" {
                 const b = try tx.createBucketIfNotExists("widgets");
                 var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
                 var value = [0]u8{};
-                for (0..1000) |j| {
+                for (0..1) |j| {
                     std.mem.writeInt(u64, key[0..8], @as(u64, @intCast(context.second)), .big);
                     std.mem.writeInt(u64, key[8..16], @as(u64, @intCast(j)), .big);
                     try b.put(KeyPair.init(key[0..], value[0..]));

@@ -26,18 +26,18 @@ pub const Node = struct {
     // The id of the node.
     id: u64 = 0,
 
-    allocator: std.mem.Allocator,
+    // allocator: std.mem.Allocator,
     arenaAllocator: std.heap.ArenaAllocator,
 
     const Self = @This();
 
     /// init a node with allocator.
     pub fn init(allocator: std.mem.Allocator) *Self {
-        const self = allocator.create(Self) catch unreachable;
+        var arenaAllocator = std.heap.ArenaAllocator.init(allocator);
+        const self = arenaAllocator.allocator().create(Self) catch unreachable;
         const id = std.crypto.random.int(u64);
         self.* = .{
-            .allocator = allocator,
-            .arenaAllocator = std.heap.ArenaAllocator.init(allocator),
+            .arenaAllocator = arenaAllocator,
             .children = std.ArrayList(*Node).init(allocator),
             .inodes = std.ArrayList(INode).init(allocator),
             .id = id,
@@ -48,7 +48,6 @@ pub const Node = struct {
     /// free the node memory and destroy the node
     pub fn deinitAndDestroy(self: *Self) void {
         self.deinit();
-        self.allocator.destroy(self);
     }
 
     /// free the node memory when the node is removed
@@ -68,14 +67,12 @@ pub const Node = struct {
         // because the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
         if (!self.isFirstKeyReference()) {
             std.log.info("free key, ptr: 0x{x}", .{@intFromPtr(self.key.?.ptr)});
-            self.allocator.free(self.key.?);
         }
 
         self.inodes.clearAndFree();
         assert(self.inodes.items.len == 0, "the inodes is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
         self.children.clearAndFree();
         assert(self.children.items.len == 0, "the children is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
-        self.allocator.destroy(self);
     }
 
     /// free the node memory
@@ -83,13 +80,6 @@ pub const Node = struct {
         if (self.isFreed) {
             return;
         }
-        const ptr = @intFromPtr(self);
-        _ = ptr; // autofix
-        const nKey = self.key orelse "empty";
-        _ = nKey; // autofix
-        const isParent = self.parent != null;
-        _ = isParent; // autofix
-        // std.log.debug("deinit node, key: {s}, node id: {d}, pgid: {d}, ptr: 0x{x}, isParent: {}", .{ nKey, self.id, self.pgid, ptr, isParent });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // The is a inline node, so we should free the inline node memory
@@ -102,7 +92,7 @@ pub const Node = struct {
         }
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (0..self.inodes.items.len) |i| {
-            self.inodes.items[i].deinit(self.allocator);
+            self.inodes.items[i].deinit(self.arenaAllocator.allocator());
         }
 
         // if (self.key) |key| {
@@ -246,7 +236,7 @@ pub const Node = struct {
         } else {
             if (inodeRef.key != null and inodeRef.isNew) {
                 std.log.info("free old key, id: {d}, key: 0x{x}", .{ inodeRef.id, @intFromPtr(inodeRef.key.?.ptr) });
-                self.allocator.free(inodeRef.key.?);
+                // self.allocator.free(inodeRef.key.?);
                 inodeRef.key = null;
             }
             inodeRef.key = newKey;
@@ -258,7 +248,7 @@ pub const Node = struct {
                 }
                 // std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
                 // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
-                self.allocator.free(inodeRef.value.?);
+                // self.allocator.free(inodeRef.value.?);
                 inodeRef.value = null;
             }
         }
@@ -281,7 +271,7 @@ pub const Node = struct {
         var inode = self.inodes.orderedRemove(indexRef.index);
         assert(indexRef.exact, "the key is not found, key: {s}, index: {d}, node len: {d}, node key: {s}", .{ key, indexRef.index, self.inodes.items.len, inode.key.? });
         // free the inode
-        inode.deinit(self.allocator);
+        inode.deinit(self.arenaAllocator.allocator());
         if (self.inodes.items.len == 0) {
             const keyPtr = if (self.key) |k| @intFromPtr(k.ptr) else 0;
             std.log.info("the node is empty, id: {d}, pgid: {d}, ptr: 0x{x}, keyPtr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt(), keyPtr });
@@ -406,8 +396,8 @@ pub const Node = struct {
 
     /// Split breaks up a node into multiple smaller nodes, If appropriate.
     /// This should only be called from the spill() function.
-    fn split(self: *Self, _pageSize: usize) []*Node {
-        var nodes = std.ArrayList(*Node).init(self.allocator);
+    fn split(self: *Self, _pageSize: usize) std.ArrayList(*Node) {
+        var nodes = std.ArrayList(*Node).init(self.arenaAllocator.allocator());
         var curNode = self;
         while (true) {
             // Split node into two.
@@ -432,7 +422,7 @@ pub const Node = struct {
             curNode = b.?;
         }
 
-        return nodes.toOwnedSlice() catch unreachable;
+        return nodes;
     }
 
     // Breaks up a node into two smaller nodes, if approprivate.
@@ -463,14 +453,14 @@ pub const Node = struct {
         // if the node is the root node, then create a new node as the parent node
         // and set the current node as the child node
         if (self.parent == null) {
-            self.parent = Node.init(self.allocator);
+            self.parent = Node.init(self.arenaAllocator.allocator());
             self.parent.?.bucket = self.bucket;
             self.parent.?.children.append(self) catch unreachable; // children also is you!
             self.bucket.?.tx.?.autoFreeNodes.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
-        const next = Node.init(self.allocator);
+        const next = Node.init(self.arenaAllocator.allocator());
         // self.bucket.?.autoFreeObject.addNode(next);
         self.bucket.?.tx.?.autoFreeNodes.addNode(next);
         next.bucket = self.bucket;
@@ -556,9 +546,9 @@ pub const Node = struct {
 
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
-        defer self.allocator.free(nodes);
+        defer nodes.deinit();
         // std.log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.len, self.key orelse "empty" });
-        for (nodes, 0..) |node, i| {
+        for (nodes.items, 0..) |node, i| {
             _ = i; // autofix
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
@@ -758,20 +748,20 @@ pub const Node = struct {
     // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
     pub fn dereference(self: *Self) void {
         if (self.key != null) {
-            const cpKey = self.allocator.dupe(u8, self.key.?) catch unreachable;
+            const cpKey = self.arenaAllocator.allocator().dupe(u8, self.key.?) catch unreachable;
             // self.allocator.free(self.key.?);
             self.key = cpKey;
             assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
         }
 
         for (self.inodes.items) |*inode| {
-            const newKey = self.allocator.dupe(u8, inode.key.?) catch unreachable;
+            const newKey = self.arenaAllocator.allocator().dupe(u8, inode.key.?) catch unreachable;
             // self.allocator.free(inode.key.?);
             inode.key = newKey;
             assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
-                const newValue = self.allocator.dupe(u8, value) catch unreachable;
+                const newValue = self.arenaAllocator.allocator().dupe(u8, value) catch unreachable;
                 // self.allocator.free(value);
                 inode.value = newValue;
                 assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", .{});
@@ -890,9 +880,9 @@ pub const Node = struct {
         return self.inodes.items[0].key.?.ptr == self.key.?.ptr;
     }
 
-    fn printKeysString(self: *const Self) void {
+    fn printKeysString(self: *Self) void {
         std.log.debug("--->>id:{}, pgid:{}, inodes len: {d}<<--", .{ self.id, self.pgid, self.inodes.items.len });
-        var keyArray = std.ArrayList([]const u8).init(self.allocator);
+        var keyArray = std.ArrayList([]const u8).init(self.arenaAllocator.allocator());
         defer keyArray.deinit();
         for (self.inodes.items) |inode| {
             const key = inode.key.?;
@@ -963,6 +953,7 @@ pub const INode = struct {
 
     /// deinit the inode
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        _ = allocator; // autofix
         if (!self.isNew) {
             return;
         }
@@ -973,8 +964,9 @@ pub const INode = struct {
         }
         // TODO: Print the value address.(Eg: the value is a inline bucket value)
         if (self.value) |value| {
+            _ = value; // autofix
             //std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
-            allocator.free(value);
+            // allocator.free(value);
             self.value = null;
         }
     }
