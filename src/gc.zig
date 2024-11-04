@@ -138,3 +138,14 @@ pub const PagePool = struct {
 //         std.Thread.sleep(10 * std.time.ms_per_min);
 //     }
 // }
+
+test "GC" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bytes = [5]u8{ 0, 0, 0, 0, 0 };
+    for (0..1000) |i| {
+        _ = i; // autofix
+        const allocator = arena.allocator();
+        _ = allocator.dupe(u8, bytes[0..]) catch unreachable;
+    }
+}

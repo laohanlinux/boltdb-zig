@@ -27,6 +27,7 @@ pub const Node = struct {
     id: u64 = 0,
 
     allocator: std.mem.Allocator,
+    arenaAllocator: std.heap.ArenaAllocator,
 
     const Self = @This();
 
@@ -36,6 +37,7 @@ pub const Node = struct {
         const id = std.crypto.random.int(u64);
         self.* = .{
             .allocator = allocator,
+            .arenaAllocator = std.heap.ArenaAllocator.init(allocator),
             .children = std.ArrayList(*Node).init(allocator),
             .inodes = std.ArrayList(INode).init(allocator),
             .id = id,
@@ -103,16 +105,17 @@ pub const Node = struct {
             self.inodes.items[i].deinit(self.allocator);
         }
 
-        if (self.key) |key| {
-            std.log.info("free key, ptr: 0x{x}", .{@intFromPtr(key.ptr)});
-            self.allocator.free(key);
-        }
+        // if (self.key) |key| {
+        //     std.log.info("free key, ptr: 0x{x}", .{@intFromPtr(key.ptr)});
+        //     self.allocator.free(key);
+        // }
         self.key = null;
 
         self.inodes.clearAndFree();
         assert(self.inodes.items.len == 0, "the inodes is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
         self.children.clearAndFree();
         assert(self.children.items.len == 0, "the children is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+        self.arenaAllocator.deinit();
     }
 
     /// Returns the top-level node this node is attached to.
@@ -259,9 +262,9 @@ pub const Node = struct {
                 inodeRef.value = null;
             }
         }
-        if (oldKey.ptr != newKey.ptr) {
-            self.allocator.free(oldKey);
-        }
+        // if (oldKey.ptr != newKey.ptr) {
+        //     self.allocator.free(oldKey);
+        // }
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
@@ -318,8 +321,9 @@ pub const Node = struct {
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            const dupeKey = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
-            self.key = dupeKey;
+            // const dupeKey = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
+            // self.key = dupeKey;
+            self.key = self.arenaAllocator.allocator().dupe(u8, self.inodes.items[0].key.?) catch unreachable;
             // self.key = self.inodes.items[0].key;
             // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(dupeKey);
             assert(self.key.?.len > 0, "key is null, id: {d}, ptr: 0x{x}", .{ self.id, self.nodePtrInt() });
@@ -576,13 +580,18 @@ pub const Node = struct {
             // Insert into parent inodes
             if (node.parent) |parent| {
                 const key: []const u8 = node.key orelse node.inodes.items[0].key.?;
-                const oldKey = self.allocator.dupe(u8, key) catch unreachable;
-                const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+
+                // const oldKey = self.allocator.dupe(u8, key) catch unreachable;
+                // const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+                const oldKey = parent.arenaAllocator.allocator().dupe(u8, key) catch unreachable;
+                const newKey = parent.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 _ = parent.put(oldKey, newKey, null, node.pgid, 0);
-                if (node.key != null) {
-                    self.allocator.free(node.key.?);
-                }
-                node.key = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+                // if (node.key != null) {
+                //     self.allocator.free(node.key.?);
+                // }
+                // node.key = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+                node.key = node.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
@@ -958,8 +967,9 @@ pub const INode = struct {
             return;
         }
         if (self.key) |key| {
-            allocator.free(key);
-            self.key = null;
+            _ = key; // autofix
+            // allocator.free(key);
+            // self.key = null;
         }
         // TODO: Print the value address.(Eg: the value is a inline bucket value)
         if (self.value) |value| {

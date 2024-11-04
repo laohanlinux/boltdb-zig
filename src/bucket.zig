@@ -249,7 +249,8 @@ pub const Bucket = struct {
         // If unaligned load/stores are broken on this arch and value is
         // unaligned simply clone to an aligned byte array.
         // TODO: Optimize the code.
-        const alignedValue = self.allocator.dupe(u8, value) catch unreachable;
+        // const alignedValue = self.allocator.dupe(u8, value) catch unreachable;
+        const alignedValue = self.tx.?.arenaAllocator.allocator().dupe(u8, value) catch unreachable;
         const alignment = @alignOf(_Bucket);
         assert(alignedValue.len >= alignment, "the aligned value len is less than the bucket size", .{});
         // If this is a writable transaction then we need to copy the bucket entry.
@@ -275,7 +276,7 @@ pub const Bucket = struct {
         } else {
             std.log.info("The bucket is not inline, pgid: {}", .{child._b.?.root});
         }
-        self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
+        // self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
         return child;
     }
 
@@ -418,10 +419,13 @@ pub const Bucket = struct {
         }
 
         // Insert into node.
-        const cpKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
+        const keyNode = c.node().?;
+        // const cpKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
         const cpValue = self.allocator.dupe(u8, keyPair.value.?) catch unreachable;
+        const cpKey = keyNode.arenaAllocator.allocator().dupe(u8, keyPair.key.?) catch unreachable;
+        // const cpValue = keyNode.arenaAllocator.allocator().dupe(u8, keyPair.value.?) catch unreachable;
         ts = std.time.microTimestamp();
-        _ = c.node().?.put(cpKey, cpKey, cpValue, 0, 0);
+        _ = keyNode.put(cpKey, cpKey, cpValue, 0, 0);
     }
 
     /// Removes a key from the bucket.
@@ -714,9 +718,12 @@ pub const Bucket = struct {
             const keyPairRef = c._seek(entry.key_ptr.*);
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.key.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.key.?) });
             assert(keyPairRef.flag & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.flag});
-            const newKey = keyPairRef.dupeKey(self.allocator).?;
-            const oldKey = self.allocator.dupe(u8, entry.key_ptr.*) catch unreachable;
             const keyNode = c.node().?;
+            const newKey = keyPairRef.dupeKey(keyNode.arenaAllocator.allocator()).?;
+            // const newKey = keyNode.arenaAllocator.allocator().alignedAlloc(u8, @alignOf(u8), keyPairRef.key.?.len) catch unreachable;
+            // @memcpy(newKey, keyPairRef.key.?);
+            const oldKey = keyNode.arenaAllocator.allocator().dupe(u8, entry.key_ptr.*) catch unreachable;
+
             std.log.info("update the bucket header, oldKey: {s}, newKey: {s}, header.node.pgid: {d}, nodePtr: 0x{x}", .{ oldKey, newKey, keyNode.pgid, keyNode.nodePtrInt() });
             _ = keyNode.put(oldKey, newKey, value.toOwnedSlice() catch unreachable, 0, consts.BucketLeafFlag);
             c.deinit();
