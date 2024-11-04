@@ -232,8 +232,9 @@ pub const DB = struct {
         const allocPage = db.pageById(db.getMeta().freelist);
         db.freelist.read(allocPage);
         db.opened = true;
-        db.pagePool = db.allocator.create(PagePool) catch unreachable;
-        db.pagePool.?.* = PagePool.init(db.allocator, db.pageSize);
+        db.pagePool = null;
+        // db.pagePool = db.allocator.create(PagePool) catch unreachable;
+        // db.pagePool.?.* = PagePool.init(db.allocator, db.pageSize);
         return db;
     }
 
@@ -588,7 +589,7 @@ pub const DB = struct {
         const trx = TX.init(self, true);
         trx.writable = true;
         self.rwtx = trx;
-        std.log.debug("After create a write transaction, meta: {any}", .{trx.root.*._b.?});
+        std.log.debug("After create a write transaction, txPtrInt: 0x{x}, meta: {any}", .{ trx.getTxPtr(), trx.root.*._b.? });
 
         // Free any pages associated with closed read-only transactions.
         var minid: u64 = std.math.maxInt(u64);
