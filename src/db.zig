@@ -688,6 +688,59 @@ pub const DB = struct {
         self.statlock.unlock();
     }
 
+    /// mustCheck runs a consistency check on the database and panics if any errors are found.
+    pub fn mustCheck(self: *Self) void {
+        const updateFn = struct {
+            fn update(_db: *DB, trx: *TX) Error!void {
+                trx.check() catch |e| {
+                    const tmpFilePath = DB.tempFilePath(_db.allocator);
+                    defer _db.allocator.free(tmpFilePath);
+                    const tmpFile = std.fs.openFileAbsolute(tmpFilePath, .{}) catch unreachable;
+                    defer tmpFile.close();
+                    try trx.copyFile(tmpFile);
+
+                    std.log.info("\n\n", .{});
+                    std.log.info("consistency check failed, error: {any}", .{e});
+                    std.log.info("\n\n", .{});
+                    std.log.info("db saved to:", .{});
+                    std.log.info("{s}", .{tmpFilePath});
+                    std.log.info("\n\n", .{});
+                    std.process.exit(1);
+                };
+            }
+        }.update;
+        self.update(self, updateFn) catch |err| switch (err) {
+            Error.DatabaseNotOpen => return,
+            else => util.panicFmt("consistency check failed, error: {}", .{err}),
+        };
+    }
+
+    pub fn copyTempFile(self: *Self) Error!void {
+        const filePath = Self.tempFilePath(self.allocator);
+        const viewFn = struct {
+            fn view(_: void, trx: *TX) Error!void {
+                try trx.copyFile(filePath, std.fs.File.OpenMode.read_only);
+            }
+        }.view;
+        try self.view({}, viewFn);
+        std.log.info("db copied to: {}", .{filePath});
+    }
+
+    /// tempFilePath returns a temporary file path.
+    fn tempFile(allocator: std.mem.Allocator, flags: std.fs.File.OpenFlags) std.fs.File {
+        const fileName = tempFilePath(allocator);
+        defer allocator.free(fileName);
+        const fp = std.fs.openFileAbsolute(fileName, flags) catch unreachable;
+        return fp;
+    }
+
+    fn tempFilePath(allocator: std.mem.Allocator) []const u8 {
+        var random = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.microTimestamp())));
+        const randomInt = random.random().uintLessThan(u32, std.math.maxInt(u32));
+        const fileName = std.fmt.allocPrint(allocator, "/tmp/{d}.tmp", .{randomInt}) catch unreachable;
+        return fileName;
+    }
+
     fn _close(self: *Self) void {
         if (!self.opened) {
             return;

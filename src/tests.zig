@@ -78,6 +78,19 @@ pub fn randomBuf(buf: []usize) void {
     }
 }
 
+/// Create a temporary file.
+pub fn createTmpFile(name: ?[]const u8) struct {
+    file: std.fs.File,
+    tmpDir: std.testing.TmpDir,
+} {
+    var tmpDir = std.testing.tmpDir(.{});
+    if (name) |n| {
+        return .{ .file = tmpDir.dir.createFile(n, .{}) catch unreachable, .tmpDir = tmpDir };
+    } else {
+        return .{ .file = tmpDir.dir.createFile("bolt.db.tmp", .{}) catch unreachable, .tmpDir = tmpDir };
+    }
+}
+
 /// testing/quick defaults to 5 iterations and a random seed.
 /// You can override these settings from the command line:
 ///   -quick.count     The number of iterations to perform.
@@ -214,3 +227,9 @@ pub const RevTestData = struct {
 //     area.deinit();
 //     _ = gp.deinit();
 // }
+
+test "tempFilePath" {
+    var tmpFile = createTmpFile(null);
+    defer tmpFile.tmpDir.cleanup();
+    std.debug.print("tmp file: {s}\n", .{tmpFile.tmpDir.sub_path});
+}

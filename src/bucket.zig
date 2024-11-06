@@ -90,7 +90,7 @@ pub const AutoFreeObject = struct {
             self.autoFreeNodes.deinit();
         }
 
-        // self.freePtrs.deinit();
+        self.freePtrs.deinit();
 
         // {
         //     var it = self.autoFreeBytes.iterator();
@@ -165,8 +165,7 @@ pub const Bucket = struct {
         // std.log.debug("start deinit bucket, rid: {}, root: {}", .{ rootId, self.rootNode == null });
         assert(self.isInittialized, "the bucket is not initialized", .{});
         self.isInittialized = false;
-        if (self.page) |inlinePage| {
-            _ = inlinePage; // autofix
+        if (self.page != null) {
             self.freeInlinePage();
         }
         var btIter = self.buckets.iterator();
@@ -198,7 +197,8 @@ pub const Bucket = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn freeInlinePage(self: *Self) void {
+    // Free the inline page.
+    inline fn freeInlinePage(self: *Self) void {
         assert(self.page != null, "the bucket has no inline page", .{});
         const inlinePage = self.page.?;
         std.log.debug("free inline page, rid: {}, page: 0x{x}", .{ self._b.?.root, inlinePage.*.ptrInt() });
@@ -211,7 +211,9 @@ pub const Bucket = struct {
         // Update transaction statistics.
         self.tx.?.stats.cursor_count += 1;
         // Allocate and return a cursor.
-        return Cursor.init(self.allocator, self);
+        // const allocator = self.allocator;
+        return Cursor.init(self);
+        // return Cursor.init(self.allocator, self);
     }
 
     /// Retrives a nested bucket by name.
@@ -422,10 +424,8 @@ pub const Bucket = struct {
 
         // Insert into node.
         const keyNode = c.node().?;
-        // const cpKey = self.allocator.dupe(u8, keyPair.key.?) catch unreachable;
-        const cpValue = self.allocator.dupe(u8, keyPair.value.?) catch unreachable;
+        const cpValue = keyNode.arenaAllocator.allocator().dupe(u8, keyPair.value.?) catch unreachable;
         const cpKey = keyNode.arenaAllocator.allocator().dupe(u8, keyPair.key.?) catch unreachable;
-        // const cpValue = keyNode.arenaAllocator.allocator().dupe(u8, keyPair.value.?) catch unreachable;
         ts = std.time.microTimestamp();
         _ = keyNode.put(cpKey, cpKey, cpValue, 0, 0);
     }
@@ -684,8 +684,8 @@ pub const Bucket = struct {
         var itr = self.buckets.iterator();
         var arenaAllocator = std.heap.ArenaAllocator.init(self.allocator);
         defer arenaAllocator.deinit();
+        var valueBytes = std.ArrayList(u8).init(arenaAllocator.allocator());
         while (itr.next()) |entry| {
-            var value: []u8 = undefined;
             std.log.info("\t\tRun at bucket({s}) spill!\t\t", .{entry.key_ptr.*});
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
@@ -693,14 +693,19 @@ pub const Bucket = struct {
             if (entry.value_ptr.*.inlineable()) {
                 // free the child bucket
                 entry.value_ptr.*.free();
-                value = entry.value_ptr.*.write(arenaAllocator.allocator());
+                const bucketSize = _Bucket.size() + entry.value_ptr.*.rootNode.?.size();
+                if (valueBytes.items.len < bucketSize) {
+                    valueBytes.resize(bucketSize) catch unreachable;
+                }
+                entry.value_ptr.*.write(valueBytes.items[0..bucketSize]);
                 std.log.info("\t\tspill a inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
             } else {
                 try entry.value_ptr.*.spill(); // TODO Opz code
+                // reset the valueBytes
+                valueBytes.resize(_Bucket.size()) catch unreachable;
+                assert(valueBytes.items.len == _Bucket.size(), "the value len is less than the bucket size", .{});
                 // Update the child bucket header in this bucket.
-                value = arenaAllocator.allocator().alloc(u8, _Bucket.size()) catch unreachable;
-                @memset(value, 0);
-                const bt = _Bucket.init(value[0..]);
+                const bt = _Bucket.init(valueBytes.items[0.._Bucket.size()]);
                 bt.* = entry.value_ptr.*._b.?;
                 std.log.info("\t\tspill a non-inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
             }
@@ -718,17 +723,15 @@ pub const Bucket = struct {
             assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.key.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.key.?) });
             assert(keyPairRef.flag & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.flag});
             const keyNode = c.node().?;
+            // TODO if the newKey == oldKey, then no need to dupe the key.
             const newKey = keyPairRef.dupeKey(keyNode.arenaAllocator.allocator()).?;
             const oldKey = keyNode.arenaAllocator.allocator().dupe(u8, entry.key_ptr.*) catch unreachable;
 
             std.log.info("update the bucket header, oldKey: {s}, newKey: {s}, header.node.pgid: {d}, nodePtr: 0x{x}", .{ oldKey, newKey, keyNode.pgid, keyNode.nodePtrInt() });
-            const newVal = keyNode.arenaAllocator.allocator().dupe(u8, value) catch unreachable;
+            const newVal = keyNode.arenaAllocator.allocator().dupe(u8, valueBytes.items) catch unreachable;
             _ = keyNode.put(oldKey, newKey, newVal, 0, consts.BucketLeafFlag);
             c.deinit();
-            // TODO Opz the memeory
-            // arenaAllocator.resize(0) catch unreachable;
         }
-
         // Ignore if there's not a materialized root node.
         if (self.rootNode == null) {
             std.log.debug("the rootNode is null", .{});
@@ -792,18 +795,22 @@ pub const Bucket = struct {
             newBucket.rootNode.?.deinit();
             self.allocator.destroy(newBucket);
         }
-        return newBucket.write(allocator);
+        const valueBytes = allocator.alloc(u8, _Bucket.size() + newBucket.rootNode.?.size()) catch unreachable;
+        newBucket.write(valueBytes);
+        return valueBytes;
     }
 
     // Allocates and writes a bucket to a byte slice, *Note*! remember to free the memory
-    fn write(self: *Self, allocator: std.mem.Allocator) []u8 {
+    fn write(self: *Self, value: []u8) void {
         // Allocate the approprivate size.
         const n = self.rootNode.?;
         assert(n.pgid == 0, "the inline bucket root must be eq 0", .{});
-        const bucket_alignment = @alignOf(_Bucket);
-        const total_size = std.mem.alignForward(usize, Bucket.bucketHeaderSize() + n.size(), bucket_alignment);
+        // const bucket_alignment = @alignOf(_Bucket);
+        // const total_size = std.mem.alignForward(usize, Bucket.bucketHeaderSize() + n.size(), bucket_alignment);
 
-        const value = allocator.alignedAlloc(u8, bucket_alignment, total_size) catch unreachable;
+        // const value = allocator.alignedAlloc(u8, bucket_alignment, total_size) catch unreachable;
+        // @memset(value, 0);
+        // const value = allocator.alloc(u8, Bucket.bucketHeaderSize() + n.size()) catch unreachable;
         @memset(value, 0);
 
         // Write a bucket header.
@@ -817,7 +824,7 @@ pub const Bucket = struct {
         const written = n.write(p) + Page.headerSize();
         assert(written == n.size(), "the written size is not equal to the node size, written: {d}, need size: {d}", .{ written, n.size() });
         // std.log.info("after write bucket to page, nodePtr: 0x{x}, keyCount:{d}, bucketRoot: {d}, the vPtr: 0x{x}, vLen:{d}, data: {any}", .{ n.nodePtrInt(), n.inodes.items.len, _bt.root, @intFromPtr(value.ptr), value.len, value });
-        return value;
+        // return value;
     }
 
     /// Attemps to balance all nodes

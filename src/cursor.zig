@@ -28,19 +28,27 @@ pub const Cursor = struct {
     stack: std.ArrayList(ElementRef),
 
     allocator: std.mem.Allocator,
+    arenaAllocator: ?std.heap.ArenaAllocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, _bt: *Bucket) Self {
+    /// Initialize the cursor.
+    pub fn init(_bt: *Bucket) Self {
+        const allocator = _bt.tx.?.arenaAllocator.allocator();
         return Cursor{
             ._bucket = _bt,
             .stack = std.ArrayList(ElementRef).init(allocator),
             .allocator = allocator,
+            .arenaAllocator = null,
         };
     }
 
+    /// Deinitialize the cursor.
     pub fn deinit(self: *Self) void {
         self.stack.deinit();
+        if (self.arenaAllocator) |arenaAllocator| {
+            arenaAllocator.deinit();
+        }
     }
 
     /// Returns the bucket that this cursor was created from.
@@ -196,7 +204,7 @@ pub const Cursor = struct {
         // Start from root page/node and traverse to correct page.
         self.stack.resize(0) catch unreachable;
         self.search(seekKey, self._bucket._b.?.root);
-        self.prettyPrint();
+        // self.prettyPrint();
         const ref = self.getLastElementRef().?;
         // If the cursor is pointing to the end of page/node then return nil.
         // TODO, if not found the key, the index should be 0, but the count maybe > 0
@@ -210,7 +218,6 @@ pub const Cursor = struct {
     // Moves the cursor to the first leaf element under that last page in the stack.
     fn _first(self: *Self) void {
         while (true) {
-            // std.log.info("the stack is {}", .{self.stack.items.len});
             // Exit when we hit a leaf page.
             const ref = self.getLastElementRef().?;
             if (ref.isLeaf()) {
@@ -260,9 +267,7 @@ pub const Cursor = struct {
     /// Moves to the next leaf element and returns the key and value.
     /// If the cursor is at the last leaf element then it stays there and return null.
     pub fn _next(self: *Self) KeyValueRef {
-        // defer std.log.info("the stack is {}", .{self.stack.items.len});
         while (true) {
-            // assert(self.stack.items.len > 0, "the stack is empty", .{});
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
             var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
@@ -274,7 +279,6 @@ pub const Cursor = struct {
                     break;
                 }
                 // pop the current page by index that same to pop the current inode from the stack.
-                // _ = self.stack.pop();
             }
 
             // If we've hit the root page then stop and return. This will leave the
@@ -330,7 +334,7 @@ pub const Cursor = struct {
         // If the top of the stack is a leaf node then just return it.
         const lastRef = self.getLastElementRef().?;
         if (lastRef.node != null and lastRef.node.?.isLeaf) {
-            std.log.debug("return a last reference node", .{});
+            // std.log.debug("return a last reference node", .{});
             return lastRef.node;
         }
         std.log.debug("start from root and traveerse down the hierarchy, the last reference is {any}", .{lastRef});
@@ -354,16 +358,16 @@ pub const Cursor = struct {
 
     // Search key from nodes.
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
-        const printNodes = struct {
-            fn print(curNode: *const Node) void {
-                for (curNode.inodes.items, 0..) |iNode, i| {
-                    const iKey = iNode.getKey().?;
-                    std.log.debug("i={}, pgid: {d}, key={any}, len={}, iKey = {any}, len={}", .{ i, curNode.pgid, curNode.key.?, curNode.key.?.len, iKey, iKey.len });
-                }
-            }
-        }.print;
-        // _ = printNodes;
-        printNodes(n);
+        // const printNodes = struct {
+        //     fn print(curNode: *const Node) void {
+        //         for (curNode.inodes.items, 0..) |iNode, i| {
+        //             const iKey = iNode.getKey().?;
+        //             std.log.debug("i={}, pgid: {d}, key={any}, len={}, iKey = {any}, len={}", .{ i, curNode.pgid, curNode.key.?, curNode.key.?.len, iKey, iKey.len });
+        //         }
+        //     }
+        // }.print;
+        // // _ = printNodes;
+        // printNodes(n);
         assert(n.inodes.items.len > 0, "the node is empty", .{});
         var indexRef = n.searchInodes2(key);
         if (!indexRef.exact) {
@@ -374,7 +378,6 @@ pub const Cursor = struct {
         const lastEntry = self.getLastElementRef().?;
         lastEntry.index = indexRef.index;
         self.search(key, n.inodes.items[indexRef.index].pgid);
-        // self.prettyPrint();
     }
 
     // Search key from pages
@@ -497,7 +500,7 @@ const ElementRef = struct {
     }
 
     // Returns true if the element is a leaf element.
-    fn isLeaf(self: *const ElementRef) bool {
+    inline fn isLeaf(self: *const ElementRef) bool {
         if (self.node) |node| {
             return node.isLeaf;
         }
@@ -505,7 +508,7 @@ const ElementRef = struct {
     }
 
     // returns the number of inodes or page elements.
-    fn count(self: *const ElementRef) usize {
+    inline fn count(self: *const ElementRef) usize {
         if (self.node) |node| {
             return node.inodes.items.len;
         }

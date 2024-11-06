@@ -1,7 +1,7 @@
 const std = @import("std");
 
 /// Asserts that `ok` is true. If not, it will print the formatted message and panic.
-pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
+pub inline fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     if (ok) {
         return;
     }
@@ -13,7 +13,7 @@ pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
 }
 
 /// panic the program with the formatted message
-pub fn panicFmt(comptime fmt: []const u8, args: anytype) noreturn {
+pub inline fn panicFmt(comptime fmt: []const u8, args: anytype) noreturn {
     const allocator = std.heap.page_allocator;
     const s = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
     std.debug.print("{s}\n", .{s});

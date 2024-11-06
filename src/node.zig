@@ -56,13 +56,13 @@ pub const Node = struct {
             return;
         }
         self.isFreed = true;
-        if (self.bucket) |inBucket| {
-            if (inBucket._b) |inBucketRoot| {
-                if (inBucketRoot.root == 0) {
-                    std.log.debug("this is inline bucket", .{});
-                }
-            }
-        }
+        // if (self.bucket) |inBucket| {
+        //     if (inBucket._b) |inBucketRoot| {
+        //         if (inBucketRoot.root == 0) {
+        //             std.log.debug("this is inline bucket", .{});
+        //         }
+        //     }
+        // }
         // TODO, if the key is equal the first key of the node, we should be not free the key
         // because the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
         if (!self.isFirstKeyReference()) {
@@ -83,16 +83,16 @@ pub const Node = struct {
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // The is a inline node, so we should free the inline node memory
-        if (self.bucket) |inBucket| {
-            if (inBucket._b) |inBucketRoot| {
-                if (inBucketRoot.root == 0) {
-                    std.log.debug("this is inline bucket", .{});
-                }
-            }
-        }
+        // if (self.bucket) |inBucket| {
+        //     if (inBucket._b) |inBucketRoot| {
+        //         if (inBucketRoot.root == 0) {
+        //             std.log.debug("this is inline bucket", .{});
+        //         }
+        //     }
+        // }
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (0..self.inodes.items.len) |i| {
-            self.inodes.items[i].deinit(self.arenaAllocator.allocator());
+            self.inodes.items[i].deinit(null);
         }
 
         // if (self.key) |key| {
@@ -236,7 +236,6 @@ pub const Node = struct {
         } else {
             if (inodeRef.key != null and inodeRef.isNew) {
                 std.log.info("free old key, id: {d}, key: 0x{x}", .{ inodeRef.id, @intFromPtr(inodeRef.key.?.ptr) });
-                // self.allocator.free(inodeRef.key.?);
                 inodeRef.key = null;
             }
             inodeRef.key = newKey;
@@ -246,9 +245,6 @@ pub const Node = struct {
                 if (value != null) {
                     assert(inodeRef.value.?.ptr != value.?.ptr, "the value is null", .{});
                 }
-                // std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
-                // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
-                // self.allocator.free(inodeRef.value.?);
                 inodeRef.value = null;
             }
         }
@@ -278,7 +274,7 @@ pub const Node = struct {
         }
         // Mark the node as needing rebalancing.
         self.unbalance = true;
-        self.printKeysString();
+        // self.printKeysString();
         return indexRef.index;
     }
 
@@ -952,23 +948,22 @@ pub const INode = struct {
     }
 
     /// deinit the inode
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        _ = allocator; // autofix
+    pub fn deinit(self: *Self, _: ?std.mem.Allocator) void {
         if (!self.isNew) {
             return;
         }
-        if (self.key) |key| {
-            _ = key; // autofix
-            // allocator.free(key);
-            // self.key = null;
-        }
-        // TODO: Print the value address.(Eg: the value is a inline bucket value)
-        if (self.value) |value| {
-            _ = value; // autofix
-            //std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
-            // allocator.free(value);
-            self.value = null;
-        }
+        // if (self.key) |key| {
+        //     _ = key; // autofix
+        //     // allocator.free(key);
+        //     // self.key = null;
+        // }
+        // // TODO: Print the value address.(Eg: the value is a inline bucket value)
+        // if (self.value) |value| {
+        //     _ = value; // autofix
+        //     //std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
+        //     // allocator.free(value);
+        //     self.value = null;
+        // }
     }
 
     /// lower bound of the key

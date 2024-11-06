@@ -142,7 +142,7 @@ pub const TX = struct {
     }
 
     /// Returns the current database size in bytes as seen by this transaction.
-    pub fn size(self: *const Self) u64 {
+    pub fn size(self: *Self) u64 {
         return self.meta.pgid * @as(u64, self.getDB().pageSize);
     }
 
@@ -377,6 +377,62 @@ pub const TX = struct {
         return self._check();
     }
 
+    // Copy writes the entire database to a writer.
+    // This function exists for backwards compatibility.
+    //
+    // Deprecated; Use WriteTo() instead.
+    pub fn Copy(self: *Self, writer: std.fs.File.Writer) Error!void {
+        _ = try self.writeTo(writer);
+    }
+
+    // WriteTo writes the entire database to a writer.
+    // If err == nil then exactly tx.Size() bytes will be written into the writer.
+    pub fn writeTo(self: *Self, writer: std.fs.File.Writer) Error!usize {
+        // Attempt to open reader with WriteFlag
+        var n: usize = 0;
+        var _db = self.getDB();
+        const file = std.fs.cwd().openFile(_db.path(), .{ .mode = .read_only }) catch unreachable;
+        defer file.close();
+        // Generate a meta page. We use the same page data for both meta pages.
+        const buffer = try self.getAllocator().alloc(u8, _db.pageSize);
+        @memset(buffer, 0);
+        const metaPage = _db.pageInBuffer(buffer, 0);
+        metaPage.flags = consts.intFromFlags(consts.PageFlag.meta);
+        metaPage.meta().* = self.meta.*;
+
+        // Write meta 0
+        metaPage.id = 0;
+        metaPage.meta().check_sum = metaPage.meta().sum64();
+        var hasWritten = writer.write(buffer) catch unreachable;
+        assert(hasWritten == buffer.len, "write meta 0 failed", .{});
+        n += hasWritten;
+
+        // Write meta 1
+        metaPage.id = 1;
+        metaPage.meta().txid -= 1;
+        metaPage.meta().check_sum = metaPage.meta().sum64();
+        hasWritten = writer.write(buffer) catch unreachable;
+        assert(hasWritten == buffer.len, "write meta 1 failed", .{});
+        n += hasWritten;
+
+        // Move past the meta pages in the file.
+        const reader = file.reader();
+        const skipBytes: usize = self.size() - _db.pageSize * 2;
+        _ = reader.skipBytes(skipBytes, .{}) catch unreachable;
+        const hasRead = reader.readAll(buffer[n..]) catch unreachable;
+        assert(hasRead == buffer.len - n, "read data page failed, hasRead: {}, expect: {}", .{ hasRead, buffer.len - n });
+        writer.writeAll(buffer[n..]) catch unreachable;
+        n += hasRead;
+        assert(n == buffer.len, "write data page failed, n: {}, expect: {}", .{ n, buffer.len });
+        return n;
+    }
+
+    /// CopyFile copies the entire database to a file.
+    pub fn copyFile(self: *Self, file: std.fs.File) Error!void {
+        const writer = file.writer();
+        try self.Copy(writer);
+    }
+
     fn _check(self: *Self) Error!void {
         // Check if any pages are double freed.
         var reachable = std.AutoHashMap(PgidType, *const page.Page).init(self.allocator);
@@ -414,6 +470,7 @@ pub const TX = struct {
                 util.panicFmt("page {}: unreachable unfreed", .{i});
             }
         }
+        std.log.info("consistency check done", .{});
     }
 
     // TODO(benbjohnson): This function is not correct. It should be checking.
