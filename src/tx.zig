@@ -30,7 +30,10 @@ pub const TX = struct {
     managed: bool = false,
     db: ?*DB = null,
     meta: *Meta,
-    root: *Bucket, // the root bucket of the transaction, the bucket root is reference to the meta.root
+    // the root bucket of the transaction, the bucket root is reference to the meta.root
+    root: *Bucket,
+    // pages is not null only at writable transaction, the pages will store dirty *pages* that need to be written to disk,
+    // pages's source from freed pages in freelist. or new page when freelist is not enough.
     pages: ?std.AutoHashMap(PgidType, *Page),
     autoFreeNodes: AutoFreeObject,
     stats: TxStats = .{},
@@ -54,8 +57,6 @@ pub const TX = struct {
         const self = _db.allocator.create(Self) catch unreachable;
         self.db = _db;
         self.writable = writable;
-        // self.pages = _db.allocator.create(std.AutoHashMap(PgidType, *Page)) catch unreachable;
-        self.pages = std.AutoHashMap(PgidType, *Page).init(_db.allocator);
         self.stats = TxStats{};
         // Copy the meta page since it can be changed by the writer.
         self.meta = _db.allocator.create(Meta) catch unreachable;
@@ -71,9 +72,11 @@ pub const TX = struct {
         self.allocator = _db.allocator;
         self.arenaAllocator = std.heap.ArenaAllocator.init(self.allocator);
         self.managed = false;
+        self.pages = null;
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
             self.meta.txid += 1;
+            self.pages = std.AutoHashMap(PgidType, *Page).init(_db.allocator);
         }
         self._commitHandlers = std.ArrayList(onCommitFn).init(self.allocator);
         return self;
@@ -326,8 +329,10 @@ pub const TX = struct {
     /// Writes any dirty pages to disk.
     pub fn write(self: *Self) Error!void {
         // Sort pages by id.
-        var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, self.pages.?.count());
+        const cap: usize = if (self.pages != null) self.pages.?.count() else 0;
+        var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, cap);
         defer pagesSlice.deinit();
+        // If the transaction is writable, the pages must be not null.
         var itr = self.pages.?.valueIterator();
         while (itr.next()) |pg| {
             try pagesSlice.append(pg.*);
@@ -403,7 +408,10 @@ pub const TX = struct {
         // Write meta 0
         metaPage.id = 0;
         metaPage.meta().check_sum = metaPage.meta().sum64();
-        var hasWritten = writer.write(buffer) catch unreachable;
+        var hasWritten = writer.write(buffer) catch |err| {
+            std.log.err("write meta 0 failed: {any}", .{err});
+            return Error.FileIOError;
+        };
         assert(hasWritten == buffer.len, "write meta 0 failed", .{});
         n += hasWritten;
 
@@ -411,19 +419,36 @@ pub const TX = struct {
         metaPage.id = 1;
         metaPage.meta().txid -= 1;
         metaPage.meta().check_sum = metaPage.meta().sum64();
-        hasWritten = writer.write(buffer) catch unreachable;
+        hasWritten = writer.write(buffer) catch |err| {
+            std.log.err("write meta 1 failed: {any}", .{err});
+            return Error.FileIOError;
+        };
         assert(hasWritten == buffer.len, "write meta 1 failed", .{});
         n += hasWritten;
 
         // Move past the meta pages in the file.
         const reader = file.reader();
         const skipBytes: usize = self.size() - _db.pageSize * 2;
-        _ = reader.skipBytes(skipBytes, .{}) catch unreachable;
-        const hasRead = reader.readAll(buffer[n..]) catch unreachable;
-        assert(hasRead == buffer.len - n, "read data page failed, hasRead: {}, expect: {}", .{ hasRead, buffer.len - n });
-        writer.writeAll(buffer[n..]) catch unreachable;
-        n += hasRead;
-        assert(n == buffer.len, "write data page failed, n: {}, expect: {}", .{ n, buffer.len });
+        reader.skipBytes(skipBytes, .{}) catch |err| {
+            std.log.err("skip bytes failed: {any}", .{err});
+            return Error.FileIOError;
+        };
+
+        while (true) {
+            const hasRead = reader.read(buffer[0..]) catch |err| {
+                std.log.err("read data page failed: {any}", .{err});
+                return Error.FileIOError;
+            };
+            // Break if we've reached EOF
+            if (hasRead == 0) break;
+            // Write only the portion that was actually read
+            writer.writeAll(buffer[0..hasRead]) catch |err| {
+                std.log.err("write data page failed: {any}", .{err});
+                return Error.FileIOError;
+            };
+            n += hasRead;
+        }
+        std.log.info("write to file done, n: {}", .{n});
         return n;
     }
 
@@ -439,25 +464,47 @@ pub const TX = struct {
         defer reachable.deinit();
         var freed = std.AutoHashMap(PgidType, bool).init(self.allocator);
         defer freed.deinit();
-        var all = std.ArrayList(PgidType).init(self.allocator);
-        defer all.deinit();
-        all.appendNTimes(0, self.db.?.freelist.count()) catch unreachable;
-        self.db.?.freelist.copyAll(all.items);
-        for (all.items) |pgid| {
-            if (freed.contains(pgid)) {
-                util.panicFmt("page {}: already freed", .{pgid});
+        const all = self.allocator.alloc(PgidType, self.db.?.freelist.count()) catch unreachable;
+        defer self.allocator.free(all);
+        self.db.?.freelist.copyAll(all);
+        for (all) |pgid| {
+            const got = freed.getOrPut(pgid) catch |err| {
+                std.log.err("getOrPut freed page failed: {any}", .{err});
+                return Error.NotPassConsistencyCheck;
+            };
+            if (got.found_existing) {
+                std.log.err("page {}: already freed", .{pgid});
+                return Error.NotPassConsistencyCheck;
             }
-            freed.put(pgid, true) catch unreachable;
+            got.value_ptr.* = true;
         }
 
         // Track every reachable page.
-        reachable.put(0, self.getPage(0)) catch unreachable;
-        reachable.put(1, self.getPage(1)) catch unreachable;
+        for ([2]u64{ 0, 1 }) |i| {
+            const got = reachable.getOrPut(i) catch |err| {
+                std.log.err("getOrPut meta {}: page failed: {any}", .{ i, err });
+                return Error.NotPassConsistencyCheck;
+            };
+            if (got.found_existing) {
+                std.log.err("meta {}: page already exists", .{i});
+                return Error.NotPassConsistencyCheck;
+            }
+            got.value_ptr.* = self.getPage(i);
+        }
+
         // free page
         const freePage = self.getPage(self.meta.freelist);
         for (0..freePage.overflow + 1) |i| {
             const id = self.meta.freelist + i;
-            reachable.put(id, self.getPage(self.meta.freelist)) catch unreachable;
+            const got = reachable.getOrPut(id) catch |err| {
+                std.log.err("getOrPut free page failed: {any}", .{err});
+                return Error.NotPassConsistencyCheck;
+            };
+            if (got.found_existing) {
+                std.log.err("free page {}: already exists", .{id});
+                return Error.NotPassConsistencyCheck;
+            }
+            got.value_ptr.* = freePage;
         }
 
         // Recursively check buckets.
@@ -467,7 +514,8 @@ pub const TX = struct {
         for (0..self.meta.pgid) |i| {
             const isReachable = reachable.contains(i);
             if (!isReachable and !freed.contains(i)) {
-                util.panicFmt("page {}: unreachable unfreed", .{i});
+                std.log.err("page {}: unreachable unfreed", .{i});
+                // return Error.NotPassConsistencyCheck;
             }
         }
         std.log.info("consistency check done", .{});
@@ -636,9 +684,11 @@ pub const TX = struct {
     /// If page has been written to then a temporary buffered page is returned.
     pub fn getPage(self: *Self, id: PgidType) *page.Page {
         // Check the dirty pages first.
-        if (self.pages.?.get(id)) |p| {
-            std.log.debug("get page from pages cache: {}", .{id});
-            return p;
+        if (self.pages != null) {
+            if (self.pages.?.get(id)) |p| {
+                std.log.debug("get page from pages cache: {}", .{id});
+                return p;
+            }
         }
         // Otherwise return directly form the mmap.
         return self.db.?.pageById(id);

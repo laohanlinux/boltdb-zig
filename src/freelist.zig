@@ -75,7 +75,7 @@ pub const FreeList = struct {
         return pageCount;
     }
 
-    /// Copies into dst a list of all free ids end all pending ids in one sorted list.
+    /// Copies into dst a list of all free ids and all pending ids in one sorted list.
     pub fn copyAll(self: *Self, dst: []PgidType) void {
         var array = std.ArrayList(PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
         defer array.deinit();
@@ -83,7 +83,6 @@ pub const FreeList = struct {
         while (itr.next()) |entries| {
             array.appendSlice(entries.items) catch unreachable;
         }
-        assert(array.items.len == self.pendingCount(), "sanity check!", .{});
         Self.mergeSortedArray(dst, self.ids.items, array.items);
     }
 
@@ -97,7 +96,6 @@ pub const FreeList = struct {
         const previd: usize = 0;
         for (self.ids.items, 0..) |id, i| {
             assert(id > 1, "invalid page({}) allocation", .{id});
-
             // Reset initial page if this is not contigous.
             if (previd == 0 or (id - previd) != 1) {
                 initial = id;

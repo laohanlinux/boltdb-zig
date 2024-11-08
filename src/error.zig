@@ -27,4 +27,6 @@ pub const Error = error{
 
     //
     OutOfMemory,
+    NotPassConsistencyCheck,
+    FileIOError,
 };

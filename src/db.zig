@@ -84,9 +84,11 @@ pub const DB = struct {
 
     rwtx: ?*tx.TX = null,
     txs: std.ArrayList(*tx.TX),
+    // the freelist is used to manage the *dirty* pages in the transaction, it only changes at writable transaction, but has only writable transaction once.
+    // So we don't need to lock the freelist and it is safe by rwlock.
     freelist: *freelist.FreeList,
-    stats: Stats,
 
+    stats: Stats,
     pagePool: ?*PagePool = null,
 
     rwlock: std.Thread.Mutex, // Allows only one writer a a time.
@@ -441,7 +443,9 @@ pub const DB = struct {
         p.overflow = @as(u32, @intCast(count)) - 1;
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
-        defer std.log.debug("allocate a new page, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
+        defer {
+            std.log.debug("allocate a new page, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
+        }
         if (p.id != 0) {
             return p;
         }
@@ -455,7 +459,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(PgidType, count);
-        std.log.debug("update the meta page, pgid: {}, flags:{} minsz: {}, datasz: {}", .{ self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
+        std.log.debug("update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
         return p;
     }
 
@@ -695,7 +699,7 @@ pub const DB = struct {
                 trx.check() catch |e| {
                     const tmpFilePath = DB.tempFilePath(_db.allocator);
                     defer _db.allocator.free(tmpFilePath);
-                    const tmpFile = std.fs.openFileAbsolute(tmpFilePath, .{}) catch unreachable;
+                    const tmpFile = std.fs.createFileAbsolute(tmpFilePath, .{}) catch unreachable;
                     defer tmpFile.close();
                     try trx.copyFile(tmpFile);
 

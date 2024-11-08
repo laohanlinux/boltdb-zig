@@ -397,8 +397,6 @@ pub const Node = struct {
         var curNode = self;
         while (true) {
             // Split node into two.
-            const count = curNode.inodes.items.len;
-            _ = count; // autofix
             const a, const b = curNode.splitTwo(_pageSize);
             nodes.append(a.?) catch unreachable;
             // a.?.printKeysString();
@@ -449,14 +447,14 @@ pub const Node = struct {
         // if the node is the root node, then create a new node as the parent node
         // and set the current node as the child node
         if (self.parent == null) {
-            self.parent = Node.init(self.arenaAllocator.allocator());
+            self.parent = Node.init(self.getAllocator());
             self.parent.?.bucket = self.bucket;
             self.parent.?.children.append(self) catch unreachable; // children also is you!
             self.bucket.?.tx.?.autoFreeNodes.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
-        const next = Node.init(self.arenaAllocator.allocator());
+        const next = Node.init(self.getAllocator());
         // self.bucket.?.autoFreeObject.addNode(next);
         self.bucket.?.tx.?.autoFreeNodes.addNode(next);
         next.bucket = self.bucket;
@@ -634,7 +632,7 @@ pub const Node = struct {
                 // Reparent all child nodes being moved.
                 // TODO why not skip the first key
                 for (self.inodes.items) |inode| {
-                    if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                    if (self.bucket.?.nodes.?.get(inode.pgid)) |_child| {
                         _child.parent = self;
                     }
                 }
@@ -642,7 +640,7 @@ pub const Node = struct {
                 // Remove old child. because the node also be stored in the node's children,
                 // so we should remove the child directly and recycle it.
                 child.parent = null;
-                const exist = self.bucket.?.nodes.remove(child.pgid);
+                const exist = self.bucket.?.nodes.?.remove(child.pgid);
                 assert(exist, "rebalance: node({d}) not found in nodes map", .{child.pgid});
                 child.free();
                 child.deinitWhenRemoved();
@@ -662,7 +660,7 @@ pub const Node = struct {
             assert(index != null, "the node({d}) not found in parent inodes", .{self.pgid});
             self.parent.?.removeChild(self);
             // remove self from node.
-            const exists = self.bucket.?.nodes.remove(self.pgid);
+            const exists = self.bucket.?.nodes.?.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
             // free reference page to db.
             const oldPgid = self.pgid;
@@ -691,7 +689,7 @@ pub const Node = struct {
         if (useNextSlibling) {
             // Reparent all child nodes being moved.
             for (self.inodes.items) |inode| {
-                if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                if (self.bucket.?.nodes.?.get(inode.pgid)) |_child| {
                     _child.parent.?.removeChild(_child);
                     _child.parent = self;
                     _child.parent.?.children.append(_child) catch unreachable;
@@ -702,12 +700,12 @@ pub const Node = struct {
             self.inodes.appendSlice(target.?.inodes.items) catch unreachable;
             const index = self.parent.?.del(target.?.key.?);
             assert(index != null, "rebalance: node({d}) not found in parent inodes", .{target.?.pgid});
-            _ = self.bucket.?.nodes.remove(target.?.pgid);
+            _ = self.bucket.?.nodes.?.remove(target.?.pgid);
             target.?.free();
         } else {
             // Reparent all child nodes being moved.
             for (self.inodes.items) |inode| {
-                if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                if (self.bucket.?.nodes.?.get(inode.pgid)) |_child| {
                     _child.parent.?.removeChild(_child);
                     _child.parent = target;
                     _child.parent.?.children.append(_child) catch unreachable;
@@ -719,7 +717,7 @@ pub const Node = struct {
             const index = self.parent.?.del(self.key.?);
             assert(index != null, "rebalance: node({d}) not found in parent inodes", .{self.pgid});
             self.parent.?.removeChild(self);
-            _ = self.bucket.?.nodes.remove(self.pgid);
+            _ = self.bucket.?.nodes.?.remove(self.pgid);
             self.free();
         }
 
@@ -781,10 +779,17 @@ pub const Node = struct {
         }
     }
 
+    /// get the pointer of the node
     pub fn nodePtrInt(self: *const Self) usize {
         return @intFromPtr(self);
     }
 
+    /// get the allocator of the node
+    pub fn getAllocator(self: *Self) std.mem.Allocator {
+        return self.arenaAllocator.allocator();
+    }
+
+    /// binary search the key in the inodes
     pub fn binarySearchInodes(self: *const Self, key: []const u8) ?usize {
         const findFn = struct {
             fn find(context: []const u8, item: INode) std.math.Order {

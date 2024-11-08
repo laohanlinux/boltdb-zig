@@ -194,7 +194,7 @@ pub const Cursor = struct {
             return Error.IncompactibleValue;
         }
 
-        self.getNode().?.del(keyValueRet.key.?);
+        _ = self.getNode().?.del(keyValueRet.key.?);
     }
 
     // Moves the cursor to a given key and returns it.

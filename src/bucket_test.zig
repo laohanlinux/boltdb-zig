@@ -405,7 +405,7 @@ test "Bucket_Delete_Large_Overflow" {
 
 // Ensure that accessing and updating nested buckets is ok across transactions.
 test "Bucket_Nested_Access_Update" {
-    std.testing.log_level = .info;
+    std.testing.log_level = .debug;
     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
@@ -418,6 +418,19 @@ test "Bucket_Nested_Access_Update" {
             for (0..100) |i| {
                 const kv = try std.fmt.allocPrint(stackBuffer.allocator(), "{0:0>2}", .{i});
                 try b.put(KeyPair.init(kv, kv));
+                stackBuffer.reset();
+            }
+            const bar = try b.createBucket("bar");
+            for (0..10) |i| {
+                const kv = try std.fmt.allocPrint(stackBuffer.allocator(), "{d}", .{i});
+                try bar.put(KeyPair.init(kv, kv));
+                stackBuffer.reset();
+            }
+
+            const baz = try bar.createBucket("baz");
+            for (0..10) |i| {
+                const kv = try std.fmt.allocPrint(stackBuffer.allocator(), "{d}", .{i});
+                try baz.put(KeyPair.init(kv, kv));
                 stackBuffer.reset();
             }
         }

@@ -9,8 +9,8 @@ const assert = @import("util.zig").assert;
 // Ensure that a cursor can return a reference to the bucket that created it.
 test "Cursor_Bucket" {
     std.testing.log_level = .err;
-    const testCtx = tests.setup() catch unreachable;
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
 
     const updateFn = struct {
@@ -27,8 +27,8 @@ test "Cursor_Bucket" {
 
 test "Cursor_Seek" {
     std.testing.log_level = .err;
-    const testCtx = tests.setup() catch unreachable;
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -77,8 +77,8 @@ test "Cursor_Seek" {
 
 test "Cursor_Delete" {
     std.testing.log_level = .err;
-    const testCtx = try tests.setup();
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
 
     const count = 1000;
@@ -144,8 +144,8 @@ test "Cursor_Delete" {
 // Related: https://github.com/boltdb/bolt/pull/187
 test "Cursor_Seek_Large" {
     std.testing.log_level = .err;
-    const testCtx = try tests.setup();
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const count: i64 = 1000;
     const kvDB = testCtx.db;
     // Insert every other key between 0 and $count.
@@ -201,8 +201,8 @@ test "Cursor_Seek_Large" {
 // Ensure that a cursor can iterate over an empty bucket without error.
 test "Cursor_Iterate_EmptyBucket" {
     std.testing.log_level = .err;
-    const testCtx = tests.setup() catch unreachable;
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -226,8 +226,8 @@ test "Cursor_Iterate_EmptyBucket" {
 // Ensure that a Tx cursor can reverse iterate over an empty bucket without error.
 test "Cursor_EmptyBucketReverse" {
     std.testing.log_level = .err;
-    const testCtx = tests.setup() catch unreachable;
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -251,8 +251,8 @@ test "Cursor_EmptyBucketReverse" {
 // Ensure that a Tx cursor can iterate over a single root with a couple elements.
 test "Cursor_Iterate_Leaf" {
     std.testing.log_level = .err;
-    const testCtx = try tests.setup();
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -293,8 +293,8 @@ test "Cursor_Iterate_Leaf" {
 // Ensure that a cursor can reverse iterate over a single root with a couple elements.
 test "Cursor_LeafRootReverse" {
     std.testing.log_level = .err;
-    const testCtx = try tests.setup();
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -335,8 +335,8 @@ test "Cursor_LeafRootReverse" {
 // Ensure that a Tx cursor can restart from the beginning.
 test "Cursor_Restart" {
     std.testing.log_level = .err;
-    const testCtx = try tests.setup();
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
@@ -370,8 +370,8 @@ test "Cursor_Restart" {
 // Ensure that a cursor can skip over empty pages that have been deleted.
 test "Cursor_First_EmptyPages" {
     std.testing.log_level = .err;
-    const testCtx = try tests.setup();
-    defer tests.teardown(testCtx);
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     // Create 1000 keys in the "widgets" bucket.
     const updateFn = struct {

@@ -109,9 +109,9 @@ pub const Bucket = struct {
     isInittialized: bool = false,
     //_b: ?_Bucket = null, // the bucket struct, it is a pointer to the underlying bucket page.
     _b: ?_Bucket align(@alignOf(_Bucket)) = null,
-    tx: ?*tx.TX, // the associated transaction
-    buckets: std.StringHashMap(*Bucket), // subbucket cache
-    nodes: std.AutoHashMap(PgidType, *Node), // node cache
+    tx: ?*tx.TX = null, // the associated transaction
+    buckets: ?std.StringHashMap(*Bucket) = null, // subbucket cache
+    nodes: ?std.AutoHashMap(PgidType, *Node) = null, // node cache
     // materialized node for the root page. Same to nodes.
     // 1: If the transaction is onlyRead, it is null, because readonly transaction just use UnderlyingPage.
     rootNode: ?*Node = null,
@@ -137,19 +137,21 @@ pub const Bucket = struct {
     /// Initializes a new bucket.
     pub fn init(_tx: *tx.TX) *Bucket {
         const b = _tx.db.?.allocator.create(Self) catch unreachable;
+        b.* = .{ .allocator = _tx.db.?.allocator };
         b.isInittialized = true;
         b._b = _Bucket{};
         b.tx = _tx;
         util.assert(b.tx != null, "tx has closed", .{});
-        b.allocator = _tx.db.?.allocator;
         // Note:
         // If the transaction is writable, then the b.buckets and b.nodes will be initialized.
         // If the transaction is readonly, then the b.buckets and b.nodes will not be initialized.
         // But for write better code, we need to initialize the b.buckets and b.nodes.
         // So, if the transaction is readonly, travel all the bucket and nodes by underlaying page.
         // don't load the bucket and node into memory.
-        b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
-        b.nodes = std.AutoHashMap(PgidType, *Node).init(b.allocator);
+        if (b.tx.?.writable) {
+            b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
+            b.nodes = std.AutoHashMap(PgidType, *Node).init(b.allocator);
+        }
         // init the rootNode and page to null.
         b.rootNode = null;
         b.page = null;
@@ -168,24 +170,28 @@ pub const Bucket = struct {
         if (self.page != null) {
             self.freeInlinePage();
         }
-        var btIter = self.buckets.iterator();
+        if (!self.tx.?.writable) {
+            self.allocator.destroy(self);
+            return;
+        }
+        var btIter = self.buckets.?.iterator();
         while (btIter.next()) |nextBucket| {
             self.allocator.free(nextBucket.key_ptr.*);
             nextBucket.value_ptr.*.deinit();
         }
-        self.buckets.deinit();
+        self.buckets.?.deinit();
         if (self.tx.?.writable) {
             self._b = null;
         }
         {
             // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
-            var nodeIter = self.nodes.iterator();
+            var nodeIter = self.nodes.?.iterator();
             while (nodeIter.next()) |nextNode| {
                 // std.log.debug("--> {}, {}, 0x{x}", .{ rootId, nextNode.key_ptr.*, nextNode.value_ptr.*.nodePtrInt() });
                 nextNode.value_ptr.*.deinit();
                 // self.allocator.destroy(nextNode.value_ptr.*);
             }
-            self.nodes.deinit();
+            self.nodes.?.deinit();
         }
         self.page = null;
         self.rootNode = null; // just set the rootNode to null, don't destroy it(it will be destroyed by the autoFreeObject)
@@ -220,8 +226,10 @@ pub const Bucket = struct {
     /// Returns nil if the bucket does not exits.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn getBucket(self: *Self, name: []const u8) ?*Bucket {
-        if (self.buckets.get(name)) |_bucket| {
-            return _bucket;
+        if (self.buckets != null) {
+            if (self.buckets.?.get(name)) |_bucket| {
+                return _bucket;
+            }
         }
 
         // Move cursor to key.
@@ -240,7 +248,9 @@ pub const Bucket = struct {
         const child = self.openBucket(keyPairRef.value.?);
         // cache the bucket
         const cpName = self.allocator.dupe(u8, name) catch unreachable;
-        self.buckets.put(cpName, child) catch unreachable;
+        if (self.buckets != null) {
+            self.buckets.?.put(cpName, child) catch unreachable;
+        }
         return child;
     }
 
@@ -681,7 +691,7 @@ pub const Bucket = struct {
     /// Writes all the nodes for this bucket to dirty pages.
     pub fn spill(self: *Self) Error!void {
         // Spill all child buckets first.
-        var itr = self.buckets.iterator();
+        var itr = self.buckets.?.iterator();
         var arenaAllocator = std.heap.ArenaAllocator.init(self.allocator);
         defer arenaAllocator.deinit();
         var valueBytes = std.ArrayList(u8).init(arenaAllocator.allocator());
@@ -790,8 +800,8 @@ pub const Bucket = struct {
         newBucket.rootNode = Node.init(allocator);
         newBucket.rootNode.?.isLeaf = true;
         defer {
-            newBucket.buckets.deinit();
-            newBucket.nodes.deinit();
+            newBucket.buckets.?.deinit();
+            newBucket.nodes.?.deinit();
             newBucket.rootNode.?.deinit();
             self.allocator.destroy(newBucket);
         }
@@ -830,11 +840,11 @@ pub const Bucket = struct {
     /// Attemps to balance all nodes
     pub fn rebalance(self: *Self) void {
         std.log.debug("rebalance bucket: {d}", .{self._b.?.root});
-        var valueItr = self.nodes.valueIterator();
+        var valueItr = self.nodes.?.valueIterator();
         while (valueItr.next()) |n| {
             n.*.rebalance();
         }
-        var itr = self.buckets.valueIterator();
+        var itr = self.buckets.?.valueIterator();
         while (itr.next()) |child| {
             child.*.rebalance();
         }
@@ -874,7 +884,7 @@ pub const Bucket = struct {
         if (self.rootNode) |rNode| {
             rNode.root().?.dereference();
         }
-        var itr = self.buckets.iterator();
+        var itr = self.buckets.?.iterator();
         while (itr.next()) |entry| {
             std.log.info("dereference bucket({s}), pgid: {d}", .{ entry.key_ptr.*, entry.value_ptr.*._b.?.root });
             entry.value_ptr.*.dereference();
@@ -896,8 +906,10 @@ pub const Bucket = struct {
         }
 
         // Check the node cache for non-inline buckets.
-        if (self.nodes.get(id)) |cacheNode| {
-            return PageOrNode{ .page = null, .node = cacheNode };
+        if (self.nodes) |nodes| {
+            if (nodes.get(id)) |cacheNode| {
+                return PageOrNode{ .page = null, .node = cacheNode };
+            }
         }
         // Finally lookup the page from the transaction if the id's node is not materialized.
         return PageOrNode{ .page = self.tx.?.getPage(id), .node = null };
@@ -906,7 +918,7 @@ pub const Bucket = struct {
     /// Creates a node from a page and associates it with a given parent.
     pub fn node(self: *Self, pgid: PgidType, parentNode: ?*Node) *Node {
         // Retrive node if it's already been created.
-        if (self.nodes.get(pgid)) |_node| {
+        if (self.nodes.?.get(pgid)) |_node| {
             return _node;
         }
 
@@ -932,7 +944,7 @@ pub const Bucket = struct {
         const parentPtrInt = if (parentNode == null) 0 else @intFromPtr(parentNode.?);
         const key = if (n.key == null) "" else n.key.?;
         std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}, parentPtr: 0x{x}, key: {any}", .{ pgid, n.nodePtrInt(), parentNode == null, parentPtrInt, key });
-        const entry = self.nodes.getOrPut(pgid) catch unreachable;
+        const entry = self.nodes.?.getOrPut(pgid) catch unreachable;
         assert(!entry.found_existing, "the node is already exist, pgid: {d}, ptr: 0x{x}", .{ pgid, n.nodePtrInt() });
         entry.value_ptr.* = n;
         // Update statistic.
