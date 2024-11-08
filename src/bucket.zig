@@ -125,6 +125,7 @@ pub const Bucket = struct {
     fillPercent: f64 = consts.DefaultFillPercent,
 
     allocator: std.mem.Allocator,
+    arenaAllocator: ?std.heap.ArenaAllocator,
 
     const travelContext = struct {
         b: ?*Bucket,
@@ -149,8 +150,8 @@ pub const Bucket = struct {
         // So, if the transaction is readonly, travel all the bucket and nodes by underlaying page.
         // don't load the bucket and node into memory.
         if (b.tx.?.writable) {
-            b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
             b.nodes = std.AutoHashMap(PgidType, *Node).init(b.allocator);
+            b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
         }
         // init the rootNode and page to null.
         b.rootNode = null;
@@ -171,11 +172,13 @@ pub const Bucket = struct {
             self.freeInlinePage();
         }
         if (!self.tx.?.writable) {
-            self.allocator.destroy(self);
+            self.allocator.destroy(self); // only readonly transaction will destroy the bucket.
             return;
         }
+        // only writable transaction will destroy the buckets.
         var btIter = self.buckets.?.iterator();
         while (btIter.next()) |nextBucket| {
+            std.log.info("deinit bucket, key: {s}", .{nextBucket.key_ptr.*});
             self.allocator.free(nextBucket.key_ptr.*);
             nextBucket.value_ptr.*.deinit();
         }
@@ -187,9 +190,7 @@ pub const Bucket = struct {
             // Note, the nodes does not exist in the autoFreeObject, so we need to destroy it manually.
             var nodeIter = self.nodes.?.iterator();
             while (nodeIter.next()) |nextNode| {
-                // std.log.debug("--> {}, {}, 0x{x}", .{ rootId, nextNode.key_ptr.*, nextNode.value_ptr.*.nodePtrInt() });
                 nextNode.value_ptr.*.deinit();
-                // self.allocator.destroy(nextNode.value_ptr.*);
             }
             self.nodes.?.deinit();
         }
@@ -247,8 +248,8 @@ pub const Bucket = struct {
         // because the keyPairRef.second is a bucket value, so we need to open it.
         const child = self.openBucket(keyPairRef.value.?);
         // cache the bucket
-        const cpName = self.allocator.dupe(u8, name) catch unreachable;
         if (self.buckets != null) {
+            const cpName = self.allocator.dupe(u8, name) catch unreachable;
             self.buckets.?.put(cpName, child) catch unreachable;
         }
         return child;

@@ -26,24 +26,27 @@ test "Cursor_Bucket" {
 }
 
 test "Cursor_Seek" {
-    std.testing.log_level = .err;
+    std.testing.log_level = .info;
     var testCtx = try tests.setup(std.testing.allocator);
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
         fn update(_: void, trx: *TX) Error!void {
-            const b = try trx.createBucket("widgets");
+            var b = try trx.createBucket("widgets");
+            defer b.deinit();
             try b.put(consts.KeyPair.init("foo", "0001"));
             try b.put(consts.KeyPair.init("bar", "0002"));
             try b.put(consts.KeyPair.init("baz", "0003"));
-            _ = try b.createBucket("bkt");
+            var bkt = try b.createBucket("bkt");
+            defer bkt.deinit();
         }
     }.update;
     try kvDB.update({}, updateFn);
 
     const viewFn = struct {
         fn view(_: void, trx: *TX) Error!void {
-            const b = trx.getBucket("widgets") orelse unreachable;
+            var b = trx.getBucket("widgets") orelse unreachable;
+            defer b.deinit();
             var cursor = b.cursor();
             defer cursor.deinit();
             // Exact match should go to the key.

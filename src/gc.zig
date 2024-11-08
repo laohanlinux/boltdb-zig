@@ -143,9 +143,19 @@ test "GC" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var bytes = [5]u8{ 0, 0, 0, 0, 0 };
-    for (0..1000) |i| {
+    for (0..100) |i| {
         _ = i; // autofix
         const allocator = arena.allocator();
         _ = allocator.dupe(u8, bytes[0..]) catch unreachable;
+
+        for (0..100) |j| {
+            _ = j; // autofix
+            var arenaAllocator = std.heap.ArenaAllocator.init(allocator);
+            for (0..100) |k| {
+                _ = k; // autofix
+                _ = arenaAllocator.allocator().dupe(u8, bytes[0..]) catch unreachable;
+            }
+            arenaAllocator.deinit();
+        }
     }
 }
