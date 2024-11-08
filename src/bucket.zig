@@ -124,8 +124,7 @@ pub const Bucket = struct {
     // This is non-presisted across transactions so it must be set in every TX.
     fillPercent: f64 = consts.DefaultFillPercent,
 
-    allocator: std.mem.Allocator,
-    arenaAllocator: ?std.heap.ArenaAllocator,
+    arenaAllocator: std.heap.ArenaAllocator,
 
     const travelContext = struct {
         b: ?*Bucket,
@@ -136,9 +135,15 @@ pub const Bucket = struct {
     const Self = @This();
 
     /// Initializes a new bucket.
-    pub fn init(_tx: *tx.TX) *Bucket {
-        const b = _tx.db.?.allocator.create(Self) catch unreachable;
-        b.* = .{ .allocator = _tx.db.?.allocator };
+    pub fn init(_tx: *tx.TX, parentBucket: ?*Bucket) *Bucket {
+        var arenaAllocator = blk: {
+            if (parentBucket != null) {
+                break :blk std.heap.ArenaAllocator.init(parentBucket.?.getAllocator());
+            }
+            break :blk std.heap.ArenaAllocator.init(_tx.db.?.allocator);
+        };
+        const b = arenaAllocator.allocator().create(Self) catch unreachable;
+        b.* = .{ .arenaAllocator = arenaAllocator };
         b.isInittialized = true;
         b._b = _Bucket{};
         b.tx = _tx;
@@ -150,8 +155,8 @@ pub const Bucket = struct {
         // So, if the transaction is readonly, travel all the bucket and nodes by underlaying page.
         // don't load the bucket and node into memory.
         if (b.tx.?.writable) {
-            b.nodes = std.AutoHashMap(PgidType, *Node).init(b.allocator);
-            b.buckets = std.StringHashMap(*Bucket).init(b.allocator);
+            b.nodes = std.AutoHashMap(PgidType, *Node).init(b.getAllocator());
+            b.buckets = std.StringHashMap(*Bucket).init(b.getAllocator());
         }
         // init the rootNode and page to null.
         b.rootNode = null;
@@ -163,23 +168,20 @@ pub const Bucket = struct {
 
     /// Deallocates a bucket and all of its nested buckets and nodes.
     pub fn deinit(self: *Self) void {
-        // const rootId = self._b.?.root;
-        // defer std.log.debug("finish deinit bucket, rid: {}", .{rootId});
-        // std.log.debug("start deinit bucket, rid: {}, root: {}", .{ rootId, self.rootNode == null });
+        defer self.arenaAllocator.deinit();
         assert(self.isInittialized, "the bucket is not initialized", .{});
         self.isInittialized = false;
+        if (!self.tx.?.writable) {
+            return;
+        }
+
         if (self.page != null) {
             self.freeInlinePage();
-        }
-        if (!self.tx.?.writable) {
-            self.allocator.destroy(self); // only readonly transaction will destroy the bucket.
-            return;
         }
         // only writable transaction will destroy the buckets.
         var btIter = self.buckets.?.iterator();
         while (btIter.next()) |nextBucket| {
             std.log.info("deinit bucket, key: {s}", .{nextBucket.key_ptr.*});
-            self.allocator.free(nextBucket.key_ptr.*);
             nextBucket.value_ptr.*.deinit();
         }
         self.buckets.?.deinit();
@@ -196,12 +198,15 @@ pub const Bucket = struct {
         }
         self.page = null;
         self.rootNode = null; // just set the rootNode to null, don't destroy it(it will be destroyed by the autoFreeObject)
-        self.allocator.destroy(self);
     }
 
     /// Destroy the bucket.
     pub fn destroy(self: *Self) void {
-        self.allocator.destroy(self);
+        self.arenaAllocator.deinit(); // deinit the arena allocator.
+    }
+
+    pub fn getAllocator(self: *Self) std.mem.Allocator {
+        return self.arenaAllocator.allocator();
     }
 
     // Free the inline page.
@@ -249,7 +254,7 @@ pub const Bucket = struct {
         const child = self.openBucket(keyPairRef.value.?);
         // cache the bucket
         if (self.buckets != null) {
-            const cpName = self.allocator.dupe(u8, name) catch unreachable;
+            const cpName = self.getAllocator().dupe(u8, name) catch unreachable;
             self.buckets.?.put(cpName, child) catch unreachable;
         }
         return child;
@@ -258,7 +263,7 @@ pub const Bucket = struct {
     /// Helper method that re-interprets a sub-bucket value
     /// from a parent into a Bucket
     pub fn openBucket(self: *Self, value: []u8) *Bucket {
-        const child = Bucket.init(self.tx.?);
+        const child = Bucket.init(self.tx.?, self);
         // TODO
         // If unaligned load/stores are broken on this arch and value is
         // unaligned simply clone to an aligned byte array.
@@ -613,8 +618,7 @@ pub const Bucket = struct {
                         std.log.debug("travel subBucket: {s}, element: {any}", .{ bucketName, elem });
                         const childBucket = b.openBucket(elem.value());
                         s.add(&childBucket.stats());
-                        childBucket.free();
-                        b.allocator.destroy(childBucket);
+                        childBucket.deinit();
                     }
                     // std.log.debug("travelStats branch: depth: {d}, used: {d}, key={s}", .{ depth, used, elem.key() });
                 }
@@ -693,7 +697,7 @@ pub const Bucket = struct {
     pub fn spill(self: *Self) Error!void {
         // Spill all child buckets first.
         var itr = self.buckets.?.iterator();
-        var arenaAllocator = std.heap.ArenaAllocator.init(self.allocator);
+        var arenaAllocator = std.heap.ArenaAllocator.init(self.getAllocator());
         defer arenaAllocator.deinit();
         var valueBytes = std.ArrayList(u8).init(arenaAllocator.allocator());
         while (itr.next()) |entry| {
@@ -797,14 +801,11 @@ pub const Bucket = struct {
     }
 
     fn packetInlineBucketValue(self: *Self, allocator: std.mem.Allocator) []u8 {
-        var newBucket = Bucket.init(self.tx.?);
-        newBucket.rootNode = Node.init(allocator);
+        var newBucket = Bucket.init(self.tx.?, null);
+        newBucket.rootNode = Node.init(newBucket.getAllocator());
         newBucket.rootNode.?.isLeaf = true;
         defer {
-            newBucket.buckets.?.deinit();
-            newBucket.nodes.?.deinit();
-            newBucket.rootNode.?.deinit();
-            self.allocator.destroy(newBucket);
+            newBucket.deinit();
         }
         const valueBytes = allocator.alloc(u8, _Bucket.size() + newBucket.rootNode.?.size()) catch unreachable;
         newBucket.write(valueBytes);
@@ -924,7 +925,7 @@ pub const Bucket = struct {
         }
 
         // Otherwise create a node and cache it.
-        const n = Node.init(self.allocator);
+        const n = Node.init(self.getAllocator());
         n.bucket = self;
         n.parent = parentNode;
         if (parentNode != null) {

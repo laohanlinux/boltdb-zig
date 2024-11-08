@@ -62,7 +62,7 @@ pub const TX = struct {
         self.meta = _db.allocator.create(Meta) catch unreachable;
         _db.getMeta().copy(self.meta);
         // Copy over the root bucket.
-        self.root = bucket.Bucket.init(self);
+        self.root = bucket.Bucket.init(self, null);
         self.root._b.? = self.meta.root;
         assert(self.root._b.?.root == _db.getMeta().root.root, "root is invalid", .{});
         assert(self.root._b.?.sequence == _db.getMeta().root.sequence, "sequence is invalid", .{});
@@ -178,7 +178,6 @@ pub const TX = struct {
     /// Returns an error if the bucket already exists, if th bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucket(self: *Self, name: []const u8) Error!*bucket.Bucket {
-        // defer assert(self.root._b.?.root == self.meta.root.root, "root is invalid", .{});
         return self.root.createBucket(name);
     }
 
