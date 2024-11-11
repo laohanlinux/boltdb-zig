@@ -463,7 +463,10 @@ pub const Node = struct {
         self.parent.?.children.append(next) catch unreachable;
 
         // Split inodes across two nodes.
-        next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
+        next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch |err| {
+            std.log.err("failed to append slice, _splitIndex: {d}, inodes len: {d}, next nodes len: {d}, err: {}", .{ _splitIndex, self.inodes.items.len, next.inodes.items.len, err });
+            unreachable;
+        };
         // shrink self.inodes to _splitIndex
         self.inodes.resize(_splitIndex) catch unreachable;
 

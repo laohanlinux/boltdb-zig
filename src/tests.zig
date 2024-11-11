@@ -57,6 +57,7 @@ pub fn setup(allocator: std.mem.Allocator) !TestContext {
 
 /// Teardown a test context.
 pub fn teardown(ctx: *TestContext) void {
+    std.log.debug("teardown", .{});
     const path = ctx.allocator.dupe(u8, ctx.db.path()) catch unreachable;
     ctx.db.close() catch unreachable;
     std.fs.cwd().deleteFile(path) catch unreachable;
@@ -175,13 +176,11 @@ pub const RevTestData = struct {
                 const randBytes = try Self.randByteSlice(allocator, random, 1, q.maxKeySize);
                 const got = try used.getOrPut(randBytes);
                 if (got.found_existing) {
-                    // std.debug.print("Key collision: {any}\n", .{randBytes});
                     allocator.free(randBytes);
                     continue;
                 } else {
                     got.value_ptr.* = true;
                     items.items[i].key = randBytes;
-                    // std.debug.print("Generated key: {any}\n", .{randBytes});
                 }
                 break;
             }

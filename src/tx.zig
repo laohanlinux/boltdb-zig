@@ -85,8 +85,8 @@ pub const TX = struct {
     /// Destroys the transaction and releases all associated resources.
     pub fn destroy(self: *Self) void {
         assert(self.db == null, "db should be null before destroy", .{});
-        std.log.debug("destroy transaction, txPtrInt: 0x{x}", .{self.getTxPtr()});
         self.allocator.destroy(self);
+        std.log.debug("destroy transaction", .{});
     }
 
     /// Print the transaction information.

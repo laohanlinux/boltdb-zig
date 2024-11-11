@@ -497,6 +497,7 @@ pub const DB = struct {
 
     /// close closes the database and releases all associated resources.
     pub fn close(self: *Self) !void {
+        std.log.debug("before close db, txs: {}", .{self.txs.items.len});
         defer std.log.info("succeed to close db!", .{});
         defer self.allocator.destroy(self);
         self.rwlock.lock();

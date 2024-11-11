@@ -34,7 +34,7 @@ pub const Cursor = struct {
 
     /// Initialize the cursor.
     pub fn init(_bt: *Bucket) Self {
-        const allocator = _bt.tx.?.arenaAllocator.allocator();
+        const allocator = _bt.getAllocator();
         return Cursor{
             ._bucket = _bt,
             .stack = std.ArrayList(ElementRef).init(allocator),
