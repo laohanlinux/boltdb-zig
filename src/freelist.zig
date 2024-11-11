@@ -148,6 +148,7 @@ pub const FreeList = struct {
 
     /// Moves all page ids for a transaction id (or older) to the freelist.
     pub fn release(self: *Self, txid: TxId) !void {
+        assert(self.pending.count() <= 1, "pending count should be less than 1", .{});
         var arrayIDs = std.ArrayList(PgidType).init(self.allocator);
         defer arrayIDs.deinit();
         var itr = self.pending.iterator();

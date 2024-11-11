@@ -235,7 +235,7 @@ pub const Node = struct {
             inodeRef.key = newKey;
         } else {
             if (inodeRef.key != null and inodeRef.isNew) {
-                std.log.info("free old key, id: {d}, key: 0x{x}", .{ inodeRef.id, @intFromPtr(inodeRef.key.?.ptr) });
+                // std.log.info("free old key, id: {d}, key: 0x{x}", .{ inodeRef.id, @intFromPtr(inodeRef.key.?.ptr) });
                 inodeRef.key = null;
             }
             inodeRef.key = newKey;
@@ -254,7 +254,7 @@ pub const Node = struct {
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
-        // self.safeCheck();
+        self.safeCheck();
         // std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
         return inodeRef;
     }
@@ -567,18 +567,10 @@ pub const Node = struct {
             // Insert into parent inodes
             if (node.parent) |parent| {
                 const key: []const u8 = node.key orelse node.inodes.items[0].key.?;
-
-                // const oldKey = self.allocator.dupe(u8, key) catch unreachable;
-                // const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 const oldKey = parent.arenaAllocator.allocator().dupe(u8, key) catch unreachable;
                 const newKey = parent.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 _ = parent.put(oldKey, newKey, null, node.pgid, 0);
-                // if (node.key != null) {
-                //     self.allocator.free(node.key.?);
-                // }
-                // node.key = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 node.key = node.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
-
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
                 std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>

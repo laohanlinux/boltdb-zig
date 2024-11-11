@@ -443,13 +443,10 @@ pub const DB = struct {
         p.overflow = @as(u32, @intCast(count)) - 1;
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
-        defer {
-            std.log.debug("allocate a new page, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
-        }
         if (p.id != 0) {
+            std.log.debug("allocate a new page from freedlist, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
             return p;
         }
-
         // Resize mmap() if we're at the end.
         p.id = self.rwtx.?.meta.pgid;
         const minsz: usize = (@as(usize, @intCast(p.id)) + 1 + count) * self.pageSize;
@@ -459,7 +456,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(PgidType, count);
-        std.log.debug("update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
+        std.log.debug("allow a new page (pgid={}) from mmap and update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ p.id, self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
         return p;
     }
 
@@ -597,6 +594,7 @@ pub const DB = struct {
         std.log.debug("After create a write transaction, txPtrInt: 0x{x}, meta: {any}", .{ trx.getTxPtr(), trx.root.*._b.? });
 
         // Free any pages associated with closed read-only transactions.
+        assert(self.txs.items.len <= 1, comptime "only one transaction need to be released", .{});
         var minid: u64 = std.math.maxInt(u64);
         for (self.txs.items) |_trx| {
             if (_trx.meta.txid < minid) {
@@ -622,7 +620,7 @@ pub const DB = struct {
     pub fn update(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
         const trxID = trx.getID();
-        std.log.info("Star a write transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        std.log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer std.log.info("End a write transaction, txid: {}", .{trxID});
 
         // Mark as a managed tx so that the inner function cannot manually commit.
@@ -695,6 +693,7 @@ pub const DB = struct {
 
     /// mustCheck runs a consistency check on the database and panics if any errors are found.
     pub fn mustCheck(self: *Self) void {
+        std.log.info("start to check the database consistency", .{});
         const updateFn = struct {
             fn update(_db: *DB, trx: *TX) Error!void {
                 trx.check() catch |e| {

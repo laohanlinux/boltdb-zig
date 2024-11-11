@@ -127,6 +127,15 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
+    /// Moves the cursor to the next item in the bucket and returns its key and value.
+    pub fn tryNext(self: *Self) ?KeyPair {
+        const keyValueRet = self.next();
+        if (keyValueRet.isNotFound()) {
+            return null;
+        }
+        return keyValueRet;
+    }
+
     /// Moves the cursor to the previous item in the bucket and returns its key and value.
     /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
     /// The returned key and value are only valid for the life of the transaction.
@@ -179,6 +188,15 @@ pub const Cursor = struct {
             return KeyPair.init(keyValueRet.key, null);
         }
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
+    }
+
+    /// Returns the current key and value without moving the cursor.
+    pub fn getKeyPair(self: *Self) ?KeyValueRef {
+        const keyValueRet = self.keyValue();
+        if (keyValueRet.key == null) {
+            return null;
+        }
+        return keyValueRet;
     }
 
     /// Removes the current key/value under the cursor from the bucket.

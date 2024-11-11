@@ -223,9 +223,7 @@ pub const Bucket = struct {
         // Update transaction statistics.
         self.tx.?.stats.cursor_count += 1;
         // Allocate and return a cursor.
-        // const allocator = self.allocator;
         return Cursor.init(self);
-        // return Cursor.init(self.allocator, self);
     }
 
     /// Retrives a nested bucket by name.
@@ -295,7 +293,6 @@ pub const Bucket = struct {
         } else {
             std.log.info("The bucket is not inline, pgid: {}", .{child._b.?.root});
         }
-        // self.tx.?.autoFreeNodes.addAutoFreeBytes(alignedValue);
         return child;
     }
 

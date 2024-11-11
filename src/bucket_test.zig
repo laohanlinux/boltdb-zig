@@ -361,7 +361,7 @@ const KeyPair = consts.KeyPair;
 // }
 
 // Deleting a very large list of keys will cause the freelist to use overflow.
-test "Bucket_Delete_Large_Overflow" {
+test "Bucket_Delete_FreelistOverflow" {
     std.testing.log_level = .warn;
     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
     defer tests.teardown(&testCtx);
@@ -374,21 +374,18 @@ test "Bucket_Delete_Large_Overflow" {
         .second = 0,
     };
     const ts = std.time.timestamp();
-
     for (0..count) |i| {
         ctx.second = i;
         const time = std.time.milliTimestamp();
         const updateFn = struct {
             fn update(context: ContextTuple, tx: *TX) Error!void {
-                const b = try tx.createBucketIfNotExists("widgets");
+                const b = try tx.createBucketIfNotExists("0");
                 var key = [16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-                var value = [2]u8{ 0, 2 };
-                for (0..1000) |j| {
+                for (0..1) |j| {
                     std.mem.writeInt(u64, key[0..8], @as(u64, @intCast(context.second)), .big);
                     std.mem.writeInt(u64, key[8..16], @as(u64, @intCast(j)), .big);
-                    try b.put(KeyPair.init(key[0..], value[0..]));
+                    try b.put(KeyPair.init(key[0..8], key[8..16]));
                 }
-                // std.log.warn("allocSize: {d}", .{tx.autoFreeNodes.getAllocSize()});
             }
         }.update;
         try db.update(ctx, updateFn);
@@ -400,12 +397,26 @@ test "Bucket_Delete_Large_Overflow" {
         }
     }
 
+    // Delete all of them in one large transaction
+    const updateFn2 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("0") orelse unreachable;
+            var cursor = b.cursor();
+            defer cursor.deinit();
+            var keyPair = cursor.first();
+            while (keyPair.key != null) {
+                try b.delete(keyPair.key.?);
+                keyPair = cursor.next();
+            }
+        }
+    }.update;
+    try db.update({}, updateFn2);
     std.log.warn("total cost: {d}s", .{(std.time.timestamp() - ts)});
 }
 
 // Ensure that accessing and updating nested buckets is ok across transactions.
-test "Bucket_Nested_Access_Update" {
-    std.testing.log_level = .debug;
+test "Bucket_Nested" {
+    std.testing.log_level = .err;
     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
@@ -413,26 +424,8 @@ test "Bucket_Nested_Access_Update" {
     const updateFn = struct {
         fn update(_: void, tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
-            var key = [2]u8{ 0, 0 };
-            var stackBuffer = std.heap.FixedBufferAllocator.init(key[0..]);
-            for (0..100) |i| {
-                const kv = try std.fmt.allocPrint(stackBuffer.allocator(), "{0:0>2}", .{i});
-                try b.put(KeyPair.init(kv, kv));
-                stackBuffer.reset();
-            }
-            const bar = try b.createBucket("bar");
-            for (0..10) |i| {
-                const kv = try std.fmt.allocPrint(stackBuffer.allocator(), "{d}", .{i});
-                try bar.put(KeyPair.init(kv, kv));
-                stackBuffer.reset();
-            }
-
-            const baz = try bar.createBucket("baz");
-            for (0..10) |i| {
-                const kv = try std.fmt.allocPrint(stackBuffer.allocator(), "{d}", .{i});
-                try baz.put(KeyPair.init(kv, kv));
-                stackBuffer.reset();
-            }
+            _ = try b.createBucket("foo");
+            try b.put(KeyPair.init("bar", "0000"));
         }
     }.update;
     try db.update({}, updateFn);

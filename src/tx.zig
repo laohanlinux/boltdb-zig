@@ -197,11 +197,10 @@ pub const TX = struct {
     /// Executes a function for each bucket in the root.
     /// If the provided function returns an error then the iteration is stopped and
     /// the error is returned to the caller.
-    pub fn forEach(self: *Self, context: anytype, f: fn (@TypeOf(context), name: []const u8, b: ?*Bucket) Error!void) Error!void {
+    pub fn forEach(self: *Self, context: anytype, f: fn (@TypeOf(context), name: []const u8) Error!void) Error!void {
         const travel = struct {
             fn inner(ctx: @TypeOf(context), key: []const u8, _: ?[]const u8) Error!void {
-                const b = ctx._tx.getBucket(key);
-                return f(ctx, key, b);
+                return f(ctx, key);
             }
         };
         return self.root.forEachKeyValue(context, travel.inner);
@@ -514,7 +513,7 @@ pub const TX = struct {
             const isReachable = reachable.contains(i);
             if (!isReachable and !freed.contains(i)) {
                 std.log.err("page {}: unreachable unfreed", .{i});
-                // return Error.NotPassConsistencyCheck;
+                return Error.NotPassConsistencyCheck;
             }
         }
         std.log.info("consistency check done", .{});
@@ -532,8 +531,9 @@ pub const TX = struct {
             reachable: *std.AutoHashMap(PgidType, *const Page),
             freed: *std.AutoHashMap(PgidType, bool),
             _tx: *Self,
+            parentBucket: *bucket.Bucket,
         };
-        const ctx = Context{ .reachable = reachable, .freed = freed, ._tx = self };
+        const ctx = Context{ .reachable = reachable, .freed = freed, ._tx = self, .parentBucket = b };
         b.tx.?.forEachPage(
             b._b.?.root,
             0,
@@ -550,6 +550,7 @@ pub const TX = struct {
                             util.panicFmt("page {}: multiple references to the same page", .{id});
                         }
                         context.reachable.put(id, p) catch unreachable;
+                        std.log.info("add page to reachable: {}", .{id});
                     }
                     // We should only encounter un-freed leaf and branch pages.
                     if (context.freed.contains(p.id)) {
@@ -563,13 +564,12 @@ pub const TX = struct {
 
         // Check each bucket within this bucket.
         return self.forEach(ctx, struct {
-            fn inner(context: Context, name: []const u8, b1: ?*Bucket) Error!void {
+            fn inner(context: Context, name: []const u8) Error!void {
                 std.log.debug("\t<<<check bucket:[{s}] start>>>", .{name});
-                const child = b1.?.getBucket(name);
+                const child = context.parentBucket.getBucket(name);
                 if (child) |childBucket| {
                     try childBucket.tx.?.checkBucket(childBucket, context.reachable, context.freed);
                 }
-
                 std.log.debug("\t>>>check bucket:[{s}] done<<<", .{name});
                 return;
             }
