@@ -354,7 +354,7 @@ pub const Bucket = struct {
     /// Deletes a bucket at the give key.
     /// Returns an error if the bucket does not exists, or if the key represents a non-bucket value.
     pub fn deleteBucket(self: *Self, key: []const u8) Error!void {
-        if (self.tx.db == null) {
+        if (self.tx.?.db == null) {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
             return Error.TxNotWriteable;
@@ -366,9 +366,12 @@ pub const Bucket = struct {
         const keyPairRef = c._seek(key);
 
         // Return an error if the bucket dosn't exist or is not a bucket.
-        if (!std.mem.eql(u8, key, keyPairRef.first)) {
+        if (keyPairRef.key == null) {
             return Error.BucketNotFound;
-        } else if (keyPairRef.third & consts.BucketLeafFlag == 0) {
+        }
+        if (!std.mem.eql(u8, key, keyPairRef.key.?)) {
+            return Error.BucketNotFound;
+        } else if (keyPairRef.flag & consts.BucketLeafFlag == 0) {
             return Error.IncompactibleValue;
         }
 
@@ -376,10 +379,10 @@ pub const Bucket = struct {
         const child = self.getBucket(key).?;
         try child.forEach(traveBucket);
         // Remove cached copy. TODO memory leak
-        _ = self.buckets.remove(key);
+        _ = self.buckets.?.remove(key);
 
         // Delete the node if we have a matching key.
-        c.node().?.del(key);
+        _ = c.node().?.del(key);
     }
 
     /// Retrives the value for a key in the bucket.
@@ -416,11 +419,11 @@ pub const Bucket = struct {
             return Error.TxClosed;
         } else if (!self.tx.?.writable) {
             return Error.TxNotWriteable;
-        } else if (keyPair.key.?.len == 0) {
+        } else if (keyPair.key == null or keyPair.key.?.len == 0) {
             return Error.KeyRequired;
         } else if (keyPair.key.?.len > consts.MaxKeySize) {
             return Error.KeyTooLarge;
-        } else if (keyPair.value.?.len > consts.MaxValueSize) {
+        } else if (keyPair.value != null and keyPair.value.?.len > consts.MaxValueSize) {
             return Error.ValueTooLarge;
         }
 
@@ -490,7 +493,6 @@ pub const Bucket = struct {
 
         // Increment and return the sequence.
         self._b.?.sequence = v;
-        return null;
     }
 
     /// Returns an autoincrementing integer for the bucket.
@@ -517,19 +519,35 @@ pub const Bucket = struct {
     /// the error is returned to the caller. The provided function must not modify
     /// the bucket; this will result in undefined behavior.
     pub fn forEach(self: *Self, travel: fn (bt: *Bucket, keyPairRef: *const consts.KeyPair) Error!void) Error!void {
+        return self.forEachContext({}, travel);
+    }
+
+    /// Executes a function for each key/value pair in a bucket with a context.
+    pub fn forEachContext(self: *Self, context: anytype, comptime travel: fn (@TypeOf(context), bt: *Bucket, keyPairRef: *const consts.KeyPair) Error!void) Error!void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         }
-        const c = self.cursor();
+        var c = self.cursor();
+        defer c.deinit();
         var keyPairRef = c.first();
         while (keyPairRef.key != null) {
-            try travel(self, &keyPairRef);
+            try travel(context, self, &keyPairRef);
             keyPairRef = c.next();
         }
-        return;
     }
 
-    pub fn forEachKeyValue(self: *Self, context: anytype, comptime travel: fn (@TypeOf(context), key: []const u8, value: ?[]const u8) Error!void) Error!void {
+    /// Executes a function for each key/value pair in a bucket.
+    pub fn forEachKeyValue(self: *Self, comptime travel: fn (key: []const u8, value: ?[]const u8) Error!void) Error!void {
+        const ctx = struct {
+            fn travelFn(_: void, key: []const u8, value: ?[]const u8) Error!void {
+                try travel(key, value);
+            }
+        }.travelFn;
+        return self.forEachKeyValueContext({}, ctx);
+    }
+
+    /// Executes a function for each key/value pair in a bucket with a context.
+    pub fn forEachKeyValueContext(self: *Self, context: anytype, travel: fn (@TypeOf(context), key: []const u8, value: ?[]const u8) Error!void) Error!void {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
         }
@@ -538,10 +556,8 @@ pub const Bucket = struct {
         var keyPairRef = c.first();
         while (keyPairRef.key != null) {
             try travel(context, keyPairRef.key.?, keyPairRef.value);
-            std.log.debug("forEachKeyValue: {any}", .{c.stack.items});
             keyPairRef = c.next();
         }
-        return;
     }
 
     /// Return stats on a bucket.
@@ -1051,7 +1067,6 @@ pub const BucketStats = struct {
 // Recursively deletes all child buckets of a bucket.
 fn traveBucket(bucket: *Bucket, keyPair: *const consts.KeyPair) Error!void {
     if (keyPair.value == null) {
-        try bucket.deleteBucket(keyPair.key);
+        try bucket.deleteBucket(keyPair.key.?);
     }
-    return null;
 }

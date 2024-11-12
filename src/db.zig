@@ -639,6 +639,29 @@ pub const DB = struct {
         try trx.commit();
     }
 
+    /// Executes a function within the context of a read-write managed transaction.
+    // pub fn updateContext(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
+    //     const trx = try self.begin(true);
+    //     const trxID = trx.getID();
+    //     std.log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+    //     defer std.log.info("End a write transaction, txid: {}", .{trxID});
+
+    //     // Mark as a managed tx so that the inner function cannot manually commit.
+    //     trx.managed = true;
+
+    //     // If an errors is returned from the function then rollback and return error.
+    //     execFn(context, trx) catch |err| {
+    //         trx.managed = false;
+    //         trx.rollback() catch unreachable;
+    //         std.log.info("after execute transaction commit handle", .{});
+    //         return err;
+    //     };
+    //     trx.managed = false;
+    //     std.log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+    //     defer trx.destroy();
+    //     try trx.commit();
+    // }
+
     /// Executes a function within the context of a managed read-only transaction.
     /// Any error that is returned from the function is returned from the view() method.
     ///

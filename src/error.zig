@@ -25,8 +25,10 @@ pub const Error = error{
     // Below are the mmap errors
     MMapTooLarge,
 
-    //
+    // Memory allocation error
     OutOfMemory,
+    // Consistency check
     NotPassConsistencyCheck,
+    // File IO error
     FileIOError,
 };

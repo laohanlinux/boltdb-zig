@@ -6,6 +6,7 @@ const std = @import("std");
 const Cursor = @import("cursor.zig").Cursor;
 const assert = @import("util.zig").assert;
 const KeyPair = consts.KeyPair;
+const Bucket = @import("bucket.zig").Bucket;
 
 // Ensure that a bucket that gets a non-existent key returns nil.
 // test "Bucket_Get_NonExistent" {
@@ -430,4 +431,557 @@ test "Bucket_Nested" {
     }.update;
     try db.update({}, updateFn);
     db.mustCheck();
+
+    // Update widgets/bar.
+    const updateFn2 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets") orelse unreachable;
+            try b.put(KeyPair.init("bar", "xxxx"));
+        }
+    }.update;
+    try db.update({}, updateFn2);
+    db.mustCheck();
+    // Cause a split.
+    const updateFn3 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets") orelse unreachable;
+            for (0..10000) |i| {
+                const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+                const value = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+                try b.put(KeyPair.init(key, value));
+                tx.allocator.free(key);
+                tx.allocator.free(value);
+            }
+        }
+    }.update;
+    try db.update({}, updateFn3);
+    db.mustCheck();
+
+    // Insert into widgets/foo/baz.
+    const updateFn4 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets") orelse unreachable;
+            const b2 = b.getBucket("foo") orelse unreachable;
+            try b2.put(KeyPair.init("baz", "yyyy"));
+        }
+    }.update;
+    try db.update({}, updateFn4);
+    db.mustCheck();
+
+    // Verify.
+    const viewFn = struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets") orelse unreachable;
+            const b2 = b.getBucket("foo") orelse unreachable;
+            const value = b2.get("baz");
+            assert(std.mem.eql(u8, "yyyy", value.?), "the value is not equal", .{});
+            const value2 = b.get("bar");
+            assert(std.mem.eql(u8, "xxxx", value2.?), "the value is not equal", .{});
+            for (0..10000) |i| {
+                const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+                const gotValue = b.get(key);
+                const expectValue = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+                assert(std.mem.eql(u8, expectValue, gotValue.?), "the value is not equal", .{});
+                tx.allocator.free(key);
+                tx.allocator.free(expectValue);
+            }
+        }
+    }.view;
+    try db.view({}, viewFn);
+}
+
+// Ensure that deleting a bucket using Delete() returns an error.
+test "Bucket_Delete_Bucket" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            _ = try b.createBucket("foo");
+            b.delete("foo") catch |err| {
+                assert(err == Error.IncompactibleValue, comptime "the error is not IncompatibleValue", .{});
+            };
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that deleting a key on a read-only bucket returns an error.
+test "Bucket_Delete_ReadOnly" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            _ = try tx.createBucket("widgets");
+        }
+    }.update;
+    try db.update({}, updateFn);
+
+    const viewFn = struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets").?;
+            b.delete("bar") catch |err| {
+                assert(err == Error.TxNotWriteable, comptime "the error is not TxNotWriteable", .{});
+            };
+        }
+    }.view;
+    try db.view({}, viewFn);
+}
+
+// Ensure that a deleting value while the transaction is closed returns an error.
+test "Bucket_Delete_TxClosed" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    {
+        const tx = try db.begin(true);
+        const b = try tx.createBucket("widgets");
+        _ = b; // autofix
+        try tx.rollback();
+    }
+}
+
+// Ensure that deleting a bucket causes nested buckets to be deleted.
+test "Bucket_DeleteBucket_Nested" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const widgets = try tx.createBucket("widgets");
+            const foo = try widgets.createBucket("foo");
+            const bar = try foo.createBucket("bar");
+            try bar.put(KeyPair.init("baz", "bat"));
+            const widgets2 = tx.getBucket("widgets").?;
+            try widgets2.deleteBucket("foo");
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that deleting a bucket causes nested buckets to be deleted after they have been committed.
+test "Bucket_DeleteBucket_Nested2" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const widgets = try tx.createBucket("widgets");
+            const foo = try widgets.createBucket("foo");
+            const bar = try foo.createBucket("bar");
+            try bar.put(KeyPair.init("baz", "bat"));
+        }
+    }.update;
+    try db.update({}, updateFn);
+
+    const updateFn2 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const widgets = tx.getBucket("widgets").?;
+            const foo = widgets.getBucket("foo") orelse unreachable;
+            const bar = foo.getBucket("bar") orelse unreachable;
+            const baz = bar.get("baz");
+            assert(std.mem.eql(u8, "bat", baz.?), "the baz value is not equal", .{});
+            try tx.deleteBucket("widgets");
+        }
+    }.update;
+    try db.update({}, updateFn2);
+
+    const viewFn = struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const widgets = tx.getBucket("widgets");
+            assert(widgets == null, "the widgets bucket is not null", .{});
+        }
+    }.view;
+    try db.view({}, viewFn);
+}
+
+// Ensure that deleting a child bucket with multiple pages causes all pages to get collected.
+// NOTE: Consistency check in bolt_test.DB.Close() will panic if pages not freed properly.
+test "Bucket_DeleteBucket_MultiplePages" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            const foo = try b.createBucket("foo");
+            for (0..1000) |i| {
+                const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+                const value = std.fmt.allocPrint(tx.allocator, "{0:0>100}", .{i}) catch unreachable;
+                try foo.put(KeyPair.init(key, value));
+                tx.allocator.free(key);
+                tx.allocator.free(value);
+            }
+        }
+    }.update;
+    try db.update({}, updateFn);
+
+    const updateFn2 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            try tx.deleteBucket("widgets");
+        }
+    }.update;
+    try db.update({}, updateFn2);
+}
+
+// Ensure that a simple value retrieved via Bucket() returns a nil.
+test "Bucket_Bucket_IncompatibleValue" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            try b.put(KeyPair.init("foo", "bar"));
+            const foo = tx.getBucket("widgets").?.getBucket("foo");
+            assert(foo == null, "the foo bucket is not null", .{});
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that creating a bucket on an existing non-bucket key returns an error.
+test "Bucket_CreateBucket_IncompatibleValue" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            try b.put(KeyPair.init("foo", "bar"));
+            _ = b.createBucket("foo") catch |err| {
+                assert(err == Error.IncompactibleValue, comptime "the error is not IncompatibleValue", .{});
+            };
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that deleting a bucket on an existing non-bucket key returns an error.
+test "Bucket_DeleteBucket_IncompatibleValue" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            try b.put(KeyPair.init("foo", "bar"));
+            tx.getBucket("widgets").?.deleteBucket("foo") catch |err| {
+                assert(err == Error.IncompactibleValue, comptime "the error is not IncompatibleValue", .{});
+            };
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure bucket can set and update its sequence number.
+test "Bucket_Sequence" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            const v = b.sequence();
+            assert(v == 0, "the sequence number is not 0", .{});
+            try b.setSequence(1000);
+            const v2 = b.sequence();
+            assert(v2 == 1000, "the sequence number is not 1000", .{});
+        }
+    }.update;
+    try db.update({}, updateFn);
+    // Verify sequence in separate transaction.
+    const viewFn = struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets").?;
+            const v = b.sequence();
+            assert(v == 1000, "the sequence number is not 1000", .{});
+        }
+    }.view;
+    try db.view({}, viewFn);
+}
+
+// Ensure that a bucket can return an autoincrementing sequence.
+test "Bucket_NextSequence" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const widgets = try tx.createBucket("widgets");
+            const woojits = try widgets.createBucket("woojits");
+            const v = try widgets.nextSequence();
+            assert(v == 1, "the sequence number is not 1", .{});
+            const v2 = try widgets.nextSequence();
+            assert(v2 == 2, "the sequence number is not 2", .{});
+            const v3 = try woojits.nextSequence();
+            assert(v3 == 1, "the sequence number is not 1", .{});
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that a bucket will persist an autoincrementing sequence even if its
+// the only thing updated on the bucket.
+// https://github.com/boltdb/bolt/issues/296
+test "Bucket_NextSequence_Persist" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            _ = b; // autofix
+        }
+    }.update;
+    try db.update({}, updateFn);
+    const updateFn2 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets").?;
+            const v = try b.nextSequence();
+            assert(v == 1, "the sequence number is not 1", .{});
+        }
+    }.update;
+    try db.update({}, updateFn2);
+    const updateFn3 = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets").?;
+            const v = try b.nextSequence();
+            assert(v == 2, "the sequence number is not 2", .{});
+        }
+    }.update;
+    try db.update({}, updateFn3);
+}
+
+// Ensure that retrieving the next sequence on a read-only bucket returns an error.
+test "Bucket_NextSequence_ReadOnly" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            _ = tx.createBucket("widgets") catch unreachable;
+        }
+    }.update;
+    try db.update({}, updateFn);
+
+    const viewFn = struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const b = tx.getBucket("widgets").?;
+            _ = b.nextSequence() catch |err| {
+                assert(err == Error.TxNotWriteable, comptime "the error is not TxNotWriteable", .{});
+            };
+        }
+    }.view;
+    try db.view({}, viewFn);
+}
+
+// Ensure that retrieving the next sequence for a bucket on a closed database returns an error.
+test "Bucket_NextSequence_ClosedDB" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const tx = try db.begin(true);
+    const b = try tx.createBucket("widgets");
+    _ = b; // autofix
+    try tx.rollback();
+    // _ = b.nextSequence() catch |err| {
+    //     assert(err == Error.TxClosed, comptime "the error is not TxClosed", .{});
+    // };
+}
+
+// Ensure a user can loop over all key/value pairs in a bucket.
+test "Bucket_ForEach" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            var b = try tx.createBucket("widgets");
+            try b.put(KeyPair.init("foo", "0000"));
+            try b.put(KeyPair.init("bar", "0001"));
+            try b.put(KeyPair.init("baz", "0002"));
+            const travelCtx = struct {
+                i: u32 = 0,
+            };
+            var ctx = travelCtx{};
+            const travelFn = struct {
+                fn travel(_ctx: *travelCtx, _: *Bucket, keyPairRef: *const consts.KeyPair) Error!void {
+                    if (_ctx.i == 0) {
+                        assert(std.mem.eql(u8, keyPairRef.key.?, "bar"), "the key is not bar", .{});
+                        assert(std.mem.eql(u8, keyPairRef.value.?, "0001"), "the value is not 0001", .{});
+                    } else if (_ctx.i == 1) {
+                        assert(std.mem.eql(u8, keyPairRef.key.?, "baz"), "the key is not baz", .{});
+                        assert(std.mem.eql(u8, keyPairRef.value.?, "0002"), "the value is not 0002", .{});
+                    } else if (_ctx.i == 2) {
+                        assert(std.mem.eql(u8, keyPairRef.key.?, "foo"), "the key is not foo", .{});
+                        assert(std.mem.eql(u8, keyPairRef.value.?, "0000"), "the value is not 0000", .{});
+                    }
+                    _ctx.*.i += 1;
+                }
+            }.travel;
+            b.forEachContext(&ctx, travelFn) catch unreachable;
+            assert(ctx.i == 3, "the number of items is not 3", .{});
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure a database can stop iteration early.
+test "Bucket_ForEach_ShortCircuit" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            try b.put(KeyPair.init("bar", "0000"));
+            try b.put(KeyPair.init("baz", "0000"));
+            try b.put(KeyPair.init("foo", "0000"));
+
+            const travelCtx = struct {
+                i: u32 = 0,
+            };
+            var ctx = travelCtx{};
+            const travelFn = struct {
+                fn travel(_ctx: *travelCtx, _: *Bucket, keyPairRef: *const consts.KeyPair) Error!void {
+                    _ctx.*.i += 1;
+                    if (std.mem.eql(u8, keyPairRef.key.?, "baz")) {
+                        return Error.NotPassConsistencyCheck;
+                    }
+                }
+            }.travel;
+            tx.getBucket("widgets").?.forEachContext(&ctx, travelFn) catch |err| {
+                assert(err == Error.NotPassConsistencyCheck, comptime "the error is not NotPassConsistencyCheck", .{});
+            };
+            assert(ctx.i == 2, "the number of items is not 2", .{});
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that looping over a bucket on a closed database returns an error.
+test "Bucket_ForEach_Closed" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const tx = try db.begin(true);
+    _ = try tx.createBucket("widgets");
+    try tx.rollback();
+}
+// Ensure that an error is returned when inserting with an empty key.
+test "Bucket_Put_EmptyKey" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(_: void, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            b.put(KeyPair.init("", "0000")) catch |err| {
+                assert(err == Error.KeyRequired, comptime "the error is not KeyRequired", .{});
+            };
+            b.put(KeyPair.init(null, "0000")) catch |err| {
+                assert(err == Error.KeyRequired, comptime "the error is not KeyRequired", .{});
+            };
+        }
+    }.update;
+    try db.update({}, updateFn);
+}
+
+// Ensure that an error is returned when inserting with a key that's too large.
+test "Bucket_Put_KeyTooLarge" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const updateFn = struct {
+        fn update(ctx: tests.TestContext, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            const key = ctx.repeat('a', consts.MaxKeySize + 1);
+            defer ctx.allocator.free(key);
+            b.put(KeyPair.init(key, "bar")) catch |err| {
+                assert(err == Error.KeyTooLarge, comptime "the error is not KeyTooLarge", .{});
+            };
+        }
+    }.update;
+    try db.update(testCtx, updateFn);
+}
+
+// Ensure that an error is returned when inserting a value that's too large.
+test "Bucket_Put_ValueTooLarge" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    // Skip this test on DroneCI because the machine is resource constrained.
+    for (std.os.environ) |env| {
+        const envStr = std.mem.span(env); // Convert null-terminated pointer to slice
+        if (std.mem.eql(u8, envStr, "DRONE=true")) {
+            std.debug.print("Skipping Bucket_Put_ValueTooLarge on DroneCI\n", .{});
+            return;
+        }
+    }
+
+    const updateFn = struct {
+        fn update(ctx: tests.TestContext, tx: *TX) Error!void {
+            const b = try tx.createBucket("widgets");
+            const value = ctx.repeat('a', consts.MaxValueSize + 1);
+            defer ctx.allocator.free(value);
+            b.put(KeyPair.init("foo", value)) catch |err| {
+                assert(err == Error.ValueTooLarge, comptime "the error is not ValueTooLarge", .{});
+            };
+        }
+    }.update;
+    try db.update(testCtx, updateFn);
+}
+
+// Ensure a bucket can calculate stats.
+test "Bucket_Stats" {
+    std.testing.log_level = .err;
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+    const bigKey = "really-big-value";
+    _ = bigKey; // autofix
+
+    for (0..500) |i| {
+        const key = std.fmt.allocPrint(testCtx.allocator, "{0:0>3}", .{i}) catch unreachable;
+        const updateFn = struct {
+            fn update(buf: []u8, tx: *TX) Error!void {
+                const b = try tx.createBucketIfNotExists("widgets");
+                try b.put(KeyPair.init(buf, buf));
+            }
+        }.update;
+
+        try db.update(key, updateFn);
+        testCtx.allocator.free(key);
+    }
+
+    // const updateFn = struct {
+    //     fn update(buf: []u8, tx: *TX) Error!void {
+    //         _ = tx; // autofix
+    //         _ = buf; // autofix
+    //     }
+    // }.update;
+    // try db.update(testCtx, updateFn);
 }

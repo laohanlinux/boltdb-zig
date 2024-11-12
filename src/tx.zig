@@ -202,8 +202,8 @@ pub const TX = struct {
             fn inner(ctx: @TypeOf(context), key: []const u8, _: ?[]const u8) Error!void {
                 return f(ctx, key);
             }
-        };
-        return self.root.forEachKeyValue(context, travel.inner);
+        }.inner;
+        return self.root.forEachKeyValueContext(context, travel);
     }
 
     /// Adds a handler function to be executed after the transaction successfully commits.
