@@ -7,6 +7,8 @@ const PgidType = consts.PgidType;
 const assert = @import("assert.zig").assert;
 const TxId = consts.TxId;
 const Page = page.Page;
+const log = std.log.scoped(.BoltFreeList);
+
 // FreeList represents a list of all pages that are available for allcoation.
 // It also tracks pages that  have been freed but are still in use by open transactions.
 pub const FreeList = struct {
@@ -33,11 +35,11 @@ pub const FreeList = struct {
 
     /// deinit freelist
     pub fn deinit(self: *Self) void {
-        std.log.info("deinit freelist", .{});
+        log.info("deinit freelist", .{});
         defer self.allocator.destroy(self);
         var itr = self.pending.iterator();
         while (itr.next()) |entry| {
-            std.log.info("free pending, txid: {}, ids: {any}", .{ entry.key_ptr.*, entry.value_ptr.items });
+            log.info("free pending, txid: {}, ids: {any}", .{ entry.key_ptr.*, entry.value_ptr.items });
             entry.value_ptr.deinit();
         }
         self.pending.deinit();
@@ -124,7 +126,7 @@ pub const FreeList = struct {
                 }
                 const afterCount = self.ids.items.len;
                 assert(beforeCount == (n + afterCount), "{} != {}", .{ beforeCount, afterCount });
-                std.log.debug("allocate a new page from freelist, pgid: {d}, n: {d}, ids from {any} change to {any}", .{ initial, n, beforeIds, self.ids.items });
+                log.debug("allocate a new page from freelist, pgid: {d}, n: {d}, ids from {any} change to {any}", .{ initial, n, beforeIds, self.ids.items });
                 self.allocator.free(beforeIds);
                 return initial;
             }
@@ -143,7 +145,7 @@ pub const FreeList = struct {
             try self.cache.putNoClobber(id, true);
             try ids.value_ptr.append(id);
         }
-        std.log.debug("after free a page, txid: {}, pending ids: {any}", .{ txid, ids.value_ptr.items });
+        log.debug("after free a page, txid: {}, pending ids: {any}", .{ txid, ids.value_ptr.items });
     }
 
     /// Moves all page ids for a transaction id (or older) to the freelist.
@@ -168,12 +170,12 @@ pub const FreeList = struct {
         defer array.deinit();
         try array.appendNTimes(0, arrayIDs.items.len + self.ids.items.len);
         assert(array.items.len == (arrayIDs.items.len + self.ids.items.len), "array.items.len == (arrayIDs.items.len + self.ids.items.len)", .{});
-        std.log.info("Release a tx's pages, before merge:\t {any} <= [{any}, {any}]", .{ array.items, arrayIDs.items, self.ids.items });
+        log.info("Release a tx's pages, before merge:\t {any} <= [{any}, {any}]", .{ array.items, arrayIDs.items, self.ids.items });
         Self.mergeSortedArray(array.items, arrayIDs.items, self.ids.items);
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
         assert(self.ids.items.len == array.items.len, "self.ids.items.len == array.items.len", .{});
-        std.log.info("Release a tx's pages, after merge:\t {any}", .{self.ids.items});
+        log.info("Release a tx's pages, after merge:\t {any}", .{self.ids.items});
     }
 
     /// Removes the pages from a given pending tx.
@@ -242,7 +244,7 @@ pub const FreeList = struct {
             p.overflow = @as(u32, @intCast(lenids));
             self.copyAll(overflow[1..]);
         }
-        std.log.info("𓃠 after write freelist to page, pgid: {}, ids: {any}", .{ p.id, p.freelistPageElements().? });
+        log.info("𓃠 after write freelist to page, pgid: {}, ids: {any}", .{ p.id, p.freelistPageElements().? });
     }
 
     /// Reads the freelist from a page and filters out pending itmes.

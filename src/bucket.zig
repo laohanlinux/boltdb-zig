@@ -49,7 +49,6 @@ pub const AutoFreeObject = struct {
         const gop = self.autoFreeNodes.getOrPut(node) catch unreachable;
         const ptr = @intFromPtr(node);
         // assert(gop.found_existing == false, "the node({}: 0x{x}, {d}) is already in the auto free nodes", .{ node.pgid, ptr, node.id });
-        // std.log.debug("add node to the auto free nodes, key: {s}, pgid: {d}, ptr: 0x{x}, id: {d}", .{ key, node.pgid, ptr, node.id });
         if (gop.found_existing) {
             std.log.debug("the node({s}, {}: 0x{x}, {d}) is already in the auto free nodes", .{ key, node.pgid, ptr, node.id });
         }
@@ -84,23 +83,12 @@ pub const AutoFreeObject = struct {
             while (it.next()) |node| {
                 const ptr = @intFromPtr(node);
                 node.*.deinit();
-                // self.allocator.destroy(node.*);
                 self.freePtrs.put(ptr, 1) catch unreachable;
             }
             self.autoFreeNodes.deinit();
         }
 
         self.freePtrs.deinit();
-
-        // {
-        //     var it = self.autoFreeBytes.iterator();
-        //     while (it.next()) |entry| {
-        //         std.log.info("free auto free bytes, ptr: 0x{x}", .{@intFromPtr(entry.value_ptr.*.ptr)});
-        //         allocator.free(entry.value_ptr.*);
-        //     }
-        //     self.autoFreeBytes.deinit();
-        // }
-        // std.log.info("auto free object deinit, allocSize: {d}", .{self.allocSize});
     }
 };
 
@@ -519,7 +507,11 @@ pub const Bucket = struct {
     /// the error is returned to the caller. The provided function must not modify
     /// the bucket; this will result in undefined behavior.
     pub fn forEach(self: *Self, travel: fn (bt: *Bucket, keyPairRef: *const consts.KeyPair) Error!void) Error!void {
-        return self.forEachContext({}, travel);
+        return self.forEachContext({}, (struct {
+            fn f(_: void, bt: *Bucket, keyPairRef: *const consts.KeyPair) Error!void {
+                return travel(bt, keyPairRef);
+            }
+        }).f);
     }
 
     /// Executes a function for each key/value pair in a bucket with a context.

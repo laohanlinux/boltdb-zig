@@ -7,6 +7,14 @@ const consts = @import("consts.zig");
 const PgidType = consts.PgidType;
 const Page = page.Page;
 const assert = @import("assert.zig").assert;
+const log = std.log.scoped(.BoltNode);
+const LoggerContext = struct {
+    id: u64,
+    pgid: u64,
+    isLeaf: bool,
+    ptr: u64,
+};
+const Logger = @import("log.zig").Logger(LoggerContext).init(.BoltNode);
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
@@ -56,17 +64,10 @@ pub const Node = struct {
             return;
         }
         self.isFreed = true;
-        // if (self.bucket) |inBucket| {
-        //     if (inBucket._b) |inBucketRoot| {
-        //         if (inBucketRoot.root == 0) {
-        //             std.log.debug("this is inline bucket", .{});
-        //         }
-        //     }
-        // }
         // TODO, if the key is equal the first key of the node, we should be not free the key
         // because the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
         if (!self.isFirstKeyReference()) {
-            std.log.info("free key, ptr: 0x{x}", .{@intFromPtr(self.key.?.ptr)});
+            log.info("free key, ptr: 0x{x}", .{@intFromPtr(self.key.?.ptr)});
         }
 
         self.inodes.clearAndFree();
@@ -83,13 +84,6 @@ pub const Node = struct {
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // The is a inline node, so we should free the inline node memory
-        // if (self.bucket) |inBucket| {
-        //     if (inBucket._b) |inBucketRoot| {
-        //         if (inBucketRoot.root == 0) {
-        //             std.log.debug("this is inline bucket", .{});
-        //         }
-        //     }
-        // }
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (0..self.inodes.items.len) |i| {
             self.inodes.items[i].deinit(null);
@@ -254,7 +248,7 @@ pub const Node = struct {
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
-        self.safeCheck();
+        // self.safeCheck();
         // std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
         return inodeRef;
     }
@@ -402,14 +396,14 @@ pub const Node = struct {
             // a.?.printKeysString();
             // If we can't split then exit the loop.
             if (b == null) {
-                std.log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
+                log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
                 break;
             } else {
                 const aFirstKey = a.?.inodes.items[0].key.?;
                 const aLastKey = a.?.inodes.items[a.?.inodes.items.len - 1].key.?;
                 const bFirstKey = b.?.inodes.items[0].key.?;
                 const bLastKey = b.?.inodes.items[b.?.inodes.items.len - 1].key.?;
-                std.log.info("the node[ a=>[len:{d}, key:{any}-{any}], b=>[len:{d}, key:{any}-{any}]] is need to split, isLeaf: {}", .{ a.?.inodes.items.len, aFirstKey, aLastKey, b.?.inodes.items.len, bFirstKey, bLastKey, a.?.isLeaf });
+                log.info("the node[ a=>[len:{d}, key:{any}-{any}], b=>[len:{d}, key:{any}-{any}]] is need to split, isLeaf: {}", .{ a.?.inodes.items.len, aFirstKey, aLastKey, b.?.inodes.items.len, bFirstKey, bLastKey, a.?.isLeaf });
             }
 
             // Set node to be so it gets split on the next function.
@@ -464,7 +458,7 @@ pub const Node = struct {
 
         // Split inodes across two nodes.
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch |err| {
-            std.log.err("failed to append slice, _splitIndex: {d}, inodes len: {d}, next nodes len: {d}, err: {}", .{ _splitIndex, self.inodes.items.len, next.inodes.items.len, err });
+            log.err("failed to append slice, _splitIndex: {d}, inodes len: {d}, next nodes len: {d}, err: {}", .{ _splitIndex, self.inodes.items.len, next.inodes.items.len, err });
             unreachable;
         };
         // shrink self.inodes to _splitIndex
@@ -512,9 +506,12 @@ pub const Node = struct {
     /// Returns and error if dirty pages cannot be allocated
     pub fn spill(self: *Self) !void {
         if (self.spilled) {
+            log.debug("the node has already spilled, pgid: {d}", .{self.pgid});
             return;
         }
-        std.log.info("\t.spill node: {d}.", .{self.pgid});
+        const pgid = self.pgid;
+        log.info("\t.start spill node: {d}, isLeaf: {}", .{ pgid, self.isLeaf });
+        defer log.info("\t.end spill node: {d}", .{pgid});
         const _tx = self.bucket.?.tx.?;
         const _db = _tx.getDB();
 
@@ -544,13 +541,13 @@ pub const Node = struct {
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
         defer nodes.deinit();
-        // std.log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.len, self.key orelse "empty" });
+        log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.items.len, self.key orelse "empty" });
         for (nodes.items, 0..) |node, i| {
-            _ = i; // autofix
+            log.debug("spill node: {d}, count:{}, index: {d}", .{ node.pgid, nodes.items.len, i });
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
-                std.log.debug("free a page to freelist, pgid: {}", .{node.pgid});
+                log.debug("free a page to freelist, pgid: {}", .{node.pgid});
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 // reset the pgid to 0, so the node will be a new node.
                 node.pgid = 0;
@@ -572,7 +569,7 @@ pub const Node = struct {
                 _ = parent.put(oldKey, newKey, null, node.pgid, 0);
                 node.key = node.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
-                std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
+                log.debug("spill a node from parent, parent's pgid: {d}, parent's inodes len: {d}, children len: {d}, node's pgid: {d}, key: {s}", .{ parent.pgid, parent.inodes.items.len, parent.children.items.len, node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
 
             // Update the statistics.
@@ -585,6 +582,7 @@ pub const Node = struct {
             self.children.clearAndFree();
             return self.parent.?.spill();
         }
+        log.debug("Try to spill parent, pgid: {d}", .{self.pgid});
     }
 
     /// Attempts to combine the node with sibling nodes if the node fill
@@ -851,7 +849,19 @@ pub const Node = struct {
         return .{ .index = left, .exact = false };
     }
 
+    inline fn withContextLog(self: *const Self, ctx: ?LoggerContext) Logger {
+        if (ctx) |_ctx| {
+            return Logger.with(_ctx);
+        }
+        return Logger.with(self.getCtx());
+    }
+
+    inline fn getCtx(self: *const Self) LoggerContext {
+        return .{ .id = self.id, .pgid = self.pgid, .isLeaf = self.isLeaf, .ptr = self.nodePtrInt() };
+    }
+
     fn safeCheck(self: *const Self) void {
+        defer log.debug("pass safe check node: {d}, inodes len: {d}", .{ self.pgid, self.inodes.items.len });
         for (0..self.inodes.items.len) |i| {
             if (i > 0) {
                 const left = self.inodes.items[i - 1].key.?;

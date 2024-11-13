@@ -181,3 +181,25 @@ fn onCmt2(n: *usize) void {
 //     const index2 = std.sort.binarySearch([]const u8, slice.items[0..], key, cmp.cmp);
 //     assert(index2 == null, "index should be null, but got {any}", .{index2});
 // }
+
+test "iterator" {
+    var list = std.ArrayList(*u8).init(std.testing.allocator);
+    defer list.deinit();
+    defer for (list.items) |item| {
+        std.testing.allocator.destroy(item);
+    };
+    for (0..10) |i| {
+        const ptr = try std.testing.allocator.create(u8);
+        ptr.* = @intCast(i);
+        try list.append(ptr);
+    }
+
+    for (list.items, 0..) |item, i| {
+        item.* = @intCast(2 * i);
+        std.debug.print("{}, {}\n", .{ i, item.* });
+    }
+
+    for (list.items) |item| {
+        std.debug.print("{}\n", .{item.*});
+    }
+}

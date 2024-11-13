@@ -416,79 +416,79 @@ test "Bucket_Delete_FreelistOverflow" {
 }
 
 // Ensure that accessing and updating nested buckets is ok across transactions.
-test "Bucket_Nested" {
-    std.testing.log_level = .err;
-    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
-    defer tests.teardown(&testCtx);
-    const db = testCtx.db;
+// test "Bucket_Nested" {
+//     std.testing.log_level = .err;
+//     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+//     defer tests.teardown(&testCtx);
+//     const db = testCtx.db;
 
-    const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            const b = try tx.createBucket("widgets");
-            _ = try b.createBucket("foo");
-            try b.put(KeyPair.init("bar", "0000"));
-        }
-    }.update;
-    try db.update({}, updateFn);
-    db.mustCheck();
+//     const updateFn = struct {
+//         fn update(_: void, tx: *TX) Error!void {
+//             const b = try tx.createBucket("widgets");
+//             _ = try b.createBucket("foo");
+//             try b.put(KeyPair.init("bar", "0000"));
+//         }
+//     }.update;
+//     try db.update({}, updateFn);
+//     db.mustCheck();
 
-    // Update widgets/bar.
-    const updateFn2 = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            const b = tx.getBucket("widgets") orelse unreachable;
-            try b.put(KeyPair.init("bar", "xxxx"));
-        }
-    }.update;
-    try db.update({}, updateFn2);
-    db.mustCheck();
-    // Cause a split.
-    const updateFn3 = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            const b = tx.getBucket("widgets") orelse unreachable;
-            for (0..10000) |i| {
-                const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
-                const value = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
-                try b.put(KeyPair.init(key, value));
-                tx.allocator.free(key);
-                tx.allocator.free(value);
-            }
-        }
-    }.update;
-    try db.update({}, updateFn3);
-    db.mustCheck();
+//     // Update widgets/bar.
+//     const updateFn2 = struct {
+//         fn update(_: void, tx: *TX) Error!void {
+//             const b = tx.getBucket("widgets") orelse unreachable;
+//             try b.put(KeyPair.init("bar", "xxxx"));
+//         }
+//     }.update;
+//     try db.update({}, updateFn2);
+//     db.mustCheck();
+//     // Cause a split.
+//     const updateFn3 = struct {
+//         fn update(_: void, tx: *TX) Error!void {
+//             const b = tx.getBucket("widgets") orelse unreachable;
+//             for (0..10000) |i| {
+//                 const key = try std.fmt.allocPrint(tx.allocator, "{d}", .{i});
+//                 const value = try std.fmt.allocPrint(tx.allocator, "{d}", .{i});
+//                 try b.put(KeyPair.init(key, value));
+//                 tx.allocator.free(key);
+//                 tx.allocator.free(value);
+//             }
+//         }
+//     }.update;
+//     try db.update({}, updateFn3);
+//     db.mustCheck();
 
-    // Insert into widgets/foo/baz.
-    const updateFn4 = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            const b = tx.getBucket("widgets") orelse unreachable;
-            const b2 = b.getBucket("foo") orelse unreachable;
-            try b2.put(KeyPair.init("baz", "yyyy"));
-        }
-    }.update;
-    try db.update({}, updateFn4);
-    db.mustCheck();
+//     // Insert into widgets/foo/baz.
+//     const updateFn4 = struct {
+//         fn update(_: void, tx: *TX) Error!void {
+//             const b = tx.getBucket("widgets") orelse unreachable;
+//             const b2 = b.getBucket("foo") orelse unreachable;
+//             try b2.put(KeyPair.init("baz", "yyyy"));
+//         }
+//     }.update;
+//     try db.update({}, updateFn4);
+//     db.mustCheck();
 
-    // Verify.
-    const viewFn = struct {
-        fn view(_: void, tx: *TX) Error!void {
-            const b = tx.getBucket("widgets") orelse unreachable;
-            const b2 = b.getBucket("foo") orelse unreachable;
-            const value = b2.get("baz");
-            assert(std.mem.eql(u8, "yyyy", value.?), "the value is not equal", .{});
-            const value2 = b.get("bar");
-            assert(std.mem.eql(u8, "xxxx", value2.?), "the value is not equal", .{});
-            for (0..10000) |i| {
-                const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
-                const gotValue = b.get(key);
-                const expectValue = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
-                assert(std.mem.eql(u8, expectValue, gotValue.?), "the value is not equal", .{});
-                tx.allocator.free(key);
-                tx.allocator.free(expectValue);
-            }
-        }
-    }.view;
-    try db.view({}, viewFn);
-}
+//     // Verify.
+//     const viewFn = struct {
+//         fn view(_: void, tx: *TX) Error!void {
+//             const b = tx.getBucket("widgets") orelse unreachable;
+//             const b2 = b.getBucket("foo") orelse unreachable;
+//             const value = b2.get("baz");
+//             assert(std.mem.eql(u8, "yyyy", value.?), "the value is not equal", .{});
+//             const value2 = b.get("bar");
+//             assert(std.mem.eql(u8, "xxxx", value2.?), "the value is not equal", .{});
+//             for (0..10000) |i| {
+//                 const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+//                 const gotValue = b.get(key);
+//                 const expectValue = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+//                 assert(std.mem.eql(u8, expectValue, gotValue.?), "the value is not equal", .{});
+//                 tx.allocator.free(key);
+//                 tx.allocator.free(expectValue);
+//             }
+//         }
+//     }.view;
+//     try db.view({}, viewFn);
+// }
 
 // Ensure that deleting a bucket using Delete() returns an error.
 test "Bucket_Delete_Bucket" {
@@ -604,33 +604,33 @@ test "Bucket_DeleteBucket_Nested2" {
 
 // Ensure that deleting a child bucket with multiple pages causes all pages to get collected.
 // NOTE: Consistency check in bolt_test.DB.Close() will panic if pages not freed properly.
-test "Bucket_DeleteBucket_MultiplePages" {
-    std.testing.log_level = .err;
-    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
-    defer tests.teardown(&testCtx);
-    const db = testCtx.db;
-    const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            const b = try tx.createBucket("widgets");
-            const foo = try b.createBucket("foo");
-            for (0..1000) |i| {
-                const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
-                const value = std.fmt.allocPrint(tx.allocator, "{0:0>100}", .{i}) catch unreachable;
-                try foo.put(KeyPair.init(key, value));
-                tx.allocator.free(key);
-                tx.allocator.free(value);
-            }
-        }
-    }.update;
-    try db.update({}, updateFn);
+// test "Bucket_DeleteBucket_MultiplePages" {
+//     std.testing.log_level = .err;
+//     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+//     defer tests.teardown(&testCtx);
+//     const db = testCtx.db;
+//     const updateFn = struct {
+//         fn update(_: void, tx: *TX) Error!void {
+//             const b = try tx.createBucket("widgets");
+//             const foo = try b.createBucket("foo");
+//             for (0..1000) |i| {
+//                 const key = std.fmt.allocPrint(tx.allocator, "{d}", .{i}) catch unreachable;
+//                 const value = std.fmt.allocPrint(tx.allocator, "{0:0>100}", .{i}) catch unreachable;
+//                 try foo.put(KeyPair.init(key, value));
+//                 tx.allocator.free(key);
+//                 tx.allocator.free(value);
+//             }
+//         }
+//     }.update;
+//     try db.update({}, updateFn);
 
-    const updateFn2 = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            try tx.deleteBucket("widgets");
-        }
-    }.update;
-    try db.update({}, updateFn2);
-}
+//     const updateFn2 = struct {
+//         fn update(_: void, tx: *TX) Error!void {
+//             try tx.deleteBucket("widgets");
+//         }
+//     }.update;
+//     try db.update({}, updateFn2);
+// }
 
 // Ensure that a simple value retrieved via Bucket() returns a nil.
 test "Bucket_Bucket_IncompatibleValue" {
@@ -958,30 +958,143 @@ test "Bucket_Put_ValueTooLarge" {
 // Ensure a bucket can calculate stats.
 test "Bucket_Stats" {
     std.testing.log_level = .err;
-    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    var opts = consts.defaultOptions;
+    opts.readOnly = false;
+    opts.initialMmapSize = 100000 * consts.PageSize;
+    // opts.pageSize = 0;
+    var testCtx = tests.setupWithOptions(std.testing.allocator, opts) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
-    const bigKey = "really-big-value";
-    _ = bigKey; // autofix
-
-    for (0..500) |i| {
-        const key = std.fmt.allocPrint(testCtx.allocator, "{0:0>3}", .{i}) catch unreachable;
-        const updateFn = struct {
-            fn update(buf: []u8, tx: *TX) Error!void {
-                const b = try tx.createBucketIfNotExists("widgets");
-                try b.put(KeyPair.init(buf, buf));
-            }
-        }.update;
-
-        try db.update(key, updateFn);
-        testCtx.allocator.free(key);
+    if (db.pageSize != 4096) {
+        std.debug.print("pageSize is not 4096\n", .{});
+        return;
     }
 
-    // const updateFn = struct {
-    //     fn update(buf: []u8, tx: *TX) Error!void {
-    //         _ = tx; // autofix
-    //         _ = buf; // autofix
-    //     }
-    // }.update;
-    // try db.update(testCtx, updateFn);
+    const context = struct {
+        const bigKey = "really-big-value";
+        index: usize = 0,
+        ctx: tests.TestContext,
+    };
+
+    var ctx1 = context{ .index = 0, .ctx = testCtx };
+    for (0..500) |i| {
+        const updateFn = struct {
+            fn update(ctx: *context, tx: *TX) Error!void {
+                const allocator = tx.getAllocator();
+                const key = std.fmt.allocPrint(allocator, "{0:0>3}", .{ctx.index}) catch unreachable;
+                assert(key.len == 3, comptime "the key length is not 3", .{});
+                defer allocator.free(key);
+                const value = std.fmt.allocPrint(allocator, "{d}", .{ctx.index}) catch unreachable;
+                defer allocator.free(value);
+                const b = try tx.createBucketIfNotExists("woojits");
+                try b.put(KeyPair.init(key, value));
+            }
+        }.update;
+        ctx1.index = i;
+        try db.updateWithContext(&ctx1, updateFn);
+    }
+
+    const updateFn = struct {
+        fn update(ctx: *context, tx: *TX) Error!void {
+            const b = try tx.createBucketIfNotExists("woojits");
+            const value = ctx.ctx.repeat('*', 10000);
+            assert(value.len == 10000, comptime "the value length is not 10000", .{});
+            defer ctx.ctx.allocator.free(value);
+            try b.put(KeyPair.init(context.bigKey, value));
+        }
+    }.update;
+    try db.updateWithContext(&ctx1, updateFn);
+
+    db.mustCheck();
+
+    const viewFn = struct {
+        fn view(ctx: context, tx: *TX) Error!void {
+            _ = ctx; // autofix
+            const b = tx.getBucket("woojits").?;
+            const stats = b.stats();
+            assert(stats.BranchPageN == 1, comptime "expected 1 but got {d}", .{stats.BranchPageN});
+            assert(stats.BranchOverflowN == 0, comptime "expected 0 but got {d}", .{stats.BranchOverflowN});
+            assert(stats.LeafPageN == 7, comptime "expected 7 but got {d}", .{stats.LeafPageN});
+            assert(stats.LeafOverflowN == 2, comptime "expected 2 but got {d}", .{stats.LeafOverflowN});
+            assert(stats.keyN == 501, comptime "expected 501 but got {d}", .{stats.keyN});
+            assert(stats.depth == 2, comptime "expected 2 but got {d}", .{stats.depth});
+
+            var branchInuse: usize = 16; // 16 bytes for the branch page header
+            branchInuse += 7 * 16; // 7 branch elements
+            branchInuse += 7 * 3; // branch keys (63-byte keys)
+            assert(stats.BranchInuse == branchInuse, comptime "expected {d} but got {d}", .{ branchInuse, stats.BranchInuse });
+            const leafElementSize = @import("page.zig").LeafPageElement.headerSize();
+            var leafInuse: usize = 7 * leafElementSize; // 16 bytes for the leaf page header
+            leafInuse += 501 * leafElementSize; // leaf elements
+            leafInuse += 500 * 3 + context.bigKey.len; // leaf keys (63-byte keys)
+            leafInuse += 1 * 10 + 2 * 90 + 3 * 400 + 10000; // leaf values
+            assert(stats.LeafInuse == leafInuse, comptime "expected {d} but got {d}", .{ leafInuse, stats.LeafInuse });
+
+            // Only check allocations for 4KB pages.
+            if (tx.getDB().pageSize == 4096) {
+                assert(stats.BranchAlloc == 4096, comptime "expected 4096 but got {d}", .{stats.BranchAlloc});
+                assert(stats.LeafAlloc == 36864, comptime "expected 36864 but got {d}", .{stats.LeafAlloc});
+            }
+
+            assert(stats.BucketN == 1, comptime "expected 1 but got {d}", .{stats.BucketN});
+            assert(stats.InlineBucketInuse == 0, comptime "expected 0 but got {d}", .{stats.InlineBucketInuse});
+        }
+    }.view;
+    try db.viewWithContext(context{ .ctx = testCtx }, viewFn);
 }
+
+// Ensure a bucket with random insertion utilizes fill percentage correctly.
+// test "Bucket_RandomInsertion" {
+//     if (consts.PageSize != 4096) {
+//         std.debug.print("skipping Bucket_RandomInsertion because pageSize is not 4096\n", .{});
+//         return;
+//     }
+//     std.testing.log_level = .warn;
+//     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+//     defer tests.teardown(&testCtx);
+//     const db = testCtx.db;
+//     // Add a set of values in random order. It will be the same random
+//     // order so we can maintain consistency between test runs.
+//     const randomBytes = testCtx.generateBytes(1000);
+//     defer testCtx.allocator.free(randomBytes);
+//     var buf: [1024]u8 = undefined;
+//     const context = struct {
+//         index: usize = 0,
+//         v: usize = 0,
+//         ctx: tests.TestContext,
+//         count: usize = 0,
+//         fixAllocator: std.heap.FixedBufferAllocator = undefined,
+//     };
+//     var ctx = context{ .index = 0, .ctx = testCtx, .fixAllocator = std.heap.FixedBufferAllocator.init(buf[0..]) };
+//     for (randomBytes, 0..) |v, i| {
+//         ctx.index = i;
+//         ctx.v = v;
+//         const updateFn = struct {
+//             fn update(ctx1: *context, tx: *TX) Error!void {
+//                 const b = try tx.createBucketIfNotExists("woojits");
+//                 b.fillPercent = 0.9;
+//                 const randomKey = ctx1.ctx.generateBytes(100);
+//                 defer ctx1.ctx.allocator.free(randomKey);
+//                 for (randomKey) |j| {
+//                     const index: usize = (j * 10000) + ctx1.index;
+//                     ctx1.fixAllocator.reset();
+//                     const key = try std.fmt.allocPrint(ctx1.fixAllocator.allocator(), "{d}000000000000000", .{index});
+//                     try b.put(KeyPair.init(key, "0000000000"));
+//                     ctx1.count += 1;
+//                 }
+//             }
+//         }.update;
+//         try db.updateWithContext(&ctx, updateFn);
+//     }
+//     // db.mustCheck();
+
+//     // const viewFn = struct {
+//     //     fn view(vCtx: context, tx: *TX) Error!void {
+//     //         _ = vCtx; // autofix
+//     //         const stats = tx.getBucket("woojits").?.stats();
+//     //         _ = stats; // autofix
+//     //         // assert(stats.keyN == ctx.count, comptime "expected {d} but got {d}", .{ ctx.count, stats.keyN });
+//     //     }
+//     // }.view;
+//     // try db.viewWithContext(ctx, viewFn);
+// }

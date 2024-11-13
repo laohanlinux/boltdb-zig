@@ -40,14 +40,14 @@ pub const TestContext = struct {
 
 /// Setup a test context.
 pub fn setup(allocator: std.mem.Allocator) !TestContext {
-    // if (std.testing.log_level != .err) {
-    //     std.testing.log_level = .debug;
-    // }
-    // std.testing.log_level = .debug;
-    var options = db.defaultOptions;
+    var options = consts.defaultOptions;
     options.readOnly = false;
     options.initialMmapSize = 100000 * consts.PageSize;
-    // options.strictMode = true;
+    return setupWithOptions(allocator, options);
+}
+
+/// Setup a test context with custom options.
+pub fn setupWithOptions(allocator: std.mem.Allocator, options: consts.Options) !TestContext {
     const filePath = try std.fmt.allocPrint(allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
     defer allocator.free(filePath);
 

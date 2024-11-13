@@ -231,10 +231,6 @@ pub const TX = struct {
             return Error.TxNotWriteable;
         }
         const _db = self.getDB();
-        // std.log.debug("before commit: {any}", .{self.root._b.?});
-        // self.print() catch |err| {
-        //     std.log.err("Failed to print transaction info: {any}", .{err});
-        // };
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;
@@ -247,16 +243,14 @@ pub const TX = struct {
         // spill data onto dirty pages.
         startTime = std.time.Timer.start() catch unreachable;
         // During splitting (for example, merging two nodes at 90% and 30% will become 120% after merging, so merging first and then splitting is no problem)
-        if (self.root.rootNode) |rootNode| {
-            assert(rootNode.isLeaf, "rootNode should be leaf node", .{});
+        if (@import("builtin").is_test) {
+            assert(self.root.rootNode == null or self.root.rootNode.?.isLeaf, "rootNode should be leaf node", .{});
         }
-        // assert(self.root.rootNode != null, "rootNode should be null", .{});
         self.root.spill() catch |err| {
             self._rollback();
             return err;
         };
 
-        // std.log.debug("after commit root spill", .{});
         self.stats.spill_time += startTime.lap();
 
         // Free the old root bucket.
@@ -307,7 +301,6 @@ pub const TX = struct {
             return err;
         };
         self.stats.writeTime += startTime.lap();
-        // std.log.info("write cost time: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
         // Finalize the transaction.
         self.close();
         std.log.debug("after close transaction.", .{});
@@ -335,22 +328,20 @@ pub const TX = struct {
         while (itr.next()) |pg| {
             try pagesSlice.append(pg.*);
         }
-        const asc = struct {
+        std.mem.sort(*Page, pagesSlice.items, {}, struct {
             fn inner(_: void, a: *Page, b: *Page) bool {
                 return a.id < b.id;
             }
-        }.inner;
-        std.mem.sort(*Page, pagesSlice.items, {}, asc);
-        std.log.info("𓃠 ready to write dirty pages into disk, page count: {}", .{pagesSlice.items.len});
+        }.inner);
+        if (@import("builtin").is_test) {
+            std.log.info("💾 Ready to write dirty pages into disk, page count: {}", .{pagesSlice.items.len});
+        }
         const _db = self.db.?;
         const opts = _db.opts.?;
         for (pagesSlice.items, 0..) |p, i| {
             // Write out page in 'max allocation' sized chunks.
             const slice = p.asSlice();
             const offset = p.id * @as(u64, _db.pageSize);
-            _ = try opts(_db.file, slice, offset);
-            // Update statistics
-            self.stats.write += 1;
             var firstKey: []const u8 = "empty";
             if (p.count > 0) {
                 if (p.flags & consts.intFromFlags(.leaf) != 0) {
@@ -359,7 +350,13 @@ pub const TX = struct {
                     firstKey = p.branchPageElementRef(0).?.key();
                 }
             }
-            std.log.debug("𓃠 {}: write page into disk: pgid: {}, flags: {}, firstKey={any}, offset: {}, size: {}", .{ i, p.id, consts.toFlags(p.flags), firstKey, offset, slice.len });
+            if (@import("builtin").is_test) {
+                // Minimal output during tests
+                std.log.debug("📝 {}, write page, pgid: {}, flags: {}, firstKey: {s}, offset: {}, size: {}", .{ i, p.id, consts.toFlags(p.flags), firstKey, offset, slice.len });
+            }
+            _ = try opts(_db.file, slice, offset);
+            // Update statistics
+            self.stats.write += 1;
         }
 
         // Ignore file sync if flag is set on DB.

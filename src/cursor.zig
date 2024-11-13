@@ -391,7 +391,7 @@ pub const Cursor = struct {
         if (!indexRef.exact) {
             indexRef.index -= 1;
         }
-        std.log.debug("find index: {}, current pgid: {d}, current node len: {}, next pgid: {d}", .{ indexRef.index, n.pgid, n.inodes.items.len, n.inodes.items[indexRef.index].pgid });
+        // std.log.debug("find index: {}, current pgid: {d}, current node len: {}, next pgid: {d}", .{ indexRef.index, n.pgid, n.inodes.items.len, n.inodes.items[indexRef.index].pgid });
         // Recursively search to the next node.
         const lastEntry = self.getLastElementRef().?;
         lastEntry.index = indexRef.index;

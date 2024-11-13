@@ -47,8 +47,48 @@ pub const PgidType = u64;
 /// A slice of page ids.
 pub const PgIds = []PgidType;
 /// The size of a page.
-pub const PageSize: usize = std.mem.page_size;
-// pub const PageSize: usize = 512;
+// pub const PageSize: usize = std.mem.page_size;
+pub const PageSize: usize = 4096;
+
+/// Represents the options that can be set when opening a database.
+pub const Options = packed struct {
+    // The amount of time to what wait to obtain a file lock.
+    // When set to zero it will wait indefinitely. This option is only
+    // available on Darwin and Linux.
+    timeout: i64 = 0, // unit:nas
+
+    // Sets the DB.no_grow_sync flag before money mapping the file.
+    noGrowSync: bool = false,
+
+    // Open database in read-only mode, Uses flock(..., LOCK_SH | LOCK_NB) to
+    // grab a shared lock (UNIX).
+    readOnly: bool = false,
+
+    // Sets the DB.strict_mode flag before memory mapping the file.
+    strictMode: bool = false,
+
+    // Sets the DB.mmap_flags before memory mapping the file.
+    mmapFlags: isize = 0,
+
+    // The initial mmap size of the database
+    // in bytes. Read transactions won't block write transaction
+    // if the initial_mmap_size is large enough to hold database mmap
+    // size. (See DB.begin for more information)
+    //
+    // If <= 0, the initial map size is 0.
+    // If initial_mmap_size is smaller than the previous database size.
+    // it takes no effect.
+    initialMmapSize: usize = 0,
+    // The page size of the database, it only use to test, don't set at in production
+    pageSize: usize = 0,
+};
+
+/// Represents the options used if null options are passed into open().
+/// No timeout is used which will cause Bolt to wait indefinitely for a lock.
+pub const defaultOptions = Options{
+    .timeout = 0,
+    .noGrowSync = false,
+};
 
 /// Returns the size of a page given the page size and branching factor.
 pub fn intFromFlags(pageFlage: PageFlag) u16 {

@@ -19,6 +19,8 @@ const Page = page.Page;
 const IgnoreNoSync = false;
 // Page size for db is set to the OS page size.
 const default_page_size = std.os.getPageSize();
+// default options
+const defaultOptions = consts.defaultOptions;
 
 /// DB is the main struct that holds the database state.
 pub const DB = struct {
@@ -143,7 +145,7 @@ pub const DB = struct {
     /// Creates and opens a database at the given path.
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
-    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: Options) !*Self {
+    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: consts.Options) !*Self {
         const db = try allocator.create(DB);
         db.allocator = allocator;
         // Set default options if no options are proveide.
@@ -159,12 +161,15 @@ pub const DB = struct {
         db.rwlock = .{};
         db.rwtx = null;
         db.dataRef = null;
-        db.pageSize = 0;
+        db.pageSize = options.pageSize;
+        if (db.pageSize == 0) {
+            db.pageSize = consts.PageSize;
+        }
         db.txs = std.ArrayList(*TX).init(allocator);
         db.stats = Stats{};
         db.readOnly = options.readOnly;
         db.strictMode = options.strictMode;
-
+        std.log.info("database file path: {s}", .{filePath});
         // Open data file and separate sync handler for metadata writes.
         db._path = db.allocator.dupe(u8, filePath) catch unreachable;
         if (options.readOnly) {
@@ -219,11 +224,12 @@ pub const DB = struct {
             std.log.info("has load meta size: {}", .{sz});
             const m = db.pageInBuffer(buf[0..sz], 0).meta();
             db.pageSize = blk: {
-                m.validate() catch {
+                m.validate() catch { // if the meta page is invalid, then set the page size to the default page size
                     break :blk consts.PageSize;
                 };
                 break :blk m.pageSize;
             };
+            std.log.info("pageSize has change to: {}", .{db.pageSize});
         }
         errdefer db.close() catch unreachable;
         // Memory map the data file.
@@ -244,7 +250,6 @@ pub const DB = struct {
     pub fn init(self: *Self) !void {
         std.log.info("init a new db!", .{});
         // Set the page size to the OS page size.
-        self.pageSize = consts.PageSize;
         // Create two meta pages on a buffer, and
         const buf = try self.allocator.alloc(u8, self.pageSize * 4);
         defer self.allocator.free(buf);
@@ -618,6 +623,11 @@ pub const DB = struct {
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
     pub fn update(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
+        return self.updateWithContext(context, execFn);
+    }
+
+    /// Executes a function within the context of a read-write managed transaction.
+    pub fn updateWithContext(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
         const trxID = trx.getID();
         std.log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
@@ -625,7 +635,6 @@ pub const DB = struct {
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
-
         // If an errors is returned from the function then rollback and return error.
         execFn(context, trx) catch |err| {
             trx.managed = false;
@@ -639,34 +648,16 @@ pub const DB = struct {
         try trx.commit();
     }
 
-    /// Executes a function within the context of a read-write managed transaction.
-    // pub fn updateContext(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
-    //     const trx = try self.begin(true);
-    //     const trxID = trx.getID();
-    //     std.log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-    //     defer std.log.info("End a write transaction, txid: {}", .{trxID});
-
-    //     // Mark as a managed tx so that the inner function cannot manually commit.
-    //     trx.managed = true;
-
-    //     // If an errors is returned from the function then rollback and return error.
-    //     execFn(context, trx) catch |err| {
-    //         trx.managed = false;
-    //         trx.rollback() catch unreachable;
-    //         std.log.info("after execute transaction commit handle", .{});
-    //         return err;
-    //     };
-    //     trx.managed = false;
-    //     std.log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-    //     defer trx.destroy();
-    //     try trx.commit();
-    // }
-
     /// Executes a function within the context of a managed read-only transaction.
     /// Any error that is returned from the function is returned from the view() method.
     ///
     /// Attempting to manually rollback within the function will cause a panic.
     pub fn view(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
+        return self.viewWithContext(context, func);
+    }
+
+    /// Executes a function within the context of a managed read-only transaction.
+    pub fn viewWithContext(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
         const trxID = trx.getID();
         std.log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
@@ -682,7 +673,6 @@ pub const DB = struct {
         };
         trx.managed = false;
         try trx.rollback();
-        // self.allocator.destroy(trx);
         std.log.info("after execute transaction rollback handle", .{});
     }
 
@@ -791,48 +781,15 @@ pub const DB = struct {
         }
     }
 
+    /// opsWriteAt writes bytes to the file at the given offset.
     fn opsWriteAt(fp: std.fs.File, bytes: []const u8, offset: u64) Error!usize {
-        const writeN = fp.pwrite(bytes, offset) catch unreachable;
+        // std.log.err("write at offset: {}, bytes: {any}", .{ offset, bytes.len });
+        const writeN = fp.pwrite(bytes, offset) catch |err| {
+            std.log.err("write at offset: {} failed, error: {any}", .{ offset, err });
+            return Error.FileIOError;
+        };
         return writeN;
     }
-};
-
-/// Represents the options that can be set when opening a database.
-pub const Options = packed struct {
-    // The amount of time to what wait to obtain a file lock.
-    // When set to zero it will wait indefinitely. This option is only
-    // available on Darwin and Linux.
-    timeout: i64 = 0, // unit:nas
-
-    // Sets the DB.no_grow_sync flag before money mapping the file.
-    noGrowSync: bool = false,
-
-    // Open database in read-only mode, Uses flock(..., LOCK_SH | LOCK_NB) to
-    // grab a shared lock (UNIX).
-    readOnly: bool = false,
-
-    // Sets the DB.strict_mode flag before memory mapping the file.
-    strictMode: bool = false,
-
-    // Sets the DB.mmap_flags before memory mapping the file.
-    mmapFlags: isize = 0,
-
-    // The initial mmap size of the database
-    // in bytes. Read transactions won't block write transaction
-    // if the initial_mmap_size is large enough to hold database mmap
-    // size. (See DB.begin for more information)
-    //
-    // If <= 0, the initial map size is 0.
-    // If initial_mmap_size is smaller than the previous database size.
-    // it takes no effect.
-    initialMmapSize: usize = 0,
-};
-
-/// Represents the options used if null options are passed into open().
-/// No timeout is used which will cause Bolt to wait indefinitely for a lock.
-pub const defaultOptions = Options{
-    .timeout = 0,
-    .noGrowSync = false,
 };
 
 /// Represents statistics about the database
