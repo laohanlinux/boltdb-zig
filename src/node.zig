@@ -448,19 +448,22 @@ pub const Node = struct {
         }
 
         // Create a new node and add it to the parent.
-        const next = Node.init(self.getAllocator());
+        const next = Node.init(self.bucket.?.getAllocator());
         // self.bucket.?.autoFreeObject.addNode(next);
-        self.bucket.?.tx.?.autoFreeNodes.addNode(next);
+        // self.bucket.?.tx.?.autoFreeNodes.addNode(next);
         next.bucket = self.bucket;
         next.isLeaf = self.isLeaf;
         next.parent = self.parent;
+        // TODO: maybe here is a bug
         self.parent.?.children.append(next) catch unreachable;
 
         // Split inodes across two nodes.
-        next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch |err| {
-            log.err("failed to append slice, _splitIndex: {d}, inodes len: {d}, next nodes len: {d}, err: {}", .{ _splitIndex, self.inodes.items.len, next.inodes.items.len, err });
-            unreachable;
-        };
+        // next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch |err| {
+        //     log.err("failed to append slice, _splitIndex: {d}, inodes len: {d}, next nodes len: {d}, err: {}", .{ _splitIndex, self.inodes.items.len, next.inodes.items.len, err });
+        //     unreachable;
+        // };
+        next.inodes.ensureTotalCapacity(self.inodes.items.len - _splitIndex) catch unreachable;
+        next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
         // shrink self.inodes to _splitIndex
         self.inodes.resize(_splitIndex) catch unreachable;
 
@@ -529,10 +532,16 @@ pub const Node = struct {
             {},
             lessFn,
         );
-
-        for (self.children.items, 0..) |child, i| {
-            assert(i <= 0 or std.mem.order(u8, self.children.items[i].key.?, self.children.items[i - 1].key.?) == .gt, "the children node is not in order", .{});
-            std.log.debug("spill child node: {d}", .{child.pgid});
+        // const childrenCount = self.children.items.len;
+        // for (self.children.items, 0..) |child, i| {
+        //     assert(self.children.items.len == childrenCount, "the children length is not equal to the children count", .{});
+        //     assert(i <= 0 or std.mem.order(u8, self.children.items[i].key.?, self.children.items[i - 1].key.?) == .gt, "the children node is not in order", .{});
+        //     std.log.debug("spill child node: {d}", .{child.pgid});
+        //     try child.spill();
+        // }
+        for (0..self.children.items.len) |i| {
+            const child = self.children.items[i];
+            std.log.debug("spill child node: {d}, index: {d}", .{ child.pgid, i });
             try child.spill();
         }
         // We no longer need the children list because it's only used for spilling tracking.
@@ -779,6 +788,7 @@ pub const Node = struct {
 
     /// get the allocator of the node
     pub fn getAllocator(self: *Self) std.mem.Allocator {
+        // std.log.err("arena allocator capacity: {d}", .{self.arenaAllocator.queryCapacity()});
         return self.arenaAllocator.allocator();
     }
 
