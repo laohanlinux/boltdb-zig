@@ -1143,7 +1143,7 @@ test "Bucket_Stats_Small" {
 
             assert(stats.BucketN == 1, comptime "expected 1 but got {d}", .{stats.BucketN});
             assert(stats.InlineBucketN == 1, comptime "expected 1 but got {d}", .{stats.InlineBucketN});
-            assert(stats.InlineBucketInuse == 16 + 16 + 6, comptime "expected {d} but got {d}", .{ 16 + 16 + 6, stats.InlineBucketN });
+            assert(stats.InlineBucketInuse == 16 + 16 + 6, comptime "expected {d} but got {d}", .{ 16 + 16 + 6, stats.InlineBucketInuse });
         }
     }.view);
 }
@@ -1187,7 +1187,7 @@ test "Bucket_Stats_EmptyBucket" {
 
 // Ensure a bucket can calculate stats.
 test "Bucket_Stats_Nested" {
-    std.testing.log_level = .err;
+    std.testing.log_level = .debug;
     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
@@ -1216,6 +1216,7 @@ test "Bucket_Stats_Nested" {
             }
         }
     }.update);
+
     db.mustCheck();
 
     try db.viewWithContext({}, struct {
@@ -1228,6 +1229,147 @@ test "Bucket_Stats_Nested" {
             assert(stats.LeafOverflowN == 0, comptime "expected 0 but got {d}", .{stats.LeafOverflowN});
             assert(stats.depth == 3, comptime "expected 3 but got {d}", .{stats.depth});
             assert(stats.BranchInuse == 0, comptime "expected 0 but got {d}", .{stats.BranchInuse});
+
+            var foo: usize = 16; // pghdr
+            foo += 101 * 16; // foo leaf elements
+            foo += 100 * 2 + 100 * 2; // foo leaf key/values
+            foo += 3 + 16; // foo -> bar key/value
+
+            var bar: usize = 16; // pghdr
+            bar += 11 * 16; // bar leaf elements
+            bar += 10 + 10; // bar leaf key/values
+            bar += 3 + 16; // bar -> baz key/value
+
+            var baz: usize = 16; // baz (inline) (pghdr)
+            baz += 10 * 16; // baz leaf elements
+            baz += 10 + 10; // baz leaf key/values
+            assert(stats.LeafInuse == foo + bar + baz, "the leaf inuse is not correct, expected {d} but got {d}", .{ foo + bar + baz, stats.LeafInuse });
+
+            if (tx.getDB().pageSize == 4096) {
+                assert(stats.BranchAlloc == 0, comptime "the branch alloc is not correct, expected 0 but got {d}", .{stats.BranchAlloc});
+                assert(stats.LeafAlloc == 8192, comptime "the leaf alloc is not correct, expected 8192 but got {d}", .{stats.LeafAlloc});
+            }
+
+            assert(stats.BucketN == 3, comptime "the bucket number is not correct, expected 3 but got {d}", .{stats.BucketN});
+            assert(stats.InlineBucketN == 1, comptime "the inline bucket number is not correct, expected 1 but got {d}", .{stats.InlineBucketN});
+            assert(stats.InlineBucketInuse == baz, comptime "the inline bucket inuse is not correct, expected {d} but got {d}", .{ baz, stats.InlineBucketInuse });
         }
     }.view);
+}
+
+test "Bucket_Stats_Large" {
+    std.testing.log_level = .err;
+    if (consts.PageSize != 4096) {
+        std.debug.print("skipping Bucket_Stats_Large because pageSize is not 4096\n", .{});
+        return;
+    }
+
+    var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+    defer tests.teardown(&testCtx);
+    const db = testCtx.db;
+
+    const context = struct {
+        index: usize = 0,
+        ctx: tests.TestContext,
+    };
+    var ctx = context{ .index = 0, .ctx = testCtx };
+    for (0..100) |_| {
+        // Add bucket with lots of keys.
+        try db.updateWithContext(&ctx, struct {
+            fn update(ctx1: *context, tx: *TX) Error!void {
+                const b = try tx.createBucketIfNotExists("widgets");
+                for (0..1000) |_| {
+                    const key = std.fmt.allocPrint(ctx1.ctx.allocator, "{d}", .{ctx1.index}) catch unreachable;
+                    try b.put(KeyPair.init(key, key));
+                    ctx1.ctx.allocator.free(key);
+                    ctx1.index += 1;
+                }
+            }
+        }.update);
+    }
+    db.mustCheck();
+
+    try db.viewWithContext({}, struct {
+        fn view(_: void, tx: *TX) Error!void {
+            const stats = tx.getBucket("widgets").?.stats();
+            assert(stats.BranchPageN == 13, comptime "the branch page number is not correct, expected 13 but got {d}", .{stats.BranchPageN});
+            assert(stats.BranchOverflowN == 0, comptime "the branch overflow number is not correct, expected 0 but got {d}", .{stats.BranchOverflowN});
+            assert(stats.LeafPageN == 1196, comptime "the leaf page number is not correct, expected 1196 but got {d}", .{stats.LeafPageN});
+            assert(stats.LeafOverflowN == 0, comptime "the leaf overflow number is not correct, expected 0 but got {d}", .{stats.LeafOverflowN});
+            assert(stats.depth == 3, comptime "the depth is not correct, expected 3 but got {d}", .{stats.depth});
+            assert(stats.BranchInuse == 25257, comptime "the branch inuse is not correct, expected {d} but got {d}", .{ 25257, stats.BranchInuse });
+            assert(stats.LeafInuse == 2596916, comptime "the leaf inuse is not correct, expected {d} but got {d}", .{ 2596916, stats.LeafInuse });
+            assert(stats.keyN == 100000, comptime "the key number is not correct, expected 100000 but got {d}", .{stats.keyN});
+            if (tx.getDB().pageSize == 4096) {
+                assert(stats.BranchAlloc == 53248, comptime "the branch alloc is not correct, expected {d} but got {d}", .{ 53248, stats.BranchAlloc });
+                assert(stats.LeafAlloc == 4898816, comptime "the leaf alloc is not correct, expected {d} but got {d}", .{ 4898816, stats.LeafAlloc });
+            }
+            assert(stats.BucketN == 1, comptime "the bucket number is not correct, expected 1 but got {d}", .{stats.BucketN});
+            assert(stats.InlineBucketN == 0, comptime "the inline bucket number is not correct, expected 0 but got {d}", .{stats.InlineBucketN});
+            assert(stats.InlineBucketInuse == 0, comptime "the inline bucket inuse is not correct, expected 0 but got {d}", .{stats.InlineBucketInuse});
+        }
+    }.view);
+}
+
+// test "Bucket_Put_Single" {
+//     std.testing.log_level = .err;
+
+//     var quick = tests.Quick.init(std.testing.allocator);
+//     var data = quick.generate(std.testing.allocator) catch unreachable;
+//     defer data.deinit();
+
+//     var config = tests.Config{ .rand = std.Random.DefaultPrng.init(0) };
+//     for (0..config.getMaxCount()) |i| {
+//         _ = i; // autofix
+//         var testCtx = tests.setup(std.testing.allocator) catch unreachable;
+//         defer tests.teardown(&testCtx);
+//         const db = testCtx.db;
+
+//         try db.updateWithContext({}, struct {
+//             fn update(_: void, tx: *TX) Error!void {
+//                 _ = try tx.createBucket("widgets");
+//             }
+//         }.update);
+
+//         const items = quick.generate(std.testing.allocator) catch unreachable;
+//         defer items.deinit();
+//         const context = struct {
+//             index: usize = 0,
+//             ctx: tests.TestContext,
+//             m: std.StringHashMap([]const u8),
+//             keyPair: KeyPair = undefined,
+//         };
+//         var ctx = context{ .index = 0, .ctx = testCtx, .m = std.StringHashMap([]const u8).init(std.testing.allocator) };
+//         defer ctx.m.deinit();
+//         for (items.items) |item| {
+//             ctx.keyPair = KeyPair.init(item.key, item.value);
+//             try db.updateWithContext(&ctx, struct {
+//                 fn update(ctx1: *context, tx: *TX) Error!void {
+//                     const b = tx.getBucket("widgets").?;
+//                     try b.put(ctx1.keyPair);
+//                     ctx1.m.put(ctx1.keyPair.key.?, ctx1.keyPair.value.?) catch unreachable;
+//                 }
+//             }.update);
+
+//             try db.viewWithContext(ctx, struct {
+//                 fn view(ctx1: context, tx: *TX) Error!void {
+//                     const b = tx.getBucket("widgets").?;
+//                     var itr = ctx1.m.iterator();
+//                     while (itr.next()) |entry| {
+//                         const got = b.get(entry.key_ptr.*).?;
+//                         assert(std.mem.eql(u8, got, entry.value_ptr.*), "the value is not correct", .{});
+//                     }
+//                 }
+//             }.view);
+//         }
+//     }
+// }
+
+test "Bucket_Put_Multiple" {
+    std.testing.log_level = .err;
+}
+
+// Ensure that a transaction can delete all key/value pairs and return to a single leaf page.
+test "Bucket_Delete_Quick" {
+    std.testing.log_level = .err;
 }

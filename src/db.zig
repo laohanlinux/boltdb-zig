@@ -706,7 +706,7 @@ pub const DB = struct {
 
     /// mustCheck runs a consistency check on the database and panics if any errors are found.
     pub fn mustCheck(self: *Self) void {
-        std.log.info("start to check the database consistency", .{});
+        std.log.info("🎲 Start to check the database consistency", .{});
         const updateFn = struct {
             fn update(_db: *DB, trx: *TX) Error!void {
                 trx.check() catch |e| {
@@ -717,7 +717,7 @@ pub const DB = struct {
                     try trx.copyFile(tmpFile);
 
                     std.log.info("\n\n", .{});
-                    std.log.info("consistency check failed, error: {any}", .{e});
+                    std.log.info("❌ Consistency check failed, error: {any}", .{e});
                     std.log.info("\n\n", .{});
                     std.log.info("db saved to:", .{});
                     std.log.info("{s}", .{tmpFilePath});

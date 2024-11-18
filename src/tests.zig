@@ -3,6 +3,7 @@ const db = @import("db.zig");
 const DB = db.DB;
 const node = @import("node.zig");
 const consts = @import("consts.zig");
+const Error = @import("error.zig").Error;
 
 // A tuple of two values.
 pub const Tuple = struct {
@@ -147,6 +148,62 @@ pub const Quick = struct {
     pub fn reverse(self: *@This()) void {
         self.sort();
         std.mem.reverse(TestDataItem, self.items.items);
+    }
+
+    pub fn checkWithContext(self: *@This(), context: anytype, config: ?Config, comptime travel: fn (@TypeOf(context)) Error!void) std.ArrayList(Error) {
+        if (config == null) {
+            config = .{
+                .rand = std.Random.DefaultPrng.init(0).random(),
+            };
+        }
+        const maxCount = config.?.getMaxCount();
+        const randor = config.?.getRand();
+        _ = randor; // autofix
+
+        var errors = std.ArrayList(Error).init(self.allocator);
+
+        for (0..maxCount) |i| {
+            _ = i; // autofix
+            travel(context) catch |err| {
+                errors.append(err) catch unreachable;
+            };
+        }
+        return errors;
+    }
+};
+
+pub const Config = struct {
+    // MaxCount sets the maximum number of iterations.
+    // If zero, MaxCountScale is used.
+    maxCount: usize = 0,
+    // MaxCountScale is a non-negative scale factor applied to the
+    // default maximum.
+    // A count of zero implies the default, which is usually 100
+    // but can be set by the -quickchecks flag.
+    maxCountScale: f64 = 1.0,
+    maxKeySize: usize = 1024,
+    // Rand specifies a source of random numbers.
+    // If nil, a default pseudo-random source will be used.
+    rand: ?std.Random.Xoshiro256 = null,
+
+    pub fn getRand(self: @This()) std.Random {
+        if (self.rand) |r| {
+            return r.random();
+        } else {
+            return std.Random.DefaultPrng.init(0).random();
+        }
+    }
+
+    pub fn getMaxCount(self: @This()) usize {
+        if (self.maxCount == 0) {
+            if (self.maxCountScale != 0) {
+                const count: f64 = self.maxCountScale * 100.0;
+                return @as(usize, @intFromFloat(count));
+            }
+            return 100;
+        } else {
+            return self.maxCount;
+        }
     }
 };
 

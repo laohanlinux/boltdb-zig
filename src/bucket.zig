@@ -114,10 +114,25 @@ pub const Bucket = struct {
 
     arenaAllocator: std.heap.ArenaAllocator,
 
+    // Travel the bucket and its sub-buckets to collect stats.
     const travelContext = struct {
-        b: ?*Bucket,
-        s: ?*BucketStats,
-        subStats: ?*BucketStats,
+        name: []const u8,
+        // The bucket.
+        b: *Bucket,
+        // The stats of the bucket.
+        s: *BucketStats,
+        // The stats of the sub-buckets.
+        subStats: *BucketStats,
+
+        /// clone the travel context.
+        fn clone(self: travelContext) travelContext {
+            return .{
+                .name = self.name,
+                .b = self.b,
+                .s = self.s,
+                .subStats = self.subStats,
+            };
+        }
     };
 
     const Self = @This();
@@ -546,7 +561,7 @@ pub const Bucket = struct {
         var c = self.cursor();
         defer c.deinit();
         var keyPairRef = c.first();
-        while (keyPairRef.key != null) {
+        while (!keyPairRef.isNotFound()) {
             try travel(context, keyPairRef.key.?, keyPairRef.value);
             keyPairRef = c.next();
         }
@@ -562,8 +577,8 @@ pub const Bucket = struct {
         if (self._b.?.root == 0) {
             s.InlineBucketN += 1; // we are inline bucket.
         }
-        const ctx = Self.travelContext{ .b = self, .s = &s, .subStats = &subStats };
-        self.forEachPage(ctx, travelStats);
+        const ctx = Self.travelContext{ .b = self, .s = &s, .subStats = &subStats, .name = &.{} };
+        self.forEachPageWithContext(ctx, travelStats);
 
         // Alloc stats can be computed from page counts and pageSize.
         s.BranchAlloc = (s.BranchPageN + s.BranchOverflowN) * pageSize;
@@ -578,10 +593,9 @@ pub const Bucket = struct {
 
     // Travel the bucket and its sub-buckets to collect stats.
     fn travelStats(context: Self.travelContext, p: *const page.Page, depth: usize) void {
-        assert(context.b != null, "bucket is null", .{});
-        assert(context.s != null, "bucket stats is null", .{});
-        const b = context.b.?;
-        const s = context.s.?;
+        const b = context.b;
+        const s = context.s;
+        const subStats = context.subStats;
         if (p.flags & consts.intFromFlags(consts.PageFlag.leaf) != 0) {
             s.keyN += @as(usize, p.count);
 
@@ -599,7 +613,7 @@ pub const Bucket = struct {
                 // It also includes the last element's header.
                 const lastElement = p.leafPageElementRef(@as(usize, p.count - 1));
                 used += @as(usize, lastElement.?.pos + lastElement.?.kSize + lastElement.?.vSize);
-                std.log.debug("travelStats leaf: depth: {d}, used: {d}, key={s}", .{ depth, used, lastElement.?.key() });
+                // std.log.debug("travelStats leaf: depth: {d}, used: {d}, key={s}", .{ depth, used, lastElement.?.key() });
             }
 
             if (b._b.?.root == 0) {
@@ -619,10 +633,12 @@ pub const Bucket = struct {
                     if (elem.flags & consts.BucketLeafFlag != 0) {
                         // For any bucket elements. open the element value
                         // and recursively call Stats on the contained bucket.
-                        const bucketName = elem.value();
+                        var newCtx = context.clone();
+                        newCtx.name = elem.key();
+                        const bucketName = elem.key();
                         std.log.debug("travel subBucket: {s}, element: {any}", .{ bucketName, elem });
                         const childBucket = b.openBucket(elem.value());
-                        s.add(&childBucket.stats());
+                        subStats.add(&childBucket.stats());
                         childBucket.deinit();
                     }
                     // std.log.debug("travelStats branch: depth: {d}, used: {d}, key={s}", .{ depth, used, elem.key() });
@@ -643,15 +659,18 @@ pub const Bucket = struct {
             s.BranchInuse += used;
             s.BranchOverflowN += @as(usize, p.overflow);
         }
-
+        std.log.debug("travelStats: depth: {d}, pgid: {d}", .{
+            depth,
+            p.id,
+        });
         // Keep track of maximum page depth.
-        if (depth + 1 > context.subStats.?.depth) {
+        if (depth + 1 > s.depth) {
             s.depth = (depth + 1);
         }
     }
 
     // Iterates over every page in a bucket, including inline pages.
-    fn forEachPage(self: *Self, context: anytype, travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
+    fn forEachPageWithContext(self: *Self, context: anytype, travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         // If we have an inline page then just use that.
         if (self.page) |_p| {
             std.log.debug("forEachPage: depth: {d}, root: {d}", .{ 0, self._b.?.root });
@@ -661,7 +680,7 @@ pub const Bucket = struct {
 
         assert(self.tx != null, "tx closed", .{});
         // Otherwise traverse the page hierarchy.
-        self.tx.?.forEachPage(self._b.?.root, 0, context, travel);
+        self.tx.?.forEachPageWithContext(self._b.?.root, 0, context, travel);
     }
 
     /// Iterators over every page （or node) in a bucket.

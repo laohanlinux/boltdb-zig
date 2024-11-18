@@ -206,6 +206,15 @@ pub const TX = struct {
         return self.root.forEachKeyValueContext(context, travel);
     }
 
+    /// Executes a function for each bucket in the root.
+    pub fn forEachContext(self: *Self, context: anytype, f: fn (@TypeOf(context), name: []const u8) Error!void) Error!void {
+        return self.root.forEachKeyValueContext(context, struct {
+            fn inner(ctx: @TypeOf(context), key: []const u8, _: ?[]const u8) Error!void {
+                return f(ctx, key);
+            }
+        }.inner);
+    }
+
     /// Adds a handler function to be executed after the transaction successfully commits.
     pub fn onCommit(self: *Self, func: onCommitFn) void {
         self._commitHandlers.append(func) catch unreachable;
@@ -293,7 +302,8 @@ pub const TX = struct {
         // If strict mode is enabled then perform a consistency check.
         // Only the first consistency error is reported in the panic.
         if (_db.strictMode) {
-            self.check() catch |err| util.panicFmt("consistency check failed: {any}", .{err});
+            self.check() catch |err| util.panicFmt("❌ Consistency check failed: {any}", .{err});
+            std.log.info("✅ Consistency check done", .{});
         }
         // Write meta to disk.
         self.writeMeta() catch |err| {
@@ -462,6 +472,8 @@ pub const TX = struct {
         const all = self.allocator.alloc(PgidType, self.db.?.freelist.count()) catch unreachable;
         defer self.allocator.free(all);
         self.db.?.freelist.copyAll(all);
+        std.log.info("The reachable include meta page and free page ids, the freed include all ids in db.freelist", .{});
+        std.log.info("📣 Check freelist from memory, ids: {any}", .{all});
         for (all) |pgid| {
             const got = freed.getOrPut(pgid) catch |err| {
                 std.log.err("getOrPut freed page failed: {any}", .{err});
@@ -489,6 +501,7 @@ pub const TX = struct {
 
         // free page
         const freePage = self.getPage(self.meta.freelist);
+        std.log.info("📣 Check free page from freelist page, ids: {any}", .{freePage.freelistPageElements() orelse &[_]consts.PgidType{}});
         for (0..freePage.overflow + 1) |i| {
             const id = self.meta.freelist + i;
             const got = reachable.getOrPut(id) catch |err| {
@@ -503,7 +516,8 @@ pub const TX = struct {
         }
 
         // Recursively check buckets.
-        try self.checkBucket(self.root, &reachable, &freed);
+        std.log.info("Recursively check buckets, the top root pgid: {}", .{self.root._b.?.root});
+        try self.checkBucket(self.root, "", &reachable, &freed);
 
         // Ensure all pages below high water mark are either reachable or freed.
         for (0..self.meta.pgid) |i| {
@@ -513,13 +527,15 @@ pub const TX = struct {
                 return Error.NotPassConsistencyCheck;
             }
         }
-        std.log.info("consistency check done", .{});
     }
 
     // TODO(benbjohnson): This function is not correct. It should be checking.
-    fn checkBucket(self: *Self, b: *bucket.Bucket, reachable: *std.AutoHashMap(PgidType, *const Page), freed: *std.AutoHashMap(consts.PgidType, bool)) Error!void {
+    fn checkBucket(self: *Self, b: *bucket.Bucket, btName: []const u8, reachable: *std.AutoHashMap(PgidType, *const Page), freed: *std.AutoHashMap(consts.PgidType, bool)) Error!void {
+        std.log.debug("\t<<<check bucket:[{s}] start>>>", .{btName});
+        defer std.log.debug("\t>>>check bucket:[{s}] done<<<", .{btName});
         // Ignore inline buckets.
         if (b._b.?.root == 0) {
+            std.log.debug("the bucket({s}) is inline, skip", .{btName});
             return;
         }
 
@@ -528,47 +544,41 @@ pub const TX = struct {
             reachable: *std.AutoHashMap(PgidType, *const Page),
             freed: *std.AutoHashMap(PgidType, bool),
             _tx: *Self,
-            parentBucket: *bucket.Bucket,
+            parentBucket: *bucket.Bucket, // the bucket to be checked
         };
         const ctx = Context{ .reachable = reachable, .freed = freed, ._tx = self, .parentBucket = b };
-        b.tx.?.forEachPage(
+        self.forEachPageWithContext(
             b._b.?.root,
             0,
             ctx,
             struct {
                 fn inner(context: Context, p: *const page.Page, _: usize) void {
-                    if (p.id > context._tx.meta.pgid) {
-                        util.panicFmt("page id is out of range: {} > {}", .{ p.id, context._tx.meta.pgid });
-                    }
+                    assert(p.id <= context._tx.meta.pgid, comptime "page id is out of range: {} > {}", .{ p.id, context._tx.meta.pgid });
                     // Ensure each page is only referenced once.
                     for (0..p.overflow + 1) |i| {
                         const id = p.id + i;
-                        if (context.reachable.contains(id)) {
-                            util.panicFmt("page {}: multiple references to the same page", .{id});
-                        }
-                        context.reachable.put(id, p) catch unreachable;
-                        std.log.info("add page to reachable: {}", .{id});
+                        context.reachable.putNoClobber(id, p) catch |err| {
+                            util.panicFmt("page {}: multiple references to the same page: {any}", .{ id, err });
+                        };
+                        std.log.info("Add page into reachable: {}", .{id});
                     }
                     // We should only encounter un-freed leaf and branch pages.
                     if (context.freed.contains(p.id)) {
-                        util.panicFmt("page {}: reachable freed", .{p.id});
+                        util.panicFmt("Page {}: reachable freed", .{p.id});
                     } else if ((consts.intFromFlags(.branch) & p.flags == 0 and consts.intFromFlags(.leaf) & p.flags == 0)) {
-                        util.panicFmt("page {}: not a leaf or branch page", .{p.id});
+                        util.panicFmt("Page {}: not a leaf or branch page", .{p.id});
                     }
                 }
             }.inner,
         );
 
-        // Check each bucket within this bucket.
-        return self.forEach(ctx, struct {
-            fn inner(context: Context, name: []const u8) Error!void {
-                std.log.debug("\t<<<check bucket:[{s}] start>>>", .{name});
-                const child = context.parentBucket.getBucket(name);
-                if (child) |childBucket| {
-                    try childBucket.tx.?.checkBucket(childBucket, context.reachable, context.freed);
+        // Check every page used by this bucket.
+        try b.forEachContext(ctx, struct {
+            fn inner(context: Context, _: *bucket.Bucket, keyPairRef: *const consts.KeyPair) Error!void {
+                const child = context.parentBucket.getBucket(keyPairRef.key.?);
+                if (child) |childBt| {
+                    try context._tx.checkBucket(childBt, keyPairRef.key.?, context.reachable, context.freed);
                 }
-                std.log.debug("\t>>>check bucket:[{s}] done<<<", .{name});
-                return;
             }
         }.inner);
     }
@@ -663,7 +673,11 @@ pub const TX = struct {
     }
 
     /// Iterates over every page within a given page and executes a function.
-    pub fn forEachPage(self: *Self, pgid: PgidType, depth: usize, context: anytype, comptime travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
+    ///             1
+    ///  branch  2 .      3
+    /// .leaf 4. 5. 6. 7. 8. 9. 10
+    ///  leaf                  11 (this is a subbucket and 10 is the root pgid of the subbucket)
+    pub fn forEachPageWithContext(self: *Self, pgid: PgidType, depth: usize, context: anytype, comptime travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         const p = self.getPage(pgid);
         // Execute function.
         travel(context, p, depth);
@@ -671,7 +685,7 @@ pub const TX = struct {
         if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
             for (0..p.count) |i| {
                 const elem = p.branchPageElementRef(i).?;
-                self.forEachPage(elem.pgid, depth + 1, context, travel);
+                self.forEachPageWithContext(elem.pgid, depth + 1, context, travel);
             }
         }
     }

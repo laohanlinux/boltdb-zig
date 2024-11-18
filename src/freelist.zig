@@ -85,6 +85,7 @@ pub const FreeList = struct {
         while (itr.next()) |entries| {
             array.appendSlice(entries.items) catch unreachable;
         }
+        std.mem.sort(PgidType, array.items, {}, std.sort.asc(PgidType));
         Self.mergeSortedArray(dst, self.ids.items, array.items);
     }
 
