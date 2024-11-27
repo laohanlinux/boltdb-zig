@@ -499,7 +499,6 @@ pub const DB = struct {
 
     /// close closes the database and releases all associated resources.
     pub fn close(self: *Self) !void {
-        std.log.debug("before close db, txs: {}", .{self.txs.items.len});
         defer std.log.info("succeed to close db!", .{});
         defer self.allocator.destroy(self);
         self.rwlock.lock();
@@ -579,7 +578,7 @@ pub const DB = struct {
         // Obtain writer lock. This released by the transaction when it closes.
         // This is enforces only one writer transaction at a time.
         self.rwlock.lock();
-        // std.log.debug("lock rwlock!", .{});
+        // std.log.warn("lock rwlock!", .{});
 
         // Once we have the writer lock then we can lock the meta pages so that
         // we can set up the transaction.
@@ -622,8 +621,13 @@ pub const DB = struct {
     /// returned from the update() method.
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
-    pub fn update(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
-        return self.updateWithContext(context, execFn);
+    pub fn update(self: *Self, execFn: fn (self: *TX) Error!void) Error!void {
+        const execFnWithContext = struct {
+            fn exec(_: void, trx: *TX) Error!void {
+                return execFn(trx);
+            }
+        }.exec;
+        return self.updateWithContext({}, execFnWithContext);
     }
 
     /// Executes a function within the context of a read-write managed transaction.
@@ -652,8 +656,12 @@ pub const DB = struct {
     /// Any error that is returned from the function is returned from the view() method.
     ///
     /// Attempting to manually rollback within the function will cause a panic.
-    pub fn view(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
-        return self.viewWithContext(context, func);
+    pub fn view(self: *Self, func: fn (self: *TX) Error!void) Error!void {
+        return self.viewWithContext({}, struct {
+            fn exec(_: void, trx: *TX) Error!void {
+                return func(trx);
+            }
+        }.exec);
     }
 
     /// Executes a function within the context of a managed read-only transaction.
@@ -666,13 +674,13 @@ pub const DB = struct {
         trx.managed = true;
         // If an error is returned from the function then pass it through.
         func(context, trx) catch |err| {
-            std.log.info("has error when execute transaction, txid: {}", .{trxID});
+            std.log.err("has error when execute transaction, txid: {}", .{trxID});
             trx.managed = false;
             trx.rollback() catch unreachable;
             return err;
         };
         trx.managed = false;
-        try trx.rollback();
+        try trx.rollbackAndDestroy();
         std.log.info("after execute transaction rollback handle", .{});
     }
 

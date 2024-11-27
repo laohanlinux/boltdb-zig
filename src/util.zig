@@ -113,13 +113,21 @@ pub fn Closure(comptime T: type) type {
     };
 }
 
-fn onCmt(n: *usize) void {
-    n.* += 1;
-}
-
-fn onCmt2(n: *usize) void {
-    n.* -= 1;
-}
+// const Context = struct {
+//     fn init(num: usize) struct {
+//         num: usize,
+//         fn onCommit(self: *anyopaque) void {
+//             const context: *Context = @ptrCast(@alignCast(self));
+//             context.num += 1;
+//         }
+//     } {
+//         return .{ .num = num, .onCommit = onCmt3 };
+//     }
+// };
+// fn onCmt3(ctx: *anyopaque) void {
+//     const context: *Context = @ptrCast(@alignCast(ctx));
+//     context.num += 1;
+// }
 
 // test "arm" {
 //     var n: usize = 2000;
@@ -202,4 +210,16 @@ test "iterator" {
     for (list.items) |item| {
         std.debug.print("{}\n", .{item.*});
     }
+
+    // const Transaction = struct {
+    //     a: u8,
+    //     onCommit: ?*const fn (*anyopaque) void = null,
+    // };
+
+    // var ctx = Context{ .num = 1 };
+    // const trxRef = try std.testing.allocator.create(Transaction);
+    // defer std.testing.allocator.destroy(trxRef);
+    // trxRef.* = .{ .a = 1, .onCommit = null };
+
+    // assert(ctx.num == 2, "ctx.num should be 2, but got {}", .{ctx.num});
 }

@@ -49,7 +49,7 @@ pub fn setup(allocator: std.mem.Allocator) !TestContext {
 
 /// Setup a test context with custom options.
 pub fn setupWithOptions(allocator: std.mem.Allocator, options: consts.Options) !TestContext {
-    const filePath = try std.fmt.allocPrint(allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
+    const filePath = try std.fmt.allocPrint(allocator, "dirty/{d}.db", .{100});
     defer allocator.free(filePath);
 
     const kvDB = DB.open(allocator, filePath, null, options) catch unreachable;
@@ -90,6 +90,16 @@ pub fn createTmpFile(name: ?[]const u8) struct {
         return .{ .file = tmpDir.dir.createFile(n, .{}) catch unreachable, .tmpDir = tmpDir };
     } else {
         return .{ .file = tmpDir.dir.createFile("bolt.db.tmp", .{}) catch unreachable, .tmpDir = tmpDir };
+    }
+}
+
+/// Get a temporary file path.
+pub fn getTmpFilePath(name: ?[]const u8) std.testing.TmpDir {
+    var tmpDir = std.testing.tmpDir(.{});
+    if (name) |n| {
+        return tmpDir.dir.pathJoin(n);
+    } else {
+        return tmpDir.dir.pathJoin("bolt.db.tmp");
     }
 }
 
@@ -285,7 +295,16 @@ pub const RevTestData = struct {
 // }
 
 test "tempFilePath" {
-    var tmpFile = createTmpFile(null);
-    defer tmpFile.tmpDir.cleanup();
-    std.debug.print("tmp file: {s}\n", .{tmpFile.tmpDir.sub_path});
+    // var tmpFile = createTmpFile("test.db");
+    // defer tmpFile.tmpDir.cleanup();
+    // std.debug.print("tmp file: {s}\n", .{tmpFile.tmpDir.sub_path});
+    // std.debug.print("tmp file: {d}\n", .{std.time.milliTimestamp()});
+    // const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
+    // defer std.testing.allocator.free(filePath);
+    // std.debug.print("filePath: {s}\n", .{filePath});
+    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{d}.db", .{100});
+    defer std.testing.allocator.free(filePath);
+
+    const kvDB = DB.open(std.testing.allocator, "filePath", null, .{}) catch unreachable;
+    defer kvDB.close() catch unreachable;
 }

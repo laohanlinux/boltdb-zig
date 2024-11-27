@@ -38,7 +38,6 @@ pub const TX = struct {
     autoFreeNodes: AutoFreeObject,
     stats: TxStats = .{},
 
-    _commitHandlers: std.ArrayList(onCommitFn),
     // WriteFlag specifies the flag for write-related methods like WriteTo().
     // Tx opens the database file with the specified flag to copy the data.
     //
@@ -49,6 +48,8 @@ pub const TX = struct {
 
     allocator: std.mem.Allocator,
     arenaAllocator: std.heap.ArenaAllocator,
+    onCommitCtx: ?*anyopaque = null,
+    commitHandler: ?*const fn (?*anyopaque, *TX) void = null,
 
     const Self = @This();
 
@@ -73,24 +74,22 @@ pub const TX = struct {
         self.arenaAllocator = std.heap.ArenaAllocator.init(self.allocator);
         self.managed = false;
         self.pages = null;
+        self.commitHandler = null;
         // Increment the transaction id and add a page cache for writable transactions.
         if (self.writable) {
             self.meta.txid += 1;
             self.pages = std.AutoHashMap(PgidType, *Page).init(_db.allocator);
         }
-        self._commitHandlers = std.ArrayList(onCommitFn).init(self.allocator);
         return self;
     }
 
     /// Destroys the transaction and releases all associated resources.
     pub fn destroy(self: *Self) void {
-        assert(self.db == null, "db should be null before destroy", .{});
         self.allocator.destroy(self);
-        std.log.debug("destroy transaction", .{});
     }
 
     /// Print the transaction information.
-    pub fn print(self: *const Self) !void {
+    fn print(self: *const Self) !void {
         var table = Table.init(self.allocator, 24, .Cyan, "Transaction Information");
         defer table.deinit();
 
@@ -153,7 +152,7 @@ pub const TX = struct {
     /// All items in the cursor will return a nil value because all root bucket keys point to buckets.
     /// The cursor is only valid as long as the transaction is open.
     /// Do not use a cursor after the transaction is closed.
-    pub fn cursor(self: *Self) *Cursor {
+    pub fn cursor(self: *Self) Cursor {
         return self.root.cursor();
     }
 
@@ -178,6 +177,9 @@ pub const TX = struct {
     /// Returns an error if the bucket already exists, if th bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucket(self: *Self, name: []const u8) Error!*bucket.Bucket {
+        if (self.db == null) {
+            return Error.TxClosed;
+        }
         return self.root.createBucket(name);
     }
 
@@ -185,25 +187,31 @@ pub const TX = struct {
     /// Returns an error if the bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucketIfNotExists(self: *Self, name: []const u8) Error!*bucket.Bucket {
+        if (self.db == null) {
+            return Error.TxClosed;
+        }
         return self.root.createBucketIfNotExists(name);
     }
 
     /// Deletes a bucket.
     /// Returns an error if the bucket cannot be found or if the key represents a non-bucket value.
     pub fn deleteBucket(self: *Self, name: []const u8) Error!void {
+        if (self.db == null) {
+            return Error.TxClosed;
+        }
         return self.root.deleteBucket(name);
     }
 
     /// Executes a function for each bucket in the root.
     /// If the provided function returns an error then the iteration is stopped and
     /// the error is returned to the caller.
-    pub fn forEach(self: *Self, context: anytype, f: fn (@TypeOf(context), name: []const u8) Error!void) Error!void {
+    pub fn forEach(self: *Self, f: fn (name: []const u8) Error!void) Error!void {
         const travel = struct {
-            fn inner(ctx: @TypeOf(context), key: []const u8, _: ?[]const u8) Error!void {
-                return f(ctx, key);
+            fn inner(_: void, key: []const u8, _: ?[]const u8) Error!void {
+                return f(key);
             }
         }.inner;
-        return self.root.forEachKeyValueContext(context, travel);
+        return self.root.forEachKeyValueContext({}, travel);
     }
 
     /// Executes a function for each bucket in the root.
@@ -216,8 +224,12 @@ pub const TX = struct {
     }
 
     /// Adds a handler function to be executed after the transaction successfully commits.
-    pub fn onCommit(self: *Self, func: onCommitFn) void {
-        self._commitHandlers.append(func) catch unreachable;
+    pub fn onCommit(self: *Self, onCtx: *anyopaque, f: fn (
+        ?*anyopaque,
+        *TX,
+    ) void) void {
+        self.onCommitCtx = onCtx;
+        self.commitHandler = f;
     }
 
     /// Writes all changes to disk and updates the meta page.
@@ -239,11 +251,11 @@ pub const TX = struct {
         } else if (!self.writable) {
             return Error.TxNotWriteable;
         }
+
         const _db = self.getDB();
         // TODO(benbjohnson): Use vectorized I/O to write out dirty pages.
         // Rebalance nodes which have had deletions.
         var startTime = std.time.Timer.start() catch unreachable;
-        std.log.debug("rebalance root, root: {d}", .{self.root._b.?.root});
         self.root.rebalance();
         if (self.stats.rebalance > 0) {
             self.stats.spill_time += startTime.lap();
@@ -269,7 +281,7 @@ pub const TX = struct {
         // Free the freelist and allocate new pages for it. This will overestimate
         // the size of the freelist but not underestimate the size (wich would be bad).
         _db.freelist.free(self.meta.txid, self.getPage(self.meta.freelist)) catch unreachable;
-        std.log.debug("after freelist free transaction dirty pages", .{});
+        // std.log.debug("after freelist free transaction dirty pages", .{});
         const allocatePageCount = _db.freelist.size() / _db.pageSize + 1;
         const p = self.allocate(allocatePageCount) catch |err| {
             std.log.err("failed to allocate memory: {}", .{err});
@@ -313,12 +325,21 @@ pub const TX = struct {
         self.stats.writeTime += startTime.lap();
         // Finalize the transaction.
         self.close();
-        std.log.debug("after close transaction.", .{});
+        std.log.debug("after close transaction, cost: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
     }
 
     /// Closes the transaction and ignores all previous updates. Read-only
     /// transactions must be rolled back and not committed.
     pub fn rollback(self: *Self) Error!void {
+        assert(!self.managed, "managed tx rollback not allowed", .{});
+        if (self.db == null) {
+            return Error.TxClosed;
+        }
+        self._rollback();
+    }
+
+    /// Rolls back the transaction and destroys the transaction.
+    pub fn rollbackAndDestroy(self: *Self) Error!void {
         assert(!self.managed, "managed tx rollback not allowed", .{});
         if (self.db == null) {
             return Error.TxClosed;
@@ -587,18 +608,20 @@ pub const TX = struct {
     fn writeMeta(self: *Self) Error!void {
         // Create a tempory buffer for the meta page.
         const _db = self.getDB();
-        var buf = std.ArrayList(u8).initCapacity(self.allocator, _db.pageSize) catch unreachable;
-        defer buf.deinit();
-        buf.appendNTimes(0, _db.pageSize) catch unreachable;
-        const p = _db.pageInBuffer(buf.items, 0);
+        const buf = self.allocator.alloc(u8, _db.pageSize) catch unreachable;
+        defer self.allocator.free(buf);
+        const p = _db.pageInBuffer(buf, 0);
         self.meta.write(p);
         // Write the meta page to file.
         const opts = _db.opts.?;
         const sz = @as(u64, _db.pageSize);
-        const writeSize = opts(_db.file, buf.items, sz) catch unreachable;
+        const writeSize = opts(_db.file, buf, sz) catch unreachable;
         assert(writeSize == sz, "failed to write meta page to disk, {} != {}", .{ writeSize, sz });
         if (!_db.noSync) { // TODO
-            _db.file.sync() catch unreachable;
+            _db.file.sync() catch |err| {
+                std.log.err("failed to sync file, err:{any}", .{err});
+                return Error.FileIOError;
+            };
         }
         // Update statistics.
         self.stats.write += 1;
@@ -630,6 +653,7 @@ pub const TX = struct {
             // Remove transaction ref & writer lock.
             _db.rwtx = null;
             _db.rwlock.unlock();
+            // std.log.warn("unlock!", .{});
 
             // Merge statistics.
             _db.statlock.lock();
@@ -664,11 +688,13 @@ pub const TX = struct {
         self.autoFreeNodes.deinit(self.allocator);
         self.root.deinit();
         self.arenaAllocator.deinit();
-        // std.log.info("after clear root", .{});
         // Execute commit handlers now that the locks have been removed.
-        std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});
-        for (self._commitHandlers.items) |func| {
-            func.execute();
+        // std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});
+        // for (self._commitHandlers.items) |func| {
+        //     func.execute();
+        // }
+        if (self.commitHandler) |handler| {
+            handler(self.onCommitCtx, self);
         }
     }
 
