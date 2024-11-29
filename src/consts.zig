@@ -1,5 +1,7 @@
 const std = @import("std");
-const assert = @import("util.zig").assert;
+const util = @import("util.zig");
+const assert = util.assert;
+const panicFmt = util.panicFmt;
 const Page = @import("page.zig").Page;
 const Node = @import("node.zig").Node;
 /// Represents a marker value to indicate that a file is a Bolt DB.
@@ -47,8 +49,8 @@ pub const PgidType = u64;
 /// A slice of page ids.
 pub const PgIds = []PgidType;
 /// The size of a page.
-// pub const PageSize: usize = std.mem.page_size;
-pub const PageSize: usize = 4096;
+pub const PageSize: usize = std.mem.page_size;
+// pub const PageSize: usize = 4096;
 
 /// Represents the options that can be set when opening a database.
 pub const Options = packed struct {

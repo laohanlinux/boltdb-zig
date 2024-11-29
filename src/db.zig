@@ -11,7 +11,7 @@ const PagePool = @import("gc.zig").PagePool;
 const TX = tx.TX;
 const PageFlag = consts.PageFlag;
 const assert = util.assert;
-const Table = consts.Table;
+const Table = @import("pretty_table.zig").Table;
 const PgidType = consts.PgidType;
 
 const Page = page.Page;
@@ -21,6 +21,8 @@ const IgnoreNoSync = false;
 const default_page_size = std.os.getPageSize();
 // default options
 const defaultOptions = consts.defaultOptions;
+
+const log = std.log.scoped(.BoltDB);
 
 /// DB is the main struct that holds the database state.
 pub const DB = struct {
@@ -146,6 +148,7 @@ pub const DB = struct {
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
     pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: consts.Options) !*Self {
+        log.info("Start to open the database", .{});
         const db = try allocator.create(DB);
         db.allocator = allocator;
         // Set default options if no options are proveide.
@@ -169,7 +172,7 @@ pub const DB = struct {
         db.stats = Stats{};
         db.readOnly = options.readOnly;
         db.strictMode = options.strictMode;
-        std.log.info("database file path: {s}", .{filePath});
+        log.info("load database from path: {s}", .{filePath});
         // Open data file and separate sync handler for metadata writes.
         db._path = db.allocator.dupe(u8, filePath) catch unreachable;
         if (options.readOnly) {
@@ -191,6 +194,7 @@ pub const DB = struct {
                 const fileFp = std.fs.cwd().createFile(db._path, createFlag) catch |err| switch (err) {
                     std.fs.File.OpenError.PathAlreadyExists => {
                         const fp = try std.fs.cwd().openFile(db._path, .{ .mode = .read_write });
+                        log.info("the db file already exists", .{});
                         break :blk fp;
                     },
                     else => {
@@ -215,21 +219,24 @@ pub const DB = struct {
         const stat = try db.file.stat();
         if (stat.size == 0) {
             // Initialize new files with meta pagess.
+            log.info("initialize a new db", .{});
             try db.init();
         } else {
+            log.info("db size: {}", .{stat.size});
             // Read the first meta page to determine the page size.
-            const buf = try db.allocator.alloc(u8, 0x1000);
+            const buf = try db.allocator.alloc(u8, db.pageSize);
             defer db.allocator.free(buf);
             const sz = try db.file.readAll(buf[0..]);
-            std.log.info("has load meta size: {}", .{sz});
+            log.info("has load meta size: {}", .{sz});
             const m = db.pageInBuffer(buf[0..sz], 0).meta();
             db.pageSize = blk: {
                 m.validate() catch { // if the meta page is invalid, then set the page size to the default page size
+                    log.warn("the meta page is invalid, set the page size to the default page size: {}", .{consts.PageSize});
                     break :blk consts.PageSize;
                 };
                 break :blk m.pageSize;
             };
-            std.log.info("pageSize has change to: {}", .{db.pageSize});
+            log.info("pageSize has change to: {}", .{db.pageSize});
         }
         errdefer db.close() catch unreachable;
         // Memory map the data file.
@@ -248,7 +255,7 @@ pub const DB = struct {
 
     /// init creates a new database file and initializes its meta pages.
     pub fn init(self: *Self) !void {
-        std.log.info("init a new db!", .{});
+        log.info("init a new db!", .{});
         // Set the page size to the OS page size.
         // Create two meta pages on a buffer, and
         const buf = try self.allocator.alloc(u8, self.pageSize * 4);
@@ -270,7 +277,7 @@ pub const DB = struct {
             m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
             m.txid = @as(consts.TxId, i);
             m.flags = consts.intFromFlags(PageFlag.meta);
-            std.log.info("init meta{}", .{i});
+            log.info("init meta{}", .{i});
             m.check_sum = m.sum64();
         }
 
@@ -300,7 +307,8 @@ pub const DB = struct {
     /// Opens the underlying memory-mapped file and initializes the meta references.
     /// minsz is the minimum size that the new mmap can be.
     pub fn mmap(self: *Self, minsz: usize) !void {
-        std.log.info("mmap minsz: {}", .{minsz});
+        defer log.info("succeed to mmap", .{});
+        log.info("mmap minsz: {}", .{minsz});
         self.mmaplock.lock();
         defer self.mmaplock.unlock();
         const fileInfo = try self.file.metadata();
@@ -330,7 +338,7 @@ pub const DB = struct {
         self.dataRef = try util.mmap(self.file, size, true);
         self.datasz = size;
         assert(self.dataRef.?.len == size, "the size of dataRef is not equal to the size: {d}, dataRef.len: {d}", .{ size, self.dataRef.?.len });
-        std.log.info("succeed to init data reference, size: {}", .{size});
+        log.info("succeed to init data reference, size: {}", .{size});
         // Save references to the meta pages.
         self.meta0 = self.pageById(0).meta();
         self.meta1 = self.pageById(1).meta();
@@ -343,6 +351,8 @@ pub const DB = struct {
                 return err0;
             };
         };
+        try self.meta0.print(self.allocator);
+        try self.meta1.print(self.allocator);
     }
 
     /// Determines the appropriate size for the mmap given the current size
@@ -393,8 +403,10 @@ pub const DB = struct {
         const pos: u64 = id * @as(u64, self.pageSize);
         assert(self.dataRef.?.len >= (pos + self.pageSize), "dataRef.len: {}, pos: {}, pageSize: {}, id: {}", .{ self.dataRef.?.len, pos, self.pageSize, id });
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
+        // log.debug("==>retrive a page by pgid: {}, buf: {any}", .{ id, buf });
+
         const p = Page.init(buf);
-        std.log.debug("retrive a page by pgid: {}, pageSize: {}, count: {}, overflow: {}", .{ id, self.pageSize, p.count, p.overflow });
+        // log.debug("==>retrive a page by pgid<===", .{});
         return p;
     }
 
@@ -449,7 +461,7 @@ pub const DB = struct {
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
         if (p.id != 0) {
-            std.log.debug("allocate a new page from freedlist, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
+            log.debug("allocate a new page from freedlist, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
             return p;
         }
         // Resize mmap() if we're at the end.
@@ -461,7 +473,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(PgidType, count);
-        std.log.debug("allow a new page (pgid={}) from mmap and update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ p.id, self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
+        log.debug("allow a new page (pgid={}) from mmap and update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ p.id, self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
         return p;
     }
 
@@ -595,7 +607,7 @@ pub const DB = struct {
         const trx = TX.init(self, true);
         trx.writable = true;
         self.rwtx = trx;
-        std.log.debug("After create a write transaction, txPtrInt: 0x{x}, meta: {any}", .{ trx.getTxPtr(), trx.root.*._b.? });
+        log.debug("After create a write transaction, txPtrInt: 0x{x}, meta: {any}", .{ trx.getTxPtr(), trx.root.*._b.? });
 
         // Free any pages associated with closed read-only transactions.
         assert(self.txs.items.len <= 1, comptime "only one transaction need to be released", .{});
@@ -634,20 +646,20 @@ pub const DB = struct {
     pub fn updateWithContext(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
         const trxID = trx.getID();
-        std.log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer std.log.info("End a write transaction, txid: {}", .{trxID});
+        log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        defer log.info("End a write transaction, txid: {}", .{trxID});
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
         // If an errors is returned from the function then rollback and return error.
         execFn(context, trx) catch |err| {
             trx.managed = false;
-            trx.rollback() catch unreachable;
-            std.log.info("after execute transaction commit handle", .{});
+            trx.rollbackAndDestroy() catch unreachable;
+            log.info("after execute transaction commit handle", .{});
             return err;
         };
         trx.managed = false;
-        std.log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer trx.destroy();
         try trx.commit();
     }
@@ -668,8 +680,8 @@ pub const DB = struct {
     pub fn viewWithContext(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
         const trxID = trx.getID();
-        std.log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
+        log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        defer log.info("End a read-only transaction, txid: {}", .{trxID});
         // Mark as managed tx so that the inner function cannot manually rollback.
         trx.managed = true;
         // If an error is returned from the function then pass it through.
@@ -681,7 +693,7 @@ pub const DB = struct {
         };
         trx.managed = false;
         try trx.rollbackAndDestroy();
-        std.log.info("after execute transaction rollback handle", .{});
+        log.info("after execute transaction rollback handle", .{});
     }
 
     /// Removes a transaction from the database.
@@ -714,7 +726,7 @@ pub const DB = struct {
 
     /// mustCheck runs a consistency check on the database and panics if any errors are found.
     pub fn mustCheck(self: *Self) void {
-        std.log.info("🎲 Start to check the database consistency", .{});
+        log.info("🎲 Start to check the database consistency", .{});
         const updateFn = struct {
             fn update(_db: *DB, trx: *TX) Error!void {
                 trx.check() catch |e| {
@@ -724,12 +736,12 @@ pub const DB = struct {
                     defer tmpFile.close();
                     try trx.copyFile(tmpFile);
 
-                    std.log.info("\n\n", .{});
-                    std.log.info("❌ Consistency check failed, error: {any}", .{e});
-                    std.log.info("\n\n", .{});
-                    std.log.info("db saved to:", .{});
-                    std.log.info("{s}", .{tmpFilePath});
-                    std.log.info("\n\n", .{});
+                    log.info("\n\n", .{});
+                    log.info("❌ Consistency check failed, error: {any}", .{e});
+                    log.info("\n\n", .{});
+                    log.info("db saved to:", .{});
+                    log.info("{s}", .{tmpFilePath});
+                    log.info("\n\n", .{});
                     std.process.exit(1);
                 };
             }
@@ -793,7 +805,7 @@ pub const DB = struct {
     fn opsWriteAt(fp: std.fs.File, bytes: []const u8, offset: u64) Error!usize {
         // std.log.err("write at offset: {}, bytes: {any}", .{ offset, bytes.len });
         const writeN = fp.pwrite(bytes, offset) catch |err| {
-            std.log.err("write at offset: {} failed, error: {any}", .{ offset, err });
+            log.err("write at offset: {} failed, error: {any}", .{ offset, err });
             return Error.FileIOError;
         };
         return writeN;

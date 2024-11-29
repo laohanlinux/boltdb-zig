@@ -3,7 +3,10 @@ const tx = @import("tx.zig");
 const tests = @import("tests.zig");
 const Error = @import("error.zig").Error;
 const assert = @import("util.zig").assert;
-const KeyPair = @import("consts.zig").KeyPair;
+const consts = @import("consts.zig");
+const PageSize = consts.PageSize;
+const defaultOptions = consts.defaultOptions;
+const KeyPair = consts.KeyPair;
 
 // Ensure that committing a closed transaction returns an error.
 // test "Tx_Commit_ErrTxClosed" {
@@ -380,4 +383,86 @@ test "Tx_OnCommit" {
         }
     }.exec);
     try std.testing.expectEqual(@as(usize, 1), ctx.commitCount);
+}
+
+// Ensure that Tx commit handlers are NOT called after a transaction rolls back.
+test "Tx_OnCommit_Rollback" {
+    std.testing.log_level = .err;
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
+    const kvDB = testCtx.db;
+    const Context = struct {
+        x: usize = 0,
+    };
+    var ctx = Context{};
+    const OnCommit = struct {
+        fn callback(_ctxPtr: ?*anyopaque, _: *tx.TX) void {
+            std.log.err("callback", .{});
+            const argPtr = @as(*Context, @ptrCast(@alignCast(_ctxPtr)));
+            argPtr.x += 1;
+        }
+    };
+    kvDB.updateWithContext(&ctx, struct {
+        fn exec(context: *Context, trx: *tx.TX) Error!void {
+            trx.onCommit(context, OnCommit.callback);
+            _ = try trx.createBucket("widgets");
+            return Error.NotPassConsistencyCheck;
+        }
+    }.exec) catch |err| {
+        assert(err == Error.NotPassConsistencyCheck, "expected error NotPassConsistencyCheck", .{});
+    };
+    assert(ctx.x == 0, "expected ctx.x to be 0", .{});
+}
+
+// Ensure that the database can be copied to a file path.
+test "Tx_CopyTo" {
+    std.testing.log_level = .debug;
+
+    std.fs.cwd().deleteFile("copy_to_db") catch unreachable;
+    var fp = std.fs.cwd().createFile("copy_to_db", .{}) catch unreachable;
+
+    var originPath: []const u8 = ""; // 明确指定类型为 []const u8
+    defer std.testing.allocator.free(originPath);
+    {
+        var testCtx = try tests.setup(std.testing.allocator);
+        const kvDB = testCtx.db;
+        const Context = struct {
+            fp: std.fs.File,
+        };
+        var ctx = Context{ .fp = fp };
+        _ = try kvDB.update(struct {
+            fn exec(trx: *tx.TX) Error!void {
+                const b = try trx.createBucket("widgets");
+                try b.put(KeyPair.init("foo", "bar"));
+                try b.put(KeyPair.init("baz", "bat"));
+            }
+        }.exec);
+
+        _ = try kvDB.viewWithContext(&ctx, struct {
+            fn exec(copyCtx: *Context, trx: *tx.TX) Error!void {
+                try trx.copyFile(copyCtx.fp);
+            }
+        }.exec);
+        originPath = std.testing.allocator.dupe(u8, kvDB.path()) catch unreachable;
+        tests.teardownNotDeleteDB(&testCtx);
+    }
+
+    fp.close();
+    {
+        var options = defaultOptions;
+        options.readOnly = false;
+        options.initialMmapSize = 100000 * PageSize;
+        const kvDB = try @import("db.zig").DB.open(std.testing.allocator, "copy_to_db", null, options);
+        defer kvDB.close() catch unreachable;
+        try kvDB.view(struct {
+            fn exec(trx: *tx.TX) Error!void {
+                const b = trx.getBucket("widgets");
+                assert(b != null, "expected bucket 'widgets'", .{});
+                const foo = b.?.get("foo");
+                assert(std.mem.eql(u8, foo.?, "bar"), "expected 'bar'", .{});
+                const baz = b.?.get("baz");
+                assert(std.mem.eql(u8, baz.?, "bat"), "expected 'bat'", .{});
+            }
+        }.exec);
+    }
 }

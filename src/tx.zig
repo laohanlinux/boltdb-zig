@@ -16,6 +16,7 @@ const assert = @import("assert.zig").assert;
 const Table = @import("pretty_table.zig").Table;
 const PgidType = consts.PgidType;
 const AutoFreeObject = bucket.AutoFreeObject;
+const log = std.log.scoped(.BoltTransaction);
 
 /// Represent a read-only or read/write transaction on the database.
 /// Read-only transactions can be used for retriving values for keys and creating cursors.
@@ -325,6 +326,10 @@ pub const TX = struct {
         self.stats.writeTime += startTime.lap();
         // Finalize the transaction.
         self.close();
+        if (self.commitHandler) |handler| {
+            handler(self.onCommitCtx, self);
+        }
+        self.onCommitCtx = null;
         std.log.debug("after close transaction, cost: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
     }
 
@@ -425,7 +430,9 @@ pub const TX = struct {
         const file = std.fs.cwd().openFile(_db.path(), .{ .mode = .read_only }) catch unreachable;
         defer file.close();
         // Generate a meta page. We use the same page data for both meta pages.
-        const buffer = try self.getAllocator().alloc(u8, _db.pageSize);
+        const alloc = self.getAllocator();
+        const buffer = try alloc.alloc(u8, _db.pageSize);
+        defer alloc.free(buffer);
         @memset(buffer, 0);
         const metaPage = _db.pageInBuffer(buffer, 0);
         metaPage.flags = consts.intFromFlags(consts.PageFlag.meta);
@@ -438,8 +445,9 @@ pub const TX = struct {
             std.log.err("write meta 0 failed: {any}", .{err});
             return Error.FileIOError;
         };
-        assert(hasWritten == buffer.len, "write meta 0 failed", .{});
+        assert(hasWritten == _db.pageSize, "write meta 0 failed", .{});
         n += hasWritten;
+        // log.debug("write to file, n: {}, pageNumber: {}", .{ n, n / _db.pageSize });
 
         // Write meta 1
         metaPage.id = 1;
@@ -449,18 +457,20 @@ pub const TX = struct {
             std.log.err("write meta 1 failed: {any}", .{err});
             return Error.FileIOError;
         };
-        assert(hasWritten == buffer.len, "write meta 1 failed", .{});
+        assert(hasWritten == _db.pageSize, "write meta 1 failed", .{});
         n += hasWritten;
+        // log.debug("write to file, n: {}, pageNumber: {}", .{ n, n / _db.pageSize });
 
         // Move past the meta pages in the file.
         const reader = file.reader();
-        const skipBytes: usize = self.size() - _db.pageSize * 2;
-        reader.skipBytes(skipBytes, .{}) catch |err| {
+        reader.skipBytes(_db.pageSize * 2, .{}) catch |err| {
             std.log.err("skip bytes failed: {any}", .{err});
             return Error.FileIOError;
         };
+        // log.debug("the file pos: {}, txsize: {}", .{ file.getPos() catch unreachable, self.size() });
 
         while (true) {
+            @memset(buffer, 0);
             const hasRead = reader.read(buffer[0..]) catch |err| {
                 std.log.err("read data page failed: {any}", .{err});
                 return Error.FileIOError;
@@ -473,8 +483,9 @@ pub const TX = struct {
                 return Error.FileIOError;
             };
             n += hasRead;
+            // log.debug("write to file, n: {}, pageNumber: {}", .{ n, n / _db.pageSize });
         }
-        std.log.info("write to file done, n: {}", .{n});
+        // std.log.info("write to file done, n: {}, pageNumber: {}", .{ n, n / _db.pageSize });
         return n;
     }
 
@@ -688,14 +699,6 @@ pub const TX = struct {
         self.autoFreeNodes.deinit(self.allocator);
         self.root.deinit();
         self.arenaAllocator.deinit();
-        // Execute commit handlers now that the locks have been removed.
-        // std.log.info("execute commit handlers {}", .{self._commitHandlers.capacity});
-        // for (self._commitHandlers.items) |func| {
-        //     func.execute();
-        // }
-        if (self.commitHandler) |handler| {
-            handler(self.onCommitCtx, self);
-        }
     }
 
     /// Iterates over every page within a given page and executes a function.
