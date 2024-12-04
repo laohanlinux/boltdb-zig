@@ -87,16 +87,33 @@ pub fn randomBuf(buf: []usize) void {
 }
 
 /// Create a temporary file.
-pub fn createTmpFile(name: ?[]const u8) struct {
+pub fn createTmpFile() struct {
     file: std.fs.File,
     tmpDir: std.testing.TmpDir,
+
+    pub fn deinit(self: *@This()) void {
+        self.file.close();
+        self.tmpDir.cleanup();
+    }
+
+    pub fn path(self: @This()) []const u8 {
+        var basePath: [256]u8 = [_]u8{0} ** 256;
+        const name = std.fmt.bufPrint(&basePath, ".zig-cache/tmp/{s}/{s}", .{ self.tmpDir.sub_path, "bolt.db.tmp" }) catch unreachable;
+        return name[0..];
+    }
 } {
     var tmpDir = std.testing.tmpDir(.{});
-    if (name) |n| {
-        return .{ .file = tmpDir.dir.createFile(n, .{}) catch unreachable, .tmpDir = tmpDir };
-    } else {
-        return .{ .file = tmpDir.dir.createFile("bolt.db.tmp", .{}) catch unreachable, .tmpDir = tmpDir };
-    }
+    const file = tmpDir.dir.createFile("bolt.db.tmp", .{}) catch unreachable;
+    return .{
+        .file = file,
+        .tmpDir = tmpDir,
+    };
+}
+
+/// Create a temporary file.
+pub fn createFile(name: []const u8) std.fs.File {
+    var tmpDir = std.testing.tmpDir(.{});
+    return tmpDir.dir.createFile(name, .{}) catch unreachable;
 }
 
 /// Get a temporary file path.
@@ -275,6 +292,28 @@ pub const RevTestData = struct {
     }
 };
 
+/// A copy writer.
+pub const CopyWriter = struct {
+    buffer: std.ArrayList(u8),
+    /// Append bytes to the buffer.
+    pub fn appendWriter(self: *CopyWriter, bytes: []const u8) error{OutOfMemory}!usize {
+        try self.buffer.appendSlice(bytes);
+        return bytes.len;
+    }
+    /// Get a writer.
+    pub fn writer(self: *CopyWriter) std.io.Writer(*CopyWriter, error{OutOfMemory}, appendWriter) {
+        return .{ .context = self };
+    }
+};
+
+test "copy writer" {
+    var copyWriter = CopyWriter{ .buffer = std.ArrayList(u8).init(std.testing.allocator) };
+    defer copyWriter.buffer.deinit();
+    const writer = copyWriter.writer();
+    try writer.writeAll("hello");
+    try std.testing.expectEqualStrings("hello", copyWriter.buffer.items);
+}
+
 // test "copy allocator memory" {
 //     var gp = std.heap.GeneralPurposeAllocator(.{}){};
 //     const allocator = gp.allocator();
@@ -300,17 +339,17 @@ pub const RevTestData = struct {
 //     _ = gp.deinit();
 // }
 
-test "tempFilePath" {
-    // var tmpFile = createTmpFile("test.db");
-    // defer tmpFile.tmpDir.cleanup();
-    // std.debug.print("tmp file: {s}\n", .{tmpFile.tmpDir.sub_path});
-    // std.debug.print("tmp file: {d}\n", .{std.time.milliTimestamp()});
-    // const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
-    // defer std.testing.allocator.free(filePath);
-    // std.debug.print("filePath: {s}\n", .{filePath});
-    const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{d}.db", .{100});
-    defer std.testing.allocator.free(filePath);
+// test "tempFilePath" {
+//     // var tmpFile = createTmpFile("test.db");
+//     // defer tmpFile.tmpDir.cleanup();
+//     // std.debug.print("tmp file: {s}\n", .{tmpFile.tmpDir.sub_path});
+//     // std.debug.print("tmp file: {d}\n", .{std.time.milliTimestamp()});
+//     // const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.milliTimestamp()});
+//     // defer std.testing.allocator.free(filePath);
+//     // std.debug.print("filePath: {s}\n", .{filePath});
+//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{d}.db", .{100});
+//     defer std.testing.allocator.free(filePath);
 
-    const kvDB = DB.open(std.testing.allocator, "filePath", null, .{}) catch unreachable;
-    defer kvDB.close() catch unreachable;
-}
+//     const kvDB = DB.open(std.testing.allocator, "filePath", null, .{}) catch unreachable;
+//     defer kvDB.close() catch unreachable;
+// }

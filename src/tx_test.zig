@@ -415,11 +415,10 @@ test "Tx_OnCommit_Rollback" {
 }
 
 // Ensure that the database can be copied to a file path.
-test "Tx_CopyTo" {
+test "Tx_CopyFile" {
     std.testing.log_level = .debug;
-
-    std.fs.cwd().deleteFile("copy_to_db") catch unreachable;
-    var fp = std.fs.cwd().createFile("copy_to_db", .{}) catch unreachable;
+    var tmpDir = tests.createTmpFile();
+    defer tmpDir.deinit();
 
     var originPath: []const u8 = ""; // 明确指定类型为 []const u8
     defer std.testing.allocator.free(originPath);
@@ -429,7 +428,7 @@ test "Tx_CopyTo" {
         const Context = struct {
             fp: std.fs.File,
         };
-        var ctx = Context{ .fp = fp };
+        var ctx = Context{ .fp = tmpDir.file };
         _ = try kvDB.update(struct {
             fn exec(trx: *tx.TX) Error!void {
                 const b = try trx.createBucket("widgets");
@@ -440,19 +439,17 @@ test "Tx_CopyTo" {
 
         _ = try kvDB.viewWithContext(&ctx, struct {
             fn exec(copyCtx: *Context, trx: *tx.TX) Error!void {
-                try trx.copyFile(copyCtx.fp);
+                _ = try trx.writeToAnyWriter(copyCtx.fp.writer());
             }
         }.exec);
         originPath = std.testing.allocator.dupe(u8, kvDB.path()) catch unreachable;
         tests.teardownNotDeleteDB(&testCtx);
     }
-
-    fp.close();
     {
         var options = defaultOptions;
         options.readOnly = false;
         options.initialMmapSize = 100000 * PageSize;
-        const kvDB = try @import("db.zig").DB.open(std.testing.allocator, "copy_to_db", null, options);
+        const kvDB = try @import("db.zig").DB.open(std.testing.allocator, tmpDir.path(), null, options);
         defer kvDB.close() catch unreachable;
         try kvDB.view(struct {
             fn exec(trx: *tx.TX) Error!void {
@@ -465,4 +462,43 @@ test "Tx_CopyTo" {
             }
         }.exec);
     }
+}
+
+// Ensure that Copy handles write errors right.
+test "Tx_CopyFile_Error_Meta" {
+    std.testing.log_level = .debug;
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
+    const kvDB = testCtx.db;
+    const Context = struct {
+        after: usize = 0,
+    };
+    // var ctx = Context{ .after = 3 * kvDB.pageSize };
+    const ContextWriter = tx.CopyTxWriter(*Context);
+    _ = ContextWriter; // autofix
+
+    _ = try kvDB.update(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            const b = try trx.createBucket("widgets");
+            try b.put(KeyPair.init("foo", "bar"));
+            try b.put(consts.KeyPair.init("baz", "bat"));
+        }
+    }.exec);
+    const err = kvDB.viewWithContext(&ctx, struct {
+        fn exec(execCtx: *Context, trx: *tx.TX) Error!void {
+            const tmpDir = tests.createTmpFile();
+            defer tmpDir.deinit();
+            var ctx = Context{ .fp = tmpDir.file };
+            trx.writeToAnyWriter(tmpDir.file.writer()) catch |err| {
+                assert(err == Error.NotPassConsistencyCheck, "expected error NotPassConsistencyCheck, but got {any}", .{err});
+            };
+            var copyWriter = ContextWriter.init(trx, &ctx, struct {
+                fn write(self: *ContextWriter, bytes: []const u8) Error!usize {
+                    return bytes.len;
+                }
+            }.write);
+        }
+    }.exec);
+    assert(err == Error.NotPassConsistencyCheck, "expected error NotPassConsistencyCheck, but got {any}", .{err});
+    std.log.err("ctx.after: {d}", .{ctx.after});
 }
