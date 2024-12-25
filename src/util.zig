@@ -5,11 +5,8 @@ pub inline fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     if (ok) {
         return;
     }
-    const allocator = std.heap.page_allocator;
-    const s = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
-    std.debug.print("{s}\n", .{s});
-    defer allocator.free(s);
-    @panic(s);
+    std.debug.print(fmt, args);
+    std.debug.assert(ok);
 }
 
 /// panic the program with the formatted message

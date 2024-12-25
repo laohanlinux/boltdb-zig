@@ -443,7 +443,7 @@ pub const TX = struct {
         metaPage.meta().check_sum = metaPage.meta().sum64();
         var hasWritten = writer.write(buffer) catch |err| {
             std.log.err("write meta 0 failed: {any}", .{err});
-            return Error.FileIOError;
+            return err;
         };
         assert(hasWritten == _db.pageSize, "write meta 0 failed", .{});
         n += hasWritten;
@@ -454,7 +454,7 @@ pub const TX = struct {
         metaPage.meta().check_sum = metaPage.meta().sum64();
         hasWritten = writer.write(buffer) catch |err| {
             std.log.err("write meta 1 failed: {any}", .{err});
-            return Error.FileIOError;
+            return err;
         };
         assert(hasWritten == _db.pageSize, "write meta 1 failed", .{});
         n += hasWritten;
@@ -866,6 +866,58 @@ pub fn CopyTxWriter(comptime Writer: type) type {
 }
 
 pub fn writeToWriter(self: *TX, writer: anytype) Error!usize {
+    const ctxLog = std.log.scoped(.BoltTransactionToWriter);
+    // Attempt to open reader with WriteFlag
+    var n: usize = 0;
+    var _db = self.getDB();
+    const file = std.fs.cwd().openFile(_db.path(), .{ .mode = .read_only }) catch unreachable;
+    defer file.close();
+    // Generate a meta page. We use the same page data for both meta pages.
+    const alloc = self.getAllocator();
+    const buffer = try alloc.alloc(u8, _db.pageSize);
+    defer alloc.free(buffer);
+    @memset(buffer, 0);
+    const metaPage = _db.pageInBuffer(buffer, 0);
+    metaPage.flags = consts.intFromFlags(consts.PageFlag.meta);
+    metaPage.meta().* = self.meta.*;
+    // Write meta 0
+    metaPage.id = 0;
+    metaPage.meta().check_sum = metaPage.meta().sum64();
+    var hasWritten = try writer.writeAll(buffer);
+    assert(hasWritten == _db.pageSize, "write meta 0 failed", .{});
+    n += hasWritten;
+
+    // Write meta 1
+    metaPage.id = 1;
+    metaPage.meta().txid -= 1;
+    metaPage.meta().check_sum = metaPage.meta().sum64();
+    hasWritten = try writer.writeAll(buffer);
+    assert(hasWritten == _db.pageSize, "write meta 1 failed", .{});
+    n += hasWritten;
+
+    // Move past the meta pages in the file.
+    const reader = file.reader();
+    reader.skipBytes(_db.pageSize * 2, .{}) catch |err| {
+        ctxLog.err("skip bytes failed: {any}", .{err});
+        return Error.FileIOError;
+    };
+
+    while (true) {
+        @memset(buffer, 0);
+        const hasRead = reader.read(buffer[0..]) catch |err| {
+            ctxLog.err("read data page failed: {any}", .{err});
+            return Error.FileIOError;
+        };
+        // Break if we've reached EOF
+        if (hasRead == 0) break;
+        // Write only the portion that was actually read
+        _ = try writer.writeAll(buffer[0..hasRead]);
+        n += hasRead;
+    }
+    return n;
+}
+
+pub fn writeToWriterByStream(self: *TX, writer: anytype) Error!usize {
     // Attempt to open reader with WriteFlag
     var n: usize = 0;
     var _db = self.getDB();
@@ -925,3 +977,21 @@ pub fn writeToWriter(self: *TX, writer: anytype) Error!usize {
     }
     return n;
 }
+
+/// FileWriter is a writer that writes to a file.
+pub const FileWriter = struct {
+    fp: std.fs.File,
+    /// Initializes a new FileWriter.
+    pub fn init(file: std.fs.File) FileWriter {
+        return FileWriter{ .fp = file };
+    }
+
+    /// Writes the bytes to the file.
+    pub fn writeAll(self: *FileWriter, bytes: []const u8) Error!usize {
+        self.fp.writeAll(bytes) catch |err| {
+            log.err("failed to write bytes, err: {any}", .{err});
+            return Error.FileIOError;
+        };
+        return bytes.len;
+    }
+};

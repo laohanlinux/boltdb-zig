@@ -439,7 +439,8 @@ test "Tx_CopyFile" {
 
         _ = try kvDB.viewWithContext(&ctx, struct {
             fn exec(copyCtx: *Context, trx: *tx.TX) Error!void {
-                _ = try trx.writeToAnyWriter(copyCtx.fp.writer());
+                var writer = tx.FileWriter.init(copyCtx.fp);
+                _ = try trx.writeToAnyWriter(&writer);
             }
         }.exec);
         originPath = std.testing.allocator.dupe(u8, kvDB.path()) catch unreachable;
@@ -473,9 +474,7 @@ test "Tx_CopyFile_Error_Meta" {
     const Context = struct {
         after: usize = 0,
     };
-    // var ctx = Context{ .after = 3 * kvDB.pageSize };
-    const ContextWriter = tx.CopyTxWriter(*Context);
-    _ = ContextWriter; // autofix
+    var ctx = Context{ .after = 3 * kvDB.pageSize };
 
     _ = try kvDB.update(struct {
         fn exec(trx: *tx.TX) Error!void {
@@ -485,20 +484,33 @@ test "Tx_CopyFile_Error_Meta" {
         }
     }.exec);
     const err = kvDB.viewWithContext(&ctx, struct {
-        fn exec(execCtx: *Context, trx: *tx.TX) Error!void {
-            const tmpDir = tests.createTmpFile();
+        fn exec(_: *Context, trx: *tx.TX) Error!void {
+            var tmpDir = tests.createTmpFile();
             defer tmpDir.deinit();
-            var ctx = Context{ .fp = tmpDir.file };
-            trx.writeToAnyWriter(tmpDir.file.writer()) catch |err| {
-                assert(err == Error.NotPassConsistencyCheck, "expected error NotPassConsistencyCheck, but got {any}", .{err});
-            };
-            var copyWriter = ContextWriter.init(trx, &ctx, struct {
-                fn write(self: *ContextWriter, bytes: []const u8) Error!usize {
-                    return bytes.len;
+
+            const streamWriter = struct {
+                after: usize = 0,
+                fp: std.fs.File,
+                const Self = @This();
+                fn init(fp: std.fs.File) Self {
+                    return Self{ .after = 0, .fp = fp };
                 }
-            }.write);
+
+                pub fn writeAll(self: *Self, bytes: []const u8) Error!usize {
+                    self.fp.writeAll(bytes) catch |err| {
+                        std.log.err("failed to write to file: {any}", .{err});
+                        return Error.FileIOError;
+                    };
+                    self.after += bytes.len;
+                    if (self.after > consts.PageSize) {
+                        return Error.FileIOError;
+                    }
+                    return self.after;
+                }
+            };
+            var writer = streamWriter.init(tmpDir.file);
+            _ = try trx.writeToAnyWriter(&writer);
         }
     }.exec);
-    assert(err == Error.NotPassConsistencyCheck, "expected error NotPassConsistencyCheck, but got {any}", .{err});
-    std.log.err("ctx.after: {d}", .{ctx.after});
+    std.debug.assert(err == Error.FileIOError);
 }

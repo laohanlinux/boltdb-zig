@@ -460,7 +460,6 @@ test "Bucket_Nested" {
     }.update;
     try db.update({}, updateFn3);
     db.mustCheck();
-
     // Insert into widgets/foo/baz.
     const updateFn4 = struct {
         fn update(_: void, tx: *TX) Error!void {

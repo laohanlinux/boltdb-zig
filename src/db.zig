@@ -686,9 +686,10 @@ pub const DB = struct {
         trx.managed = true;
         // If an error is returned from the function then pass it through.
         func(context, trx) catch |err| {
-            std.log.err("has error when execute transaction, txid: {}", .{trxID});
+            std.log.warn("has error when execute transaction, txid: {}", .{trxID});
             trx.managed = false;
             trx.rollback() catch unreachable;
+            trx.destroy();
             return err;
         };
         trx.managed = false;
@@ -746,7 +747,7 @@ pub const DB = struct {
                 };
             }
         }.update;
-        self.update(self, updateFn) catch |err| switch (err) {
+        self.updateWithContext(self, updateFn) catch |err| switch (err) {
             Error.DatabaseNotOpen => return,
             else => util.panicFmt("consistency check failed, error: {}", .{err}),
         };
