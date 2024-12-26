@@ -9,54 +9,54 @@ const defaultOptions = consts.defaultOptions;
 const KeyPair = consts.KeyPair;
 
 // Ensure that committing a closed transaction returns an error.
-// test "Tx_Commit_ErrTxClosed" {
-//     std.testing.log_level = .warn;
-//     var testCtx = try tests.setup(std.testing.allocator);
-//     defer tests.teardown(&testCtx);
-//     const kvDB = testCtx.db;
-//     {
-//         const trx = try kvDB.begin(true);
-//         defer trx.destroy();
-//         _ = try trx.createBucket("foo");
+test "Tx_Commit_ErrTxClosed" {
+    std.testing.log_level = .err;
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
+    const kvDB = testCtx.db;
+    {
+        const trx = try kvDB.begin(true);
+        defer trx.destroy();
+        _ = try trx.createBucket("foo");
 
-//         try trx.commit();
-//         trx.commit() catch |err| {
-//             try std.testing.expect(err == Error.TxClosed);
-//         };
-//     }
-//     {
-//         const trx = try kvDB.begin(true);
-//         _ = try trx.createBucketIfNotExists("foo");
-//         try trx.commitAndDestroy();
-//     }
-//     {
-//         const trx = try kvDB.begin(true);
-//         defer trx.destroy();
-//         _ = try trx.createBucketIfNotExists("foo");
-//         try trx.commit();
-//     }
-// }
+        try trx.commit();
+        trx.commit() catch |err| {
+            try std.testing.expect(err == Error.TxClosed);
+        };
+    }
+    {
+        const trx = try kvDB.begin(true);
+        _ = try trx.createBucketIfNotExists("foo");
+        try trx.commitAndDestroy();
+    }
+    {
+        const trx = try kvDB.begin(true);
+        defer trx.destroy();
+        _ = try trx.createBucketIfNotExists("foo");
+        try trx.commit();
+    }
+}
 
 // Ensure that rolling back a closed transaction returns an error.
-// test "Tx_Rollback_ErrTxClosed" {
-//     std.testing.log_level = .err;
-//     var testCtx = try tests.setup(std.testing.allocator);
-//     defer tests.teardown(&testCtx);
-//     const kvDB = testCtx.db;
-//     {
-//         const trx = try kvDB.begin(true);
-//         defer trx.destroy();
-//         try trx.rollback();
-//         trx.rollback() catch |err| {
-//             try std.testing.expect(err == Error.TxClosed);
-//         };
-//     }
+test "Tx_Rollback_ErrTxClosed" {
+    std.testing.log_level = .err;
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
+    const kvDB = testCtx.db;
+    {
+        const trx = try kvDB.begin(true);
+        defer trx.destroy();
+        try trx.rollback();
+        trx.rollback() catch |err| {
+            try std.testing.expect(err == Error.TxClosed);
+        };
+    }
 
-//     {
-//         const trx = try kvDB.begin(true);
-//         try trx.rollbackAndDestroy();
-//     }
-// }
+    {
+        const trx = try kvDB.begin(true);
+        try trx.rollbackAndDestroy();
+    }
+}
 
 // Ensure that committing a read-only transaction returns an error.
 test "Tx_Commit_ErrTxNotWritable" {
@@ -416,7 +416,7 @@ test "Tx_OnCommit_Rollback" {
 
 // Ensure that the database can be copied to a file path.
 test "Tx_CopyFile" {
-    std.testing.log_level = .debug;
+    std.testing.log_level = .err;
     var tmpDir = tests.createTmpFile();
     defer tmpDir.deinit();
 
@@ -450,7 +450,9 @@ test "Tx_CopyFile" {
         var options = defaultOptions;
         options.readOnly = false;
         options.initialMmapSize = 100000 * PageSize;
-        const kvDB = try @import("db.zig").DB.open(std.testing.allocator, tmpDir.path(), null, options);
+        const filePath = tmpDir.path(std.testing.allocator);
+        defer std.testing.allocator.free(filePath);
+        const kvDB = try @import("db.zig").DB.open(std.testing.allocator, filePath, null, options);
         defer kvDB.close() catch unreachable;
         try kvDB.view(struct {
             fn exec(trx: *tx.TX) Error!void {
@@ -467,7 +469,7 @@ test "Tx_CopyFile" {
 
 // Ensure that Copy handles write errors right.
 test "Tx_CopyFile_Error_Meta" {
-    std.testing.log_level = .debug;
+    std.testing.log_level = .err;
     var testCtx = try tests.setup(std.testing.allocator);
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
@@ -517,7 +519,7 @@ test "Tx_CopyFile_Error_Meta" {
 
 // Ensure that Copy handles write errors right.
 test "Tx_CopyFile_Error_Normal" {
-    std.testing.log_level = .debug;
+    std.testing.log_level = .err;
     var testCtx = try tests.setup(std.testing.allocator);
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;

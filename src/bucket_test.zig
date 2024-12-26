@@ -389,7 +389,7 @@ test "Bucket_Delete_FreelistOverflow" {
                 }
             }
         }.update;
-        try db.update(ctx, updateFn);
+        try db.updateWithContext(ctx, updateFn);
         if (i % 200 == 0) {
             const allocSize = db.pagePool.?.getAllocSize();
             const dataSize = db.dataRef.?.len;
@@ -400,7 +400,7 @@ test "Bucket_Delete_FreelistOverflow" {
 
     // Delete all of them in one large transaction
     const updateFn2 = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = tx.getBucket("0") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -411,7 +411,7 @@ test "Bucket_Delete_FreelistOverflow" {
             }
         }
     }.update;
-    try db.update({}, updateFn2);
+    try db.update(updateFn2);
     std.log.warn("total cost: {d}s", .{(std.time.timestamp() - ts)});
 }
 
@@ -426,28 +426,28 @@ test "Bucket_Nested" {
     const db = testCtx.db;
 
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             _ = try b.createBucket("foo");
             try b.put(KeyPair.init("bar", "0000"));
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
     db.mustCheck();
 
     // Update widgets/bar.
     const updateFn2 = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = tx.getBucket("widgets") orelse unreachable;
             try b.put(KeyPair.init("bar", "xxxx"));
         }
     }.update;
-    try db.update({}, updateFn2);
+    try db.update(updateFn2);
     db.mustCheck();
     // Cause a split.
     const count = 10000;
     const updateFn3 = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = tx.getBucket("widgets") orelse unreachable;
             for (0..count) |i| {
                 const key = try std.fmt.allocPrint(tx.allocator, "{d}", .{i});
@@ -458,22 +458,22 @@ test "Bucket_Nested" {
             }
         }
     }.update;
-    try db.update({}, updateFn3);
+    try db.update(updateFn3);
     db.mustCheck();
     // Insert into widgets/foo/baz.
     const updateFn4 = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = tx.getBucket("widgets") orelse unreachable;
             const b2 = b.getBucket("foo") orelse unreachable;
             try b2.put(KeyPair.init("baz", "yyyy"));
         }
     }.update;
-    try db.update({}, updateFn4);
+    try db.update(updateFn4);
     db.mustCheck();
 
     // Verify.
     const viewFn = struct {
-        fn view(_: void, tx: *TX) Error!void {
+        fn view(tx: *TX) Error!void {
             const b = tx.getBucket("widgets") orelse unreachable;
             const b2 = b.getBucket("foo") orelse unreachable;
             const value = b2.get("baz");
@@ -490,7 +490,7 @@ test "Bucket_Nested" {
             }
         }
     }.view;
-    try db.view({}, viewFn);
+    try db.view(viewFn);
 }
 
 // Ensure that deleting a bucket using Delete() returns an error.
@@ -500,7 +500,7 @@ test "Bucket_Delete_Bucket" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             _ = try b.createBucket("foo");
             b.delete("foo") catch |err| {
@@ -508,7 +508,7 @@ test "Bucket_Delete_Bucket" {
             };
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure that deleting a key on a read-only bucket returns an error.
@@ -518,21 +518,21 @@ test "Bucket_Delete_ReadOnly" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             _ = try tx.createBucket("widgets");
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 
     const viewFn = struct {
-        fn view(_: void, tx: *TX) Error!void {
+        fn view(tx: *TX) Error!void {
             const b = tx.getBucket("widgets").?;
             b.delete("bar") catch |err| {
                 assert(err == Error.TxNotWriteable, comptime "the error is not TxNotWriteable", .{});
             };
         }
     }.view;
-    try db.view({}, viewFn);
+    try db.view(viewFn);
 }
 
 // Ensure that a deleting value while the transaction is closed returns an error.
@@ -556,7 +556,7 @@ test "Bucket_DeleteBucket_Nested" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const widgets = try tx.createBucket("widgets");
             const foo = try widgets.createBucket("foo");
             const bar = try foo.createBucket("bar");
@@ -565,7 +565,7 @@ test "Bucket_DeleteBucket_Nested" {
             try widgets2.deleteBucket("foo");
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure that deleting a bucket causes nested buckets to be deleted after they have been committed.
@@ -575,17 +575,17 @@ test "Bucket_DeleteBucket_Nested2" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const widgets = try tx.createBucket("widgets");
             const foo = try widgets.createBucket("foo");
             const bar = try foo.createBucket("bar");
             try bar.put(KeyPair.init("baz", "bat"));
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 
     const updateFn2 = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const widgets = tx.getBucket("widgets").?;
             const foo = widgets.getBucket("foo") orelse unreachable;
             const bar = foo.getBucket("bar") orelse unreachable;
@@ -594,15 +594,15 @@ test "Bucket_DeleteBucket_Nested2" {
             try tx.deleteBucket("widgets");
         }
     }.update;
-    try db.update({}, updateFn2);
+    try db.update(updateFn2);
 
     const viewFn = struct {
-        fn view(_: void, tx: *TX) Error!void {
+        fn view(tx: *TX) Error!void {
             const widgets = tx.getBucket("widgets");
             assert(widgets == null, "the widgets bucket is not null", .{});
         }
     }.view;
-    try db.view({}, viewFn);
+    try db.view(viewFn);
 }
 
 // Ensure that deleting a child bucket with multiple pages causes all pages to get collected.
@@ -642,14 +642,14 @@ test "Bucket_Bucket_IncompatibleValue" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             try b.put(KeyPair.init("foo", "bar"));
             const foo = tx.getBucket("widgets").?.getBucket("foo");
             assert(foo == null, "the foo bucket is not null", .{});
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure that creating a bucket on an existing non-bucket key returns an error.
@@ -659,7 +659,7 @@ test "Bucket_CreateBucket_IncompatibleValue" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             try b.put(KeyPair.init("foo", "bar"));
             _ = b.createBucket("foo") catch |err| {
@@ -667,7 +667,7 @@ test "Bucket_CreateBucket_IncompatibleValue" {
             };
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure that deleting a bucket on an existing non-bucket key returns an error.
@@ -677,7 +677,7 @@ test "Bucket_DeleteBucket_IncompatibleValue" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             try b.put(KeyPair.init("foo", "bar"));
             tx.getBucket("widgets").?.deleteBucket("foo") catch |err| {
@@ -685,7 +685,7 @@ test "Bucket_DeleteBucket_IncompatibleValue" {
             };
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure bucket can set and update its sequence number.
@@ -695,7 +695,7 @@ test "Bucket_Sequence" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             const v = b.sequence();
             assert(v == 0, "the sequence number is not 0", .{});
@@ -704,16 +704,16 @@ test "Bucket_Sequence" {
             assert(v2 == 1000, "the sequence number is not 1000", .{});
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
     // Verify sequence in separate transaction.
     const viewFn = struct {
-        fn view(_: void, tx: *TX) Error!void {
+        fn view(tx: *TX) Error!void {
             const b = tx.getBucket("widgets").?;
             const v = b.sequence();
             assert(v == 1000, "the sequence number is not 1000", .{});
         }
     }.view;
-    try db.view({}, viewFn);
+    try db.view(viewFn);
 }
 
 // Ensure that a bucket can return an autoincrementing sequence.
@@ -723,7 +723,7 @@ test "Bucket_NextSequence" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const widgets = try tx.createBucket("widgets");
             const woojits = try widgets.createBucket("woojits");
             const v = try widgets.nextSequence();
@@ -734,7 +734,7 @@ test "Bucket_NextSequence" {
             assert(v3 == 1, "the sequence number is not 1", .{});
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure that a bucket will persist an autoincrementing sequence even if its
@@ -746,28 +746,27 @@ test "Bucket_NextSequence_Persist" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
-            const b = try tx.createBucket("widgets");
-            _ = b; // autofix
+        fn update(tx: *TX) Error!void {
+            _ = try tx.createBucket("widgets");
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
     const updateFn2 = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = tx.getBucket("widgets").?;
             const v = try b.nextSequence();
             assert(v == 1, "the sequence number is not 1", .{});
         }
     }.update;
-    try db.update({}, updateFn2);
+    try db.update(updateFn2);
     const updateFn3 = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = tx.getBucket("widgets").?;
             const v = try b.nextSequence();
             assert(v == 2, "the sequence number is not 2", .{});
         }
     }.update;
-    try db.update({}, updateFn3);
+    try db.update(updateFn3);
 }
 
 // Ensure that retrieving the next sequence on a read-only bucket returns an error.
@@ -777,21 +776,21 @@ test "Bucket_NextSequence_ReadOnly" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             _ = tx.createBucket("widgets") catch unreachable;
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 
     const viewFn = struct {
-        fn view(_: void, tx: *TX) Error!void {
+        fn view(tx: *TX) Error!void {
             const b = tx.getBucket("widgets").?;
             _ = b.nextSequence() catch |err| {
                 assert(err == Error.TxNotWriteable, comptime "the error is not TxNotWriteable", .{});
             };
         }
     }.view;
-    try db.view({}, viewFn);
+    try db.view(viewFn);
 }
 
 // Ensure that retrieving the next sequence for a bucket on a closed database returns an error.
@@ -816,7 +815,7 @@ test "Bucket_ForEach" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             var b = try tx.createBucket("widgets");
             try b.put(KeyPair.init("foo", "0000"));
             try b.put(KeyPair.init("bar", "0001"));
@@ -844,7 +843,7 @@ test "Bucket_ForEach" {
             assert(ctx.i == 3, "the number of items is not 3", .{});
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure a database can stop iteration early.
@@ -854,7 +853,7 @@ test "Bucket_ForEach_ShortCircuit" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             try b.put(KeyPair.init("bar", "0000"));
             try b.put(KeyPair.init("baz", "0000"));
@@ -878,7 +877,7 @@ test "Bucket_ForEach_ShortCircuit" {
             assert(ctx.i == 2, "the number of items is not 2", .{});
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure that looping over a bucket on a closed database returns an error.
@@ -898,7 +897,7 @@ test "Bucket_Put_EmptyKey" {
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, tx: *TX) Error!void {
+        fn update(tx: *TX) Error!void {
             const b = try tx.createBucket("widgets");
             b.put(KeyPair.init("", "0000")) catch |err| {
                 assert(err == Error.KeyRequired, comptime "the error is not KeyRequired", .{});
@@ -908,7 +907,7 @@ test "Bucket_Put_EmptyKey" {
             };
         }
     }.update;
-    try db.update({}, updateFn);
+    try db.update(updateFn);
 }
 
 // Ensure that an error is returned when inserting with a key that's too large.
@@ -927,7 +926,7 @@ test "Bucket_Put_KeyTooLarge" {
             };
         }
     }.update;
-    try db.update(testCtx, updateFn);
+    try db.updateWithContext(testCtx, updateFn);
 }
 
 // Ensure that an error is returned when inserting a value that's too large.
@@ -955,7 +954,7 @@ test "Bucket_Put_ValueTooLarge" {
             };
         }
     }.update;
-    try db.update(testCtx, updateFn);
+    try db.updateWithContext(testCtx, updateFn);
 }
 
 // Ensure a bucket can calculate stats.
