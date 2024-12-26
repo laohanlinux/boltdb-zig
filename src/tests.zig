@@ -96,10 +96,9 @@ pub fn createTmpFile() struct {
         self.tmpDir.cleanup();
     }
 
-    pub fn path(self: @This()) []const u8 {
-        var basePath: [256]u8 = [_]u8{0} ** 256;
-        const name = std.fmt.bufPrint(&basePath, ".zig-cache/tmp/{s}/{s}", .{ self.tmpDir.sub_path, "bolt.db.tmp" }) catch unreachable;
-        return name[0..];
+    pub fn path(self: @This(), allocator: std.mem.Allocator) []const u8 {
+        const name = std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ self.tmpDir.sub_path, "bolt.db.tmp" }) catch unreachable;
+        return name;
     }
 } {
     var tmpDir = std.testing.tmpDir(.{});

@@ -417,83 +417,14 @@ pub const TX = struct {
     // This function exists for backwards compatibility.
     //
     // Deprecated; Use WriteTo() instead.
-    pub fn copy(self: *Self, writer: std.fs.File.Writer) Error!void {
-        _ = try self.writeTo(writer);
-    }
-
-    // WriteTo writes the entire database to a writer.
-    // If err == nil then exactly tx.Size() bytes will be written into the writer.
-    pub fn writeTo(self: *Self, writer: std.fs.File.Writer) Error!usize {
-        // Attempt to open reader with WriteFlag
-        var n: usize = 0;
-        var _db = self.getDB();
-        const file = std.fs.cwd().openFile(_db.path(), .{ .mode = .read_only }) catch unreachable;
-        defer file.close();
-        // Generate a meta page. We use the same page data for both meta pages.
-        const alloc = self.getAllocator();
-        const buffer = try alloc.alloc(u8, _db.pageSize);
-        defer alloc.free(buffer);
-        @memset(buffer, 0);
-        const metaPage = _db.pageInBuffer(buffer, 0);
-        metaPage.flags = consts.intFromFlags(consts.PageFlag.meta);
-        metaPage.meta().* = self.meta.*;
-
-        // Write meta 0
-        metaPage.id = 0;
-        metaPage.meta().check_sum = metaPage.meta().sum64();
-        var hasWritten = writer.write(buffer) catch |err| {
-            std.log.err("write meta 0 failed: {any}", .{err});
-            return err;
-        };
-        assert(hasWritten == _db.pageSize, "write meta 0 failed", .{});
-        n += hasWritten;
-
-        // Write meta 1
-        metaPage.id = 1;
-        metaPage.meta().txid -= 1;
-        metaPage.meta().check_sum = metaPage.meta().sum64();
-        hasWritten = writer.write(buffer) catch |err| {
-            std.log.err("write meta 1 failed: {any}", .{err});
-            return err;
-        };
-        assert(hasWritten == _db.pageSize, "write meta 1 failed", .{});
-        n += hasWritten;
-
-        // Move past the meta pages in the file.
-        const reader = file.reader();
-        reader.skipBytes(_db.pageSize * 2, .{}) catch |err| {
-            std.log.err("skip bytes failed: {any}", .{err});
-            return Error.FileIOError;
-        };
-
-        while (true) {
-            @memset(buffer, 0);
-            const hasRead = reader.read(buffer[0..]) catch |err| {
-                std.log.err("read data page failed: {any}", .{err});
-                return Error.FileIOError;
-            };
-            // Break if we've reached EOF
-            if (hasRead == 0) break;
-            // Write only the portion that was actually read
-            writer.writeAll(buffer[0..hasRead]) catch |err| {
-                std.log.err("write data page failed: {any}", .{err});
-                return Error.FileIOError;
-            };
-            n += hasRead;
-        }
-        return n;
+    pub fn copy(self: *Self, writer: anytype) Error!void {
+        _ = try self.writeToAnyWriter(writer);
     }
 
     /// CopyFile copies the entire database to a file.
     pub fn copyFile(self: *Self, file: std.fs.File) Error!void {
-        const writer = file.writer();
-        try self.copy(writer);
-    }
-
-    pub fn copyToBuffer(self: *Self) Error!void {
-        const bufferWriter = std.io.BufferedWriter(self.getDB().pageSize, u8){};
-        const wt = bufferWriter.writer();
-        try self.copy(wt);
+        var writer = FileWriter.init(file);
+        try self.copy(&writer);
     }
 
     fn _check(self: *Self) Error!void {
@@ -834,37 +765,6 @@ pub const TxStats = packed struct {
     }
 };
 
-// CopyTxWriter is a writer that writes to a file.
-pub fn CopyTxWriter(comptime Writer: type) type {
-    return struct {
-        tx: *TX,
-        ctx: Writer,
-        writeFn: *const fn (context: *@This(), bytes: []const u8) Error!usize,
-
-        const Self = @This();
-
-        /// Initializes a new CopyTxWriter.
-        pub fn init(tx: *TX, writer: Writer, write_fn: *const fn (context: *Self, bytes: []const u8) Error!usize) Self {
-            return .{
-                .tx = tx,
-                .ctx = writer,
-                .writeFn = write_fn,
-            };
-        }
-
-        /// Writes the meta page to the file.
-        pub fn doWrite(self: *Self) Error!void {
-            var meta_buf: [consts.PageSize]u8 = undefined;
-            _ = try self.write(&meta_buf);
-        }
-
-        /// Writes the bytes to the file.
-        pub fn write(self: *Self, bytes: []const u8) Error!usize {
-            return self.writeFn(self, bytes);
-        }
-    };
-}
-
 pub fn writeToWriter(self: *TX, writer: anytype) Error!usize {
     const ctxLog = std.log.scoped(.BoltTransactionToWriter);
     // Attempt to open reader with WriteFlag
@@ -935,10 +835,7 @@ pub fn writeToWriterByStream(self: *TX, writer: anytype) Error!usize {
     // Write meta 0
     metaPage.id = 0;
     metaPage.meta().check_sum = metaPage.meta().sum64();
-    var hasWritten = writer.write(buffer) catch |err| {
-        std.log.err("write meta 0 failed: {any}", .{err});
-        return Error.FileIOError;
-    };
+    var hasWritten = try writer.writeAll(buffer);
     assert(hasWritten == _db.pageSize, "write meta 0 failed", .{});
     n += hasWritten;
 
@@ -946,10 +843,7 @@ pub fn writeToWriterByStream(self: *TX, writer: anytype) Error!usize {
     metaPage.id = 1;
     metaPage.meta().txid -= 1;
     metaPage.meta().check_sum = metaPage.meta().sum64();
-    hasWritten = writer.write(buffer) catch |err| {
-        std.log.err("write meta 1 failed: {any}", .{err});
-        return Error.FileIOError;
-    };
+    hasWritten = try writer.writeAll(buffer);
     assert(hasWritten == _db.pageSize, "write meta 1 failed", .{});
     n += hasWritten;
 

@@ -496,16 +496,16 @@ test "Tx_CopyFile_Error_Meta" {
                     return Self{ .after = 0, .fp = fp };
                 }
 
+                // Write all bytes to the file, and return the number of bytes written.
                 pub fn writeAll(self: *Self, bytes: []const u8) Error!usize {
-                    self.fp.writeAll(bytes) catch |err| {
-                        std.log.err("failed to write to file: {any}", .{err});
+                    self.fp.writeAll(bytes) catch {
                         return Error.FileIOError;
                     };
                     self.after += bytes.len;
-                    if (self.after > consts.PageSize) {
+                    if (self.after >= 2 * consts.PageSize) {
                         return Error.FileIOError;
                     }
-                    return self.after;
+                    return bytes.len;
                 }
             };
             var writer = streamWriter.init(tmpDir.file);
@@ -513,4 +513,124 @@ test "Tx_CopyFile_Error_Meta" {
         }
     }.exec);
     std.debug.assert(err == Error.FileIOError);
+}
+
+// Ensure that Copy handles write errors right.
+test "Tx_CopyFile_Error_Normal" {
+    std.testing.log_level = .debug;
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
+    const kvDB = testCtx.db;
+    try kvDB.update(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            const b = try trx.createBucket("widgets");
+            try b.put(KeyPair.init("foo", "bar"));
+            try b.put(KeyPair.init("baz", "bat"));
+        }
+    }.exec);
+
+    const err = kvDB.view(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            var tmpDir = tests.createTmpFile();
+            defer tmpDir.deinit();
+
+            const streamWriter = struct {
+                after: usize = 0,
+                fp: std.fs.File,
+                const Self = @This();
+                fn init(fp: std.fs.File) Self {
+                    return Self{ .after = 0, .fp = fp };
+                }
+
+                // Write all bytes to the file, and return the number of bytes written.
+                pub fn writeAll(self: *Self, bytes: []const u8) Error!usize {
+                    self.fp.writeAll(bytes) catch {
+                        return Error.FileIOError;
+                    };
+                    self.after += bytes.len;
+                    std.log.info("has written {d} bytes, page size: {d}", .{ self.after, consts.PageSize });
+                    if (self.after > 2 * consts.PageSize) {
+                        return Error.FileIOError;
+                    }
+                    return bytes.len;
+                }
+            };
+            var writer = streamWriter.init(tmpDir.file);
+            _ = try trx.writeToAnyWriter(&writer);
+        }
+    }.exec);
+    std.debug.assert(err == Error.FileIOError);
+}
+
+test "ExampleTx_Rollback" {
+    std.testing.log_level = .err;
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
+    const kvDB = testCtx.db;
+    // Create a bucket.
+    try kvDB.update(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            _ = try trx.createBucket("widgets");
+        }
+    }.exec);
+    // Set a value for a key.
+    try kvDB.update(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            const b = trx.getBucket("widgets").?;
+            try b.put(KeyPair.init("foo", "bar"));
+        }
+    }.exec);
+    // Update the key but rollback the transaction so it never saves.
+    {
+        const trx = try kvDB.begin(true);
+        const b = trx.getBucket("widgets").?;
+        try b.put(KeyPair.init("foo", "baz"));
+        try trx.rollbackAndDestroy();
+    }
+    // Ensure that our original value is still set.
+    try kvDB.view(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            const b = trx.getBucket("widgets").?;
+            const foo = b.get("foo");
+            assert(foo != null, "expected 'foo' to be set", .{});
+            assert(std.mem.eql(u8, foo.?, "bar"), "expected 'bar'", .{});
+        }
+    }.exec);
+}
+
+test "ExampleTx_CopyFile" {
+    std.testing.log_level = .err;
+    var testCtx = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testCtx);
+    const kvDB = testCtx.db;
+    // Create a bucket and a key.
+    try kvDB.update(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            _ = try trx.createBucket("widgets");
+            const b = trx.getBucket("widgets").?;
+            try b.put(KeyPair.init("foo", "bar"));
+        }
+    }.exec);
+    // Copy the database to another file.
+    var tmpDir = tests.createTmpFile();
+    try kvDB.updateWithContext(tmpDir.file, struct {
+        fn exec(ctx: std.fs.File, trx: *tx.TX) Error!void {
+            var writer = tx.FileWriter.init(ctx);
+            _ = try trx.writeToAnyWriter(&writer);
+        }
+    }.exec);
+    const filePath = tmpDir.path(testCtx.allocator);
+    defer tmpDir.deinit();
+    defer testCtx.allocator.free(filePath);
+    const db = try @import("db.zig").DB.open(testCtx.allocator, filePath, null, defaultOptions);
+    defer db.close() catch unreachable;
+    // Ensure that the key is still set.
+    try kvDB.view(struct {
+        fn exec(trx: *tx.TX) Error!void {
+            const b = trx.getBucket("widgets").?;
+            const foo = b.get("foo");
+            assert(foo != null, "expected 'foo' to be set", .{});
+            assert(std.mem.eql(u8, foo.?, "bar"), "expected 'bar'", .{});
+        }
+    }.exec);
 }
