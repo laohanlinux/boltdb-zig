@@ -146,7 +146,7 @@ pub const FreeList = struct {
             try self.cache.putNoClobber(id, true);
             try ids.value_ptr.append(id);
         }
-        log.debug("after free a page, txid: {}, pending ids: {any}", .{ txid, ids.value_ptr.items });
+        // log.debug("after free a page, txid: {}, pending ids: {any}", .{ txid, ids.value_ptr.items });
     }
 
     /// Moves all page ids for a transaction id (or older) to the freelist.
@@ -386,3 +386,18 @@ pub const FreeList = struct {
 //     ids.resize(2) catch unreachable;
 //     std.debug.print("{any}\n", .{ids.items});
 // }
+
+test "freelist" {
+    const buf = try std.testing.allocator.alloc(u8, 7 * consts.PageSize);
+    @memset(buf, 0);
+    const p = Page.init(buf);
+    p.overflow = 7;
+    p.id = 26737;
+    p.flags = 16;
+    p.count = 13368;
+    p.overflow = 6;
+    std.log.info("freelistPageElements, ptr: {d}", .{p.ptrInt()});
+    defer std.testing.allocator.free(buf);
+    const ids = p.freelistPageElements().?;
+    std.debug.print("{any}\n", .{ids});
+}

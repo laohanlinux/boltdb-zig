@@ -290,6 +290,7 @@ pub const TX = struct {
             return Error.OutOfMemory;
         };
         assert(p.id >= 0 and p.flags >= 0, "Santy check!", .{});
+        // log.info("write freelist to page, pgid: {}, allocatePageCount: {}, pageSize: {}", .{ p.id, allocatePageCount, self.db.?.pageSize });
         _db.freelist.write(p) catch |err| {
             self._rollback();
             return err;

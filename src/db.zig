@@ -308,7 +308,7 @@ pub const DB = struct {
     /// minsz is the minimum size that the new mmap can be.
     pub fn mmap(self: *Self, minsz: usize) !void {
         defer log.info("succeed to mmap", .{});
-        log.info("mmap minsz: {}", .{minsz});
+        // log.err("mmap minsz: {}", .{minsz});
         self.mmaplock.lock();
         defer self.mmaplock.unlock();
         const fileInfo = try self.file.metadata();
@@ -453,6 +453,7 @@ pub const DB = struct {
         if (count == 1 and self.pagePool != null) {
             p = try self.pagePool.?.new();
         } else {
+            log.warn("allocate more than one page, count: {}, pageSize: {}", .{ count, self.pageSize });
             const buf = try self.allocator.alloc(u8, count * self.pageSize);
             @memset(buf, 0);
             p = Page.init(buf);

@@ -136,7 +136,8 @@ pub const Page = struct {
     /// Retrives a list of freelist page elements.
     pub fn freelistPageElements(self: *Self) ?[]PgidType {
         const ptr = self.getDataPtrInt();
-        const firstPtr: *PgidType = @ptrFromInt(ptr);
+        const aligned_ptr = std.mem.alignForward(usize, ptr, @alignOf(PgidType));
+        const firstPtr: *PgidType = @ptrFromInt(aligned_ptr);
         var elements: [*]PgidType = @ptrCast(firstPtr);
         return elements[0..self.count];
     }
@@ -144,11 +145,10 @@ pub const Page = struct {
     /// Retrives a list of freelist page elements.
     pub fn freelistPageOverWithCountElements(self: *Self) ?[]PgidType {
         const ptr = self.getDataPtrInt();
-        const firstPtr: *PgidType = @ptrFromInt(ptr);
+        const aligned_ptr = std.mem.alignForward(usize, ptr, @alignOf(PgidType));
+        const firstPtr: *PgidType = @ptrFromInt(aligned_ptr);
         var elements: [*]PgidType = @ptrCast(firstPtr);
         if (self.count == 0xFFFF) {
-            // because page has overflow, the page.Count bit flag the page is overflow page instead of count flag,
-            // so the page count flag has store at `next 64bit`.
             const overflowCount = elements[0..1][0];
             return elements[0..@as(usize, overflowCount + 1)];
         } else {

@@ -49,9 +49,10 @@ pub fn setup(allocator: std.mem.Allocator) !TestContext {
 
 /// Setup a test context with custom options.
 pub fn setupWithOptions(allocator: std.mem.Allocator, options: consts.Options) !TestContext {
-    const filePath = try std.fmt.allocPrint(allocator, "dirty/{d}.db", .{std.time.milliTimestamp()});
+    const tmpFile = createTmpFile();
+    const filePath = tmpFile.path(allocator);
+    defer tmpFile.file.close();
     defer allocator.free(filePath);
-
     const kvDB = DB.open(allocator, filePath, null, options) catch unreachable;
     return TestContext{ .allocator = allocator, .db = kvDB };
 }
@@ -86,6 +87,21 @@ pub fn randomBuf(buf: []usize) void {
     }
 }
 
+/// Check if the model is long.
+pub fn isLongModel() bool {
+    const rModel = std.os.environ;
+    for (rModel) |env| {
+        const env_str = std.mem.span(env); // Convert null-terminated string to slice
+        if (std.mem.startsWith(u8, env_str, "ZIG_TEST_MODEL")) {
+            std.log.warn("env: {s}", .{env_str});
+            if (std.mem.endsWith(u8, env_str, "ZIG_TEST_MODEL=long")) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// Create a temporary file.
 pub fn createTmpFile() struct {
     file: std.fs.File,
@@ -97,8 +113,15 @@ pub fn createTmpFile() struct {
     }
 
     pub fn path(self: @This(), allocator: std.mem.Allocator) []const u8 {
-        const name = std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ self.tmpDir.sub_path, "bolt.db.tmp" }) catch unreachable;
-        return name;
+        // First get the relative path
+        const relative_path = std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ self.tmpDir.sub_path, "bolt.db.tmp" }) catch unreachable;
+        defer allocator.free(relative_path);
+
+        // Convert to absolute path
+        const absolute_path = std.fs.cwd().realpathAlloc(allocator, relative_path) catch unreachable;
+        return absolute_path;
+        // const name = std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ self.tmpDir.sub_path, "bolt.db.tmp" }) catch unreachable;
+        // return name;
     }
 } {
     var tmpDir = std.testing.tmpDir(.{});
