@@ -14,7 +14,7 @@ test "Cursor_Bucket" {
     const kvDB = testCtx.db;
 
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = trx.createBucket("widgets") catch unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -22,7 +22,7 @@ test "Cursor_Bucket" {
             std.debug.assert(@intFromPtr(b) == @intFromPtr(cb));
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 }
 
 test "Cursor_Seek" {
@@ -31,7 +31,7 @@ test "Cursor_Seek" {
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             try b.put(consts.KeyPair.init("foo", "0001"));
             try b.put(consts.KeyPair.init("bar", "0002"));
@@ -39,10 +39,10 @@ test "Cursor_Seek" {
             _ = try b.createBucket("bkt");
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
+        fn view(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -72,7 +72,7 @@ test "Cursor_Seek" {
             std.debug.assert(kv5.value == null);
         }
     }.view;
-    try kvDB.view({}, viewFn);
+    try kvDB.view(viewFn);
 }
 
 test "Cursor_Delete" {
@@ -84,7 +84,7 @@ test "Cursor_Delete" {
     const count = 1000;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             for (0..count) |i| {
                 const key = try std.fmt.allocPrint(std.testing.allocator, "{0:0>10}", .{i});
@@ -96,10 +96,10 @@ test "Cursor_Delete" {
             _ = try b.createBucket("sub");
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const updateFn2 = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -123,10 +123,10 @@ test "Cursor_Delete" {
             assert(err == Error.IncompactibleValue, "the error is not bucket not found error, err: {any}", .{err});
         }
     }.update;
-    try kvDB.update({}, updateFn2);
+    try kvDB.update(updateFn2);
 
     const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
+        fn view(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             const got = b.get("0000000000");
             assert(got == null, "the key should be deleted, key: {s}", .{"0000000000"});
@@ -134,7 +134,7 @@ test "Cursor_Delete" {
             assert(stats.keyN == (count / 2 + 1), "the key number is invalid, keyN: {d}, count: {d}", .{ stats.keyN, count / 2 + 1 });
         }
     }.view;
-    try kvDB.view({}, viewFn);
+    try kvDB.view(viewFn);
 }
 
 // Ensure that a Tx cursor can seek to the appropriate keys when there are a
@@ -150,7 +150,7 @@ test "Cursor_Seek_Large" {
     const kvDB = testCtx.db;
     // Insert every other key between 0 and $count.
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             var i: i64 = 0;
             while (i < count) : (i += 100) {
@@ -166,10 +166,10 @@ test "Cursor_Seek_Large" {
             }
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
+        fn view(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -195,7 +195,7 @@ test "Cursor_Seek_Large" {
             }
         }
     }.view;
-    try kvDB.view({}, viewFn);
+    try kvDB.view(viewFn);
 }
 
 // Ensure that a cursor can iterate over an empty bucket without error.
@@ -205,14 +205,14 @@ test "Cursor_Iterate_EmptyBucket" {
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             _ = try trx.createBucket("widgets");
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
+        fn view(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -220,7 +220,7 @@ test "Cursor_Iterate_EmptyBucket" {
             assert(keyPair.isNotFound(), "the key should be not found", .{});
         }
     }.view;
-    try kvDB.view({}, viewFn);
+    try kvDB.view(viewFn);
 }
 
 // Ensure that a Tx cursor can reverse iterate over an empty bucket without error.
@@ -230,14 +230,14 @@ test "Cursor_EmptyBucketReverse" {
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             _ = try trx.createBucket("widgets");
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
+        fn view(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -245,7 +245,7 @@ test "Cursor_EmptyBucketReverse" {
             assert(keyPair.isNotFound(), "the key should be not found", .{});
         }
     }.view;
-    try kvDB.view({}, viewFn);
+    try kvDB.view(viewFn);
 }
 
 // Ensure that a Tx cursor can iterate over a single root with a couple elements.
@@ -255,14 +255,14 @@ test "Cursor_Iterate_Leaf" {
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             try b.put(consts.KeyPair.init("baz", ""));
             try b.put(consts.KeyPair.init("foo", &[_]u8{0}));
             try b.put(consts.KeyPair.init("bar", &[_]u8{1}));
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const trx = try kvDB.begin(false);
     const bt = trx.getBucket("widgets");
@@ -286,7 +286,7 @@ test "Cursor_Iterate_Leaf" {
     const kv4 = c.next();
     assert(kv4.isNotFound(), "the key should be not found", .{});
     c.deinit();
-    try trx.rollback();
+    try trx.rollbackAndDestroy();
 }
 
 // Ensure that a cursor can reverse iterate over a single root with a couple elements.
@@ -296,14 +296,14 @@ test "Cursor_LeafRootReverse" {
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             try b.put(consts.KeyPair.init("baz", ""));
             try b.put(consts.KeyPair.init("foo", &[_]u8{0}));
             try b.put(consts.KeyPair.init("bar", &[_]u8{1}));
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const trx = try kvDB.begin(false);
     const bt = trx.getBucket("widgets");
@@ -328,7 +328,7 @@ test "Cursor_LeafRootReverse" {
     assert(kv4.isNotFound(), "the key should be not found", .{});
     c.deinit();
 
-    try trx.rollback();
+    try trx.rollbackAndDestroy();
 }
 
 // Ensure that a Tx cursor can restart from the beginning.
@@ -338,15 +338,15 @@ test "Cursor_Restart" {
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             try b.put(consts.KeyPair.init("bar", ""));
             try b.put(consts.KeyPair.init("foo", ""));
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
-    const trx = kvDB.begin(false) catch unreachable;
+    const trx = try kvDB.begin(false);
     const bt = trx.getBucket("widgets");
     assert(bt != null, "the bucket should not be null", .{});
     var c = bt.?.cursor();
@@ -363,7 +363,7 @@ test "Cursor_Restart" {
     assert(std.mem.eql(u8, keyPair4.key.?, "foo"), "the key should be 'foo'", .{});
 
     c.deinit();
-    try trx.rollback();
+    try trx.rollbackAndDestroy();
 }
 
 // Ensure that a cursor can skip over empty pages that have been deleted.
@@ -374,7 +374,7 @@ test "Cursor_First_EmptyPages" {
     const kvDB = testCtx.db;
     // Create 1000 keys in the "widgets" bucket.
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             var key: [8]u8 = undefined;
             for (0..1000) |i| {
@@ -385,11 +385,11 @@ test "Cursor_First_EmptyPages" {
             }
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     // Delete half the keys and then try to iterate.
     const updateFn2 = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             var key: [8]u8 = undefined;
             for (0..600) |i| {
@@ -409,100 +409,98 @@ test "Cursor_First_EmptyPages" {
             assert(n == 400, "the number of keys should be 400, but got {d}", .{n});
         }
     }.update;
-    try kvDB.update({}, updateFn2);
+    try kvDB.update(updateFn2);
 }
 
 // Ensure that a Tx can iterate over all elements in a bucket.
-// test "Cursor_QuickCheck" {
-//     std.testing.log_level = .err;
+test "Cursor_QuickCheck" {
+    std.testing.log_level = .err;
 
-//     const f = struct {
-//         fn quickCheck(allocator: std.mem.Allocator, size: usize) !void {
-//             var q = tests.Quick.init(allocator);
-//             q.maxItems = size;
-//             // q.maxKeySize = 10;
-//             // q.maxValueSize = 10;
-//             _ = try q.generate(allocator);
-//             defer q.deinit();
+    const f = struct {
+        fn quickCheck(allocator: std.mem.Allocator, size: usize) !void {
+            var q = tests.Quick.init(allocator);
+            q.maxItems = size;
+            // q.maxKeySize = 10;
+            // q.maxValueSize = 10;
+            _ = try q.generate(allocator);
+            defer q.deinit();
 
-//             std.debug.print("QuickCheck passed for size {d}.\n", .{size});
-//             var testCtx = try tests.setup(allocator);
-//             defer tests.teardown(&testCtx);
-//             const kvDB = testCtx.db;
-//             {
-//                 const trx = try kvDB.begin(true);
-//                 const b = try trx.createBucket("widgets");
-//                 for (q.items.items) |item| {
-//                     try b.put(consts.KeyPair.init(item.key, item.value));
-//                 }
+            std.debug.print("QuickCheck passed for size {d}.\n", .{size});
+            var testCtx = try tests.setup(allocator);
+            defer tests.teardown(&testCtx);
+            const kvDB = testCtx.db;
+            {
+                const trx = try kvDB.begin(true);
+                const b = try trx.createBucket("widgets");
+                for (q.items.items) |item| {
+                    try b.put(consts.KeyPair.init(item.key, item.value));
+                }
 
-//                 try trx.commit();
-//                 trx.destroy();
-//             }
-//             q.sort();
+                try trx.commitAndDestroy();
+            }
+            q.sort();
 
-//             // Iterate over all items and check consistency.
-//             {
-//                 const trx = try kvDB.begin(false);
-//                 const b = trx.getBucket("widgets") orelse unreachable;
-//                 var cursor = b.cursor();
-//                 var keyPair = cursor.first();
-//                 for (q.items.items) |item| {
-//                     assert(std.mem.eql(u8, keyPair.key.?, item.key), "the key should be {s}", .{item.key});
-//                     assert(std.mem.eql(u8, keyPair.value.?, item.value), "the value should be {s}", .{item.value});
-//                     keyPair = cursor.next();
-//                 }
-//                 cursor.deinit();
-//                 try trx.rollback();
-//             }
-//         }
-//     }.quickCheck;
-//     try f(std.testing.allocator, 500);
-// }
+            // Iterate over all items and check consistency.
+            {
+                const trx = try kvDB.begin(false);
+                const b = trx.getBucket("widgets") orelse unreachable;
+                var cursor = b.cursor();
+                var keyPair = cursor.first();
+                for (q.items.items) |item| {
+                    assert(std.mem.eql(u8, keyPair.key.?, item.key), "the key should be {s}", .{item.key});
+                    assert(std.mem.eql(u8, keyPair.value.?, item.value), "the value should be {s}", .{item.value});
+                    keyPair = cursor.next();
+                }
+                cursor.deinit();
+                try trx.rollbackAndDestroy();
+            }
+        }
+    }.quickCheck;
+    try f(std.testing.allocator, 500);
+}
 
-// test "Cursor_QuickCheck_Reverse" {
-//     // TODO
-//     std.testing.log_level = .err;
-//     const f = struct {
-//         fn quickCheckReverse(allocator: std.mem.Allocator, size: usize) !void {
-//             // TODO
-//             var q = tests.Quick.init(allocator);
-//             q.maxItems = size;
-//             _ = try q.generate(allocator);
-//             defer q.deinit();
-//             var testCtx = try tests.setup(allocator);
-//             defer tests.teardown(&testCtx);
-//             const kvDB = testCtx.db;
-//             // Bulk insert all values.
-//             {
-//                 const trx = kvDB.begin(true) catch unreachable;
-//                 const b = trx.createBucket("widgets") catch unreachable;
-//                 for (q.items.items) |item| {
-//                     try b.put(consts.KeyPair.init(item.key, item.value));
-//                 }
-//                 try trx.commitAndDestroy();
-//             }
+test "Cursor_QuickCheck_Reverse" {
+    std.testing.log_level = .err;
+    const f = struct {
+        fn quickCheckReverse(allocator: std.mem.Allocator, size: usize) !void {
+            // TODO
+            var q = tests.Quick.init(allocator);
+            q.maxItems = size;
+            _ = try q.generate(allocator);
+            defer q.deinit();
+            var testCtx = try tests.setup(allocator);
+            defer tests.teardown(&testCtx);
+            const kvDB = testCtx.db;
+            // Bulk insert all values.
+            {
+                const trx = kvDB.begin(true) catch unreachable;
+                const b = trx.createBucket("widgets") catch unreachable;
+                for (q.items.items) |item| {
+                    try b.put(consts.KeyPair.init(item.key, item.value));
+                }
+                try trx.commitAndDestroy();
+            }
 
-//             // Sort test data.
-//             q.reverse();
+            // Sort test data.
+            q.reverse();
 
-//             // Iterate over all items and check consistency.
-//             {
-//                 const trx = kvDB.begin(false) catch unreachable;
-//                 const b = trx.getBucket("widgets") orelse unreachable;
-//                 var cursor = b.cursor();
-//                 var keyPair = cursor.last();
-//                 for (q.items.items) |item| {
-//                     assert(std.mem.eql(u8, keyPair.key.?, item.key), "the key should be {s}", .{item.key});
-//                     keyPair = cursor.prev();
-//                 }
-//                 cursor.deinit();
-//                 try trx.rollback();
-//             }
-//         }
-//     }.quickCheckReverse;
-//     try f(std.testing.allocator, 500);
-// }
+            // Iterate over all items and check consistency.
+            {
+                const trx = kvDB.begin(false) catch unreachable;
+                const b = trx.getBucket("widgets") orelse unreachable;
+                var cursor = b.cursor();
+                var keyPair = cursor.last();
+                for (q.items.items) |item| {
+                    assert(std.mem.eql(u8, keyPair.key.?, item.key), "the key should be {s}", .{item.key});
+                    keyPair = cursor.prev();
+                }
+                cursor.deinit();
+                try trx.rollbackAndDestroy();
+            }
+        }
+    }.quickCheckReverse;
+    try f(std.testing.allocator, 500);
+}
 
 // Ensure that a Tx cursor can iterate over subbuckets.
 test "Cursor_QuickCheck_BucketsOnly" {
@@ -513,18 +511,18 @@ test "Cursor_QuickCheck_BucketsOnly" {
     const kvDB = db.db;
     const bucket_names = [_][]const u8{ "foo", "bar", "baz" };
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             for (bucket_names) |name| {
                 _ = try b.createBucket(name);
             }
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const expected_bucket_names = [_][]const u8{ "bar", "baz", "foo" };
     const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
+        fn view(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
             defer cursor.deinit();
@@ -539,7 +537,7 @@ test "Cursor_QuickCheck_BucketsOnly" {
             assert(i == bucket_names.len, "the number of keys should be {d}, but got {d}", .{ bucket_names.len, i });
         }
     }.view;
-    try kvDB.view({}, viewFn);
+    try kvDB.view(viewFn);
 }
 
 // Ensure that a Tx cursor can reverse iterate over subbuckets.
@@ -552,17 +550,17 @@ test "Cursor_QuickCheck_BucketsOnly_Reverse" {
     const bucket_names = [_][]const u8{ "foo", "bar", "baz" };
     const expected_bucket_names = [_][]const u8{ "foo", "baz", "bar" };
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             const b = try trx.createBucket("widgets");
             for (bucket_names) |name| {
                 _ = try b.createBucket(name);
             }
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 
     const viewFn = struct {
-        fn view(_: void, trx: *TX) Error!void {
+        fn view(trx: *TX) Error!void {
             // TODO
             const b = trx.getBucket("widgets") orelse unreachable;
             var cursor = b.cursor();
@@ -577,7 +575,7 @@ test "Cursor_QuickCheck_BucketsOnly_Reverse" {
             assert(i == bucket_names.len, "the number of keys should be {d}, but got {d}", .{ bucket_names.len, i });
         }
     }.view;
-    try kvDB.view({}, viewFn);
+    try kvDB.view(viewFn);
 }
 
 test "ExampleCursor" {
@@ -587,7 +585,7 @@ test "ExampleCursor" {
     const kvDB = testCtx.db;
     // Start a read-write transaction.
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             // Create a new bucket.
             const b = trx.createBucket("animals") catch unreachable;
 
@@ -609,7 +607,7 @@ test "ExampleCursor" {
             }
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
 }
 
 test "ExampleCursor_reverse" {
@@ -618,7 +616,7 @@ test "ExampleCursor_reverse" {
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
     const updateFn = struct {
-        fn update(_: void, trx: *TX) Error!void {
+        fn update(trx: *TX) Error!void {
             // Create a new bucket.
             const b = trx.createBucket("animals") catch unreachable;
 
@@ -643,7 +641,7 @@ test "ExampleCursor_reverse" {
             }
         }
     }.update;
-    try kvDB.update({}, updateFn);
+    try kvDB.update(updateFn);
     // Output:
     // A liger is awesome.
     // A dog is fun.

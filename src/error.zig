@@ -31,4 +31,6 @@ pub const Error = error{
     NotPassConsistencyCheck,
     // File IO error
     FileIOError,
+    // For Test
+    ManagedTxCommitNotAllowed,
 };

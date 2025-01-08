@@ -906,7 +906,7 @@ pub const Bucket = struct {
 
     /// Removes all references to the old mmap.
     pub fn dereference(self: *Bucket) void {
-        std.log.err("dereference bucket, pgid: {d}", .{self._b.?.root});
+        std.log.warn("dereference bucket, pgid: {d}", .{self._b.?.root});
         if (self.rootNode) |rNode| {
             rNode.root().?.dereference();
         }

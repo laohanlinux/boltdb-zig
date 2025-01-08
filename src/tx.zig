@@ -246,6 +246,9 @@ pub const TX = struct {
     /// called on a ready-only transaction.
     pub fn commit(self: *Self) Error!void {
         defer std.log.debug("finish commit", .{});
+        if (@import("builtin").is_test and self.managed) {
+            return Error.ManagedTxCommitNotAllowed;
+        }
         assert(!self.managed, "mananged tx commit not allowed", .{});
         if (self.db == null) {
             return Error.TxClosed;

@@ -95,7 +95,7 @@ pub const DB = struct {
     stats: Stats,
     pagePool: ?*PagePool = null,
 
-    rwlock: std.Thread.Mutex, // Allows only one writer a a time.
+    rwlock: consts.SharedMutex, // Allows only one writer a a time.
     metalock: std.Thread.Mutex, // Protects meta page access.
     mmaplock: std.Thread.RwLock, // Protects mmap access during remapping.
     statlock: std.Thread.RwLock, // Protects stats access.
@@ -161,7 +161,7 @@ pub const DB = struct {
         db.mmaplock = .{};
         db.metalock = .{};
         db.statlock = .{};
-        db.rwlock = .{};
+        db.rwlock = consts.SharedMutex.init();
         db.rwtx = null;
         db.dataRef = null;
         db.pageSize = options.pageSize;
@@ -172,9 +172,13 @@ pub const DB = struct {
         db.stats = Stats{};
         db.readOnly = options.readOnly;
         db.strictMode = options.strictMode;
+        db.pagePool = null;
+        db.opened = false;
         log.info("load database from path: {s}", .{filePath});
         // Open data file and separate sync handler for metadata writes.
         db._path = db.allocator.dupe(u8, filePath) catch unreachable;
+        errdefer db.close() catch unreachable;
+
         if (options.readOnly) {
             db.file = try std.fs.cwd().openFile(db._path, std.fs.File.OpenFlags{
                 .lock = .shared,
@@ -228,7 +232,16 @@ pub const DB = struct {
             defer db.allocator.free(buf);
             const sz = try db.file.readAll(buf[0..]);
             log.info("has load meta size: {}", .{sz});
-            const m = db.pageInBuffer(buf[0..sz], 0).meta();
+            if (sz < Page.headerSize()) {
+                return Error.Invalid;
+            }
+            var m: *Meta = undefined;
+            if (sz < db.pageSize) {
+                const _p = Page.init(buf[0..sz]);
+                m = _p.meta();
+            } else {
+                m = db.pageInBuffer(buf[0..sz], 0).meta();
+            }
             db.pageSize = blk: {
                 m.validate() catch { // if the meta page is invalid, then set the page size to the default page size
                     log.warn("the meta page is invalid, set the page size to the default page size: {}", .{consts.PageSize});
@@ -238,7 +251,6 @@ pub const DB = struct {
             };
             log.info("pageSize has change to: {}", .{db.pageSize});
         }
-        errdefer db.close() catch unreachable;
         // Memory map the data file.
         try db.mmap(options.initialMmapSize);
 
@@ -247,7 +259,6 @@ pub const DB = struct {
         const allocPage = db.pageById(db.getMeta().freelist);
         db.freelist.read(allocPage);
         db.opened = true;
-        db.pagePool = null;
         db.pagePool = db.allocator.create(PagePool) catch unreachable;
         db.pagePool.?.* = PagePool.init(db.allocator, db.pageSize);
         return db;
@@ -340,8 +351,8 @@ pub const DB = struct {
         assert(self.dataRef.?.len == size, "the size of dataRef is not equal to the size: {d}, dataRef.len: {d}", .{ size, self.dataRef.?.len });
         log.info("succeed to init data reference, size: {}", .{size});
         // Save references to the meta pages.
-        self.meta0 = self.pageById(0).meta();
-        self.meta1 = self.pageById(1).meta();
+        self.meta0 = if (self.tryPageById(0)) |p| p.meta() else return Error.Invalid;
+        self.meta1 = if (self.tryPageById(1)) |p| p.meta() else return Error.Invalid;
 
         // Validate the meta pages. We only return an error if both meta pages fail
         // validation, since meta0 failing validation means that it wasn't saved
@@ -351,8 +362,10 @@ pub const DB = struct {
                 return err0;
             };
         };
-        try self.meta0.print(self.allocator);
-        try self.meta1.print(self.allocator);
+        if (@import("builtin").is_test) {
+            try self.meta0.print(self.allocator);
+            try self.meta1.print(self.allocator);
+        }
     }
 
     /// Determines the appropriate size for the mmap given the current size
@@ -395,6 +408,24 @@ pub const DB = struct {
         self.statlock.lockShared();
         defer self.statlock.unlockShared();
         return self.stats;
+    }
+
+    /// tryPageById retrives a page reference from the mmap based on the current page size.
+    pub fn tryPageById(self: *const Self, id: consts.PgidType) ?*Page {
+        const pos: u64 = id * @as(u64, self.pageSize);
+        if (self.dataRef.?.len < pos) {
+            return null;
+        }
+        var buf: []u8 = undefined;
+        if (self.dataRef.?.len < (pos + self.pageSize)) {
+            std.log.warn("dataRef.len: {}, pos: {}, pageSize: {}, id: {}", .{ self.dataRef.?.len, pos, self.pageSize, id });
+            // buf = self.dataRef.?[pos..self.dataRef.?.len];
+            return null;
+        } else {
+            buf = self.dataRef.?[pos..(pos + self.pageSize)];
+        }
+        const p = Page.init(buf);
+        return p;
     }
 
     /// Retrives a page reference from the mmap based on the current page size.
@@ -781,7 +812,9 @@ pub const DB = struct {
     }
 
     fn _close(self: *Self) void {
+        self.allocator.free(self._path);
         if (!self.opened) {
+            log.info("the database is not opened", .{});
             return;
         }
         self.opened = false;
@@ -789,8 +822,6 @@ pub const DB = struct {
         util.munmap(self.dataRef.?);
 
         self.file.close();
-        self.allocator.free(self._path);
-
         self.freelist.deinit();
 
         for (self.txs.items) |trx| {
@@ -938,182 +969,3 @@ pub const Meta = struct {
         try table.print();
     }
 };
-
-// test "meta" {
-//     const stats = Info{ .data = 10, .page_size = 20 };
-//     std.debug.print("{}\n", .{stats});
-
-//     const meta = Meta{};
-//     std.debug.print("{}\n", .{meta});
-// }
-
-// test "DB-Read" {
-//     var options = defaultOptions;
-//     options.initialMmapSize = 10 * consts.PageSize;
-//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
-//     defer std.testing.allocator.free(filePath);
-//     std.testing.log_level = .info;
-
-//     {
-//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-//         try kvDB.close();
-//     }
-//     {
-//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-//         const dbStr = kvDB.string(std.testing.allocator);
-//         defer std.testing.allocator.free(dbStr);
-//         std.debug.print("String: {s}\n", .{dbStr});
-
-//         const pageStr = kvDB.pageString(std.testing.allocator);
-//         defer std.testing.allocator.free(pageStr);
-//         std.debug.print("{s}\n", .{pageStr});
-//         defer kvDB.close() catch unreachable;
-//         {
-//             const viewFn = struct {
-//                 fn view(_kvDB: ?*DB, _: *TX) Error!void {
-//                     if (_kvDB == null) {
-//                         return Error.DatabaseNotOpen;
-//                     }
-//                     std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
-//                 }
-//             }.view;
-//             for (0..10) |i| {
-//                 try kvDB.view(kvDB, viewFn);
-//                 std.debug.assert(kvDB.stats.txN == (i + 1));
-//                 if (i == 9) {
-//                     const err = kvDB.view(kvDB, viewFn);
-//                     std.debug.assert(err == Error.DatabaseNotOpen);
-//                 }
-//             }
-//         }
-
-//         // parallel read
-//         {
-//             var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
-//             defer joins.deinit();
-//             const parallelViewFn = struct {
-//                 fn view(_kdb: *DB) void {
-//                     const viewFn = struct {
-//                         fn view(_kvDB: *DB, _: *TX) Error!void {
-//                             _ = _kvDB; // autofix
-//                             std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
-//                         }
-//                     }.view;
-//                     _kdb.view(_kdb, viewFn) catch unreachable;
-//                 }
-//             };
-//             for (0..10) |_| {
-//                 const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
-//                 try joins.append(sp);
-//             }
-
-//             for (joins.items) |join| {
-//                 join.join();
-//             }
-
-//             std.debug.print("after stats count: {}\n", .{kvDB.readOnly});
-//             std.debug.assert(kvDB.stats.txN == 21);
-//         }
-
-//         // update
-//     }
-// }
-
-// test "DB-Write" {
-//     std.testing.log_level = .debug;
-//     var options = defaultOptions;
-//     options.readOnly = false;
-//     options.initialMmapSize = 10 * consts.PageSize;
-//     // options.strictMode = true;
-//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
-//     defer std.testing.allocator.free(filePath);
-
-//     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-
-//     const updateFn = struct {
-//         fn update(_kvDB: ?*DB, trx: *TX) Error!void {
-//             if (_kvDB == null) {
-//                 return Error.DatabaseNotOpen;
-//             }
-//             const Context = struct {
-//                 _tx: *TX,
-//             };
-//             const ctx = Context{ ._tx = trx };
-//             const forEach = struct {
-//                 fn inner(_: Context, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
-//                     std.log.info("execute forEach, bucket name: {s}", .{bucketName});
-//                 }
-//             };
-//             std.log.info("Execute write transaction: {}", .{trx.getID()});
-//             return trx.forEach(ctx, forEach.inner);
-//         }
-//     }.update;
-//     {
-//         // test "DB-update"
-//         for (0..1) |i| {
-//             _ = i; // autofix
-//             try kvDB.update(kvDB, updateFn);
-//             const meta = kvDB.getMeta();
-//             // because only freelist page is used, so the max pgid is 5
-//             assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
-//             assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
-//             assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
-//         }
-
-//         // Create a bucket
-//         const updateFn2 = struct {
-//             fn update(_: void, trx: *TX) Error!void {
-//                 var buf: [1000]usize = undefined;
-//                 randomBuf(buf[0..]);
-//                 std.log.info("random: {any}\n", .{buf});
-//                 for (buf) |i| {
-//                     const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
-//                     defer std.testing.allocator.free(bucketName);
-//                     const bt = try trx.createBucket(bucketName);
-//                     _ = bt; // autofix
-//                 }
-
-//                 const forEachCtx = struct {
-//                     _tx: *TX,
-//                 };
-//                 const ctx = forEachCtx{ ._tx = trx };
-//                 const forEachFn = struct {
-//                     fn inner(_: forEachCtx, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
-//                         std.log.info("execute forEach, bucket name: {s}", .{bucketName});
-//                     }
-//                 };
-//                 try trx.forEach(ctx, forEachFn.inner);
-
-//                 const bt = trx.getBucket("hello-0") orelse unreachable;
-//                 try bt.put(consts.KeyPair.init("ping", "pong"));
-//                 try bt.put(consts.KeyPair.init("echo", "ok"));
-//                 try bt.put(consts.KeyPair.init("Alice", "Bod"));
-//                 const got = bt.get("ping");
-//                 std.debug.assert(got != null);
-//                 std.debug.assert(std.mem.eql(u8, got.?, "pong"));
-
-//                 const got2 = bt.get("not");
-//                 std.debug.assert(got2 == null);
-//             }
-//         }.update;
-//         try kvDB.update({}, updateFn2);
-
-//         const viewFn = struct {
-//             fn view(_: void, trx: *TX) Error!void {
-//                 for (0..100) |_| {
-//                     const bt = trx.getBucket("Alice");
-//                     assert(bt == null, "the bucket is not null", .{});
-//                 }
-//                 for (0..100) |_| {
-//                     const bt = trx.getBucket("hello-0").?;
-//                     const kv = bt.get("not");
-//                     assert(kv == null, "should be not found the key", .{});
-//                 }
-//             }
-//         };
-//         try kvDB.view({}, viewFn.view);
-//         kvDB.close() catch unreachable;
-//     }
-//     // test "DB-read" {
-//     {}
-// }

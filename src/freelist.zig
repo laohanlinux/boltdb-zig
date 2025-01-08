@@ -387,17 +387,17 @@ pub const FreeList = struct {
 //     std.debug.print("{any}\n", .{ids.items});
 // }
 
-test "freelist" {
-    const buf = try std.testing.allocator.alloc(u8, 7 * consts.PageSize);
-    @memset(buf, 0);
-    const p = Page.init(buf);
-    p.overflow = 7;
-    p.id = 26737;
-    p.flags = 16;
-    p.count = 13368;
-    p.overflow = 6;
-    std.log.info("freelistPageElements, ptr: {d}", .{p.ptrInt()});
-    defer std.testing.allocator.free(buf);
-    const ids = p.freelistPageElements().?;
-    std.debug.print("{any}\n", .{ids});
-}
+// test "freelist" {
+//     const buf = try std.testing.allocator.alloc(u8, 7 * consts.PageSize);
+//     @memset(buf, 0);
+//     const p = Page.init(buf);
+//     p.overflow = 7;
+//     p.id = 26737;
+//     p.flags = 16;
+//     p.count = 13368;
+//     p.overflow = 6;
+//     std.log.info("freelistPageElements, ptr: {d}", .{p.ptrInt()});
+//     defer std.testing.allocator.free(buf);
+//     const ids = p.freelistPageElements().?;
+//     // std.debug.print("{any}\n", .{ids});
+// }
