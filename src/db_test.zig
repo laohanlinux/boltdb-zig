@@ -274,7 +274,7 @@ test "DB-Open_FileTooSmall" {
 // read transaction blocks the write transaction and causes deadlock.
 // This is a very hacky test since the mmap size is not exposed.
 test "DB-Open_InitialMmapSize" {
-    std.testing.log_level = .debug;
+    std.testing.log_level = .err;
     const tmpFile = tests.createTmpFile();
     tmpFile.file.close();
     const filePath = tmpFile.path(std.testing.allocator);
@@ -428,6 +428,323 @@ test "DB-Update_ManualCommit" {
 }
 
 // Ensure a panic occurs while trying to commit a managed transaction.
-test "DB-Update_ManagedCommit" {
-    // don't need to test this, since the database is not open
+test "DB-Update_ManualRollback" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    var panicked = false;
+    db.updateWithContext(&panicked, struct {
+        fn update(_p: *bool, trx: *TX) Error!void {
+            errdefer {
+                _p.* = true;
+            }
+            try trx.rollback();
+        }
+    }.update) catch |err| {
+        assert(err == Error.ManagedTxRollbackNotAllowed, "transaction not panicked", .{});
+    };
+    assert(panicked, "transaction not panicked", .{});
+}
+
+// Ensure a panic occurs while trying to commit a managed transaction.
+test "DB-View_ManualCommit" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    var panicked = false;
+    db.viewWithContext(&panicked, struct {
+        fn view(_p: *bool, trx: *TX) Error!void {
+            errdefer {
+                _p.* = true;
+            }
+            try trx.commit();
+        }
+    }.view) catch |err| {
+        assert(err == Error.ManagedTxCommitNotAllowed, "transaction not panicked", .{});
+    };
+    assert(panicked, "transaction not panicked", .{});
+}
+
+// Ensure a panic occurs while trying to rollback a managed transaction.
+test "DB-View_ManualRollback" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    var panicked = false;
+    db.viewWithContext(&panicked, struct {
+        fn view(_p: *bool, trx: *TX) Error!void {
+            errdefer {
+                _p.* = true;
+            }
+            try trx.rollback();
+        }
+    }.view) catch |err| {
+        assert(err == Error.ManagedTxRollbackNotAllowed, "transaction not panicked", .{});
+    };
+    assert(panicked, "transaction not panicked", .{});
+}
+
+// Ensure a write transaction that panics does not hold open locks.
+test "DB-Update_Panic" {
+    // don't need to test this, since the zig language panic is different from the Go.
+
+    // std.testing.log_level = .err;
+    // var testContext = try tests.setup(std.testing.allocator);
+    // defer tests.teardown(&testContext);
+    // const db = testContext.db;
+    // var panicked = false;
+    // const Context = struct {
+    //     db: *DB,
+    //     panicked: *bool,
+    // };
+
+    // const updateFn = struct {
+    //     fn update(_ctx: *Context) void {
+    //         std.debug.catch_panic(_ctx, struct {
+    //             fn panicHandler(ctx: *Context, stack_trace: ?*std.builtin.StackTrace) void {
+    //                 _ = stack_trace;
+    //                 ctx.panicked.* = true;
+    //             }
+    //         }.panicHandler) catch |err| {
+    //             std.log.err("Error in thread: {}", .{err});
+    //             _ctx.panicked.* = true;
+    //             return;
+    //         };
+
+    //         _ctx.db.update(struct {
+    //             fn update(trx: *TX) Error!void {
+    //                 _ = try trx.createBucket("test");
+    //                 @panic("test");
+    //             }
+    //         }.update) catch |err| {
+    //             std.log.err("Error in transaction: {}", .{err});
+    //             _ctx.panicked.* = true;
+    //             return;
+    //         };
+    //     }
+    // }.update;
+
+    // var ctx = Context{
+    //     .db = db,
+    //     .panicked = &panicked,
+    // };
+
+    // const join = try std.Thread.spawn(.{}, updateFn, .{&ctx});
+    // join.join();
+    // assert(panicked, "transaction not panicked", .{});
+}
+
+// Ensure a database can return an error through a read-only transactional block.
+test "DB-View_Error" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    db.view(struct {
+        fn view(_: *TX) Error!void {
+            return Error.ManagedTxCommitNotAllowed;
+        }
+    }.view) catch |err| {
+        assert(err == Error.ManagedTxCommitNotAllowed, "transaction not panicked", .{});
+    };
+}
+
+// Ensure a read transaction that panics does not hold open locks.
+test "DB-View_Panic" {
+    // don't need to test this, since the zig language panic is different from the Go.
+}
+
+// Ensure that DB stats can be returned.
+test "DB-Stats" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    try db.update(struct {
+        fn update(trx: *TX) Error!void {
+            _ = try trx.createBucket("test");
+        }
+    }.update);
+    const stats = db.getStats();
+    assert(stats.txStats.pageCount == 2, "page count should be 2", .{});
+    assert(stats.freePageN == 0, "free page count should be 0", .{});
+    assert(stats.pendingPageN == 2, "pending page count should be 2", .{});
+}
+
+// Ensure that database pages are in expected order and type.
+test "DB-Consistency" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    try db.update(struct {
+        fn update(trx: *TX) Error!void {
+            _ = try trx.createBucket("widgets");
+        }
+    }.update);
+
+    for (0..10) |_| {
+        try db.update(struct {
+            fn update(trx: *TX) Error!void {
+                const b = try trx.createBucketIfNotExists("widgets");
+                try b.put(consts.KeyPair.init("foo", "bar"));
+            }
+        }.update);
+    }
+
+    try db.update(struct {
+        fn update(trx: *TX) Error!void {
+            var p = try trx.getPageInfo(0);
+            assert(std.mem.eql(u8, p.?.typ, "meta"), "page type should be meta, but got {s}", .{p.?.typ});
+            p = try trx.getPageInfo(1);
+            assert(std.mem.eql(u8, p.?.typ, "meta"), "page type should be meta, but got {s}", .{p.?.typ});
+            p = try trx.getPageInfo(2); // at pending list, not freed
+            assert(std.mem.eql(u8, p.?.typ, "free"), "page type should be free, but got {s}", .{p.?.typ});
+            p = try trx.getPageInfo(3); // at pending list, not freed
+            assert(std.mem.eql(u8, p.?.typ, "free"), "page type should be free, but got {s}", .{p.?.typ});
+            p = try trx.getPageInfo(4);
+            assert(std.mem.eql(u8, p.?.typ, "leaf"), "page type should be leaf, but got {s}", .{p.?.typ});
+            p = try trx.getPageInfo(5);
+            assert(std.mem.eql(u8, p.?.typ, "freelist"), "page type should be freelist, but got {s}", .{p.?.typ});
+            const nullPage = try trx.getPageInfo(6);
+            assert(nullPage == null, "page should be null", .{});
+        }
+    }.update);
+}
+
+// Ensure that DB stats can be subtracted from one another.
+test "DB-Stats_Sub" {
+    const Stats = @import("db.zig").Stats;
+    var a = Stats{};
+    a.txStats.pageCount = 3;
+    a.freePageN = 4;
+    var b = Stats{};
+    b.txStats.pageCount = 10;
+    b.freePageN = 14;
+    const diff = b.sub(&a);
+    assert(diff.txStats.pageCount == 7, "page count should be 7", .{});
+    // free page stats are copied from the receiver and not subtracted
+    assert(diff.freePageN == 14, "free page count should be 14", .{});
+}
+
+// Ensure two functions can perform updates in a single batch.
+test "DB-Batch" {
+    // don't need to test this, since the batch update is not implemented.
+    // TODO: maybe we can implement it in the future.
+}
+
+test "DB-Batch_Panic" {
+    // don't need to test this, since the batch update is not implemented.
+    // TODO: maybe we can implement it in the future.
+}
+
+test "DB-BatchFull" {
+    // don't need to test this, since the batch update is not implemented.
+    // TODO: maybe we can implement it in the future.
+}
+
+test "DB-BatchTime" {
+    // don't need to test this, since the batch update is not implemented.
+    // TODO: maybe we can implement it in the future.
+}
+
+test "ExampleDB_Update" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    try db.update(struct {
+        fn update(trx: *TX) Error!void {
+            const b = try trx.createBucket("widgets");
+            try b.put(consts.KeyPair.init("foo", "bar"));
+        }
+    }.update);
+
+    // Read the value back from a separate read-only transaction.
+    try db.view(struct {
+        fn view(trx: *TX) Error!void {
+            const b = trx.getBucket("widgets").?;
+            const value = b.get("foo").?;
+            assert(std.mem.eql(u8, value, "bar"), "value should be bar", .{});
+        }
+    }.view);
+}
+
+test "ExampleDB_View" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    // Insert data into a bucket.
+    try db.update(struct {
+        fn update(trx: *TX) Error!void {
+            const b = try trx.createBucket("people");
+            try b.put(consts.KeyPair.init("john", "doe"));
+            try b.put(consts.KeyPair.init("susy", "que"));
+        }
+    }.update);
+    // Access data from within a read-only transactional block.
+    try db.view(struct {
+        fn view(trx: *TX) Error!void {
+            const b = trx.getBucket("people").?;
+            const value = b.get("john").?;
+            assert(std.mem.eql(u8, value, "doe"), "value should be doe", .{});
+            const value2 = b.get("susy").?;
+            assert(std.mem.eql(u8, value2, "que"), "value should be que", .{});
+        }
+    }.view);
+}
+
+test "ExampleDB_Begin_ReadOnly" {
+    std.testing.log_level = .err;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    try db.update(struct {
+        fn update(trx: *TX) Error!void {
+            _ = try trx.createBucket("widgets");
+        }
+    }.update);
+    // Create several keys in a transaction.
+    const trx = try db.begin(true);
+    const b = trx.getBucket("widgets").?;
+    try b.put(consts.KeyPair.init("john", "blue"));
+    try b.put(consts.KeyPair.init("abby", "red"));
+    try b.put(consts.KeyPair.init("zephyr", "purple"));
+    try trx.commitAndDestroy();
+
+    // Iterate over the values in sorted key order.
+    const trx2 = try db.begin(false);
+    const b2 = trx2.getBucket("widgets").?;
+    var c = b2.cursor();
+    var keyPairRef = c.first();
+    while (!keyPairRef.isNotFound()) {
+        std.debug.print("{s}: {s}\n", .{ keyPairRef.key.?, keyPairRef.value.? });
+        keyPairRef = c.next();
+    }
+    c.deinit();
+    try trx2.rollbackAndDestroy();
+}
+
+test "BenchmarkDBBatchAutomatic" {
+    // don't need to test this, since the benchmark is not implemented.
+    // TODO: maybe we can implement it in the future.
+}
+
+test "BenchmarkDBBatchSingle" {
+    // don't need to test this, since the benchmark is not implemented.
+    // TODO: maybe we can implement it in the future.
+}
+
+test "BenchmarkDBBatchManual10x100" {
+    // don't need to test this, since the benchmark is not implemented.
+    // TODO: maybe we can implement it in the future.
+}
+
+test "validateBatchBench" {
+    // don't need to test this, since the benchmark is not implemented.
+    // TODO: maybe we can implement it in the future.
 }

@@ -95,6 +95,8 @@ pub const DB = struct {
     stats: Stats,
     pagePool: ?*PagePool = null,
 
+    batchMutex: consts.SharedMutex,
+
     rwlock: consts.SharedMutex, // Allows only one writer a a time.
     metalock: std.Thread.Mutex, // Protects meta page access.
     mmaplock: std.Thread.RwLock, // Protects mmap access during remapping.
@@ -173,6 +175,7 @@ pub const DB = struct {
         db.readOnly = options.readOnly;
         db.strictMode = options.strictMode;
         db.pagePool = null;
+        db.batchMutex = consts.SharedMutex.init();
         db.opened = false;
         log.info("load database from path: {s}", .{filePath});
         // Open data file and separate sync handler for metadata writes.
@@ -404,7 +407,7 @@ pub const DB = struct {
 
     /// Retrieves ongoing performance stats for the database.
     /// This is only updated when a transaction closes.
-    pub fn getStats(self: *const Self) Stats {
+    pub fn getStats(self: *Self) Stats {
         self.statlock.lockShared();
         defer self.statlock.unlockShared();
         return self.stats;
@@ -532,7 +535,7 @@ pub const DB = struct {
                 _ = std.os.linux.fsync(self.file.handle);
             }
         }
-
+        log.warn("grow the database from {} to {} bytes", .{ self.filesz, sz });
         self.filesz = sz;
     }
 
@@ -728,7 +731,6 @@ pub const DB = struct {
         try trx.rollbackAndDestroy();
         log.info("after execute transaction rollback handle", .{});
     }
-
     /// Removes a transaction from the database.
     pub fn removeTx(self: *Self, trx: *TX) void {
         // Release the read lock on the mmap.
@@ -862,7 +864,7 @@ pub const Stats = packed struct {
     const Self = @This();
 
     /// Subtracts the statistics of one Stats from another.
-    pub fn sub(self: *Self, other: *Stats) Stats {
+    pub fn sub(self: *Self, other: ?*Stats) Stats {
         if (other == null) {
             return self.*;
         }
@@ -871,8 +873,8 @@ pub const Stats = packed struct {
             .pendingPageN = self.pendingPageN,
             .freeAlloc = self.freeAlloc,
             .freelistInuse = self.freelistInuse,
-            .txN = self.txN - other.txN,
-            .txStats = self.txStats.sub(other.txStats),
+            .txN = self.txN - other.?.txN,
+            .txStats = self.txStats.sub(&other.?.txStats),
         };
         return diff;
     }
@@ -948,6 +950,10 @@ pub const Meta = struct {
         const meta = p.meta();
         meta.* = self.*;
         assert(meta.check_sum == p.meta().check_sum, "CheckSum is invalid", .{});
+        if (@import("builtin").is_test) {
+            assert(p.id == 0 or p.id == 1, "page id should be 0 or 1, but got {}", .{p.id});
+            assert(std.mem.eql(u8, p.typ(), "meta"), "page: {} type should be meta, but got {s}", .{ p.id, p.typ() });
+        }
         return;
     }
 

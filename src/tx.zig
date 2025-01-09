@@ -340,6 +340,9 @@ pub const TX = struct {
     /// Closes the transaction and ignores all previous updates. Read-only
     /// transactions must be rolled back and not committed.
     pub fn rollback(self: *Self) Error!void {
+        if (@import("builtin").is_test and self.managed) {
+            return Error.ManagedTxRollbackNotAllowed;
+        }
         assert(!self.managed, "managed tx rollback not allowed", .{});
         if (self.db == null) {
             return Error.TxClosed;
@@ -556,6 +559,7 @@ pub const TX = struct {
         // Create a tempory buffer for the meta page.
         const _db = self.getDB();
         const buf = self.allocator.alloc(u8, _db.pageSize) catch unreachable;
+        @memset(buf, 0);
         defer self.allocator.free(buf);
         const p = _db.pageInBuffer(buf, 0);
         self.meta.write(p);
@@ -667,6 +671,29 @@ pub const TX = struct {
         }
         // Otherwise return directly form the mmap.
         return self.db.?.pageById(id);
+    }
+
+    /// Returns a reference to the page with a given id.
+    /// If page has been written to then a temporary buffered page is returned.
+    pub fn getPageInfo(self: *Self, id: PgidType) !?page.PageInfo {
+        if (self.db == null) {
+            return Error.TxClosed;
+        }
+        if (id >= self.meta.pgid) {
+            return null;
+        }
+        const p = self.getPage(id);
+        var info = page.PageInfo{
+            .id = p.id,
+            .count = p.count,
+            .over_flow_count = p.overflow,
+            .typ = p.typ(),
+        };
+        // Determine the type (or if it's free).
+        if (self.db.?.freelist.freed(id)) {
+            info.typ = "free";
+        }
+        return info;
     }
 
     pub fn getID(self: *const Self) u64 {

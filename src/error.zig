@@ -33,4 +33,5 @@ pub const Error = error{
     FileIOError,
     // For Test
     ManagedTxCommitNotAllowed,
+    ManagedTxRollbackNotAllowed,
 };

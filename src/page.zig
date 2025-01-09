@@ -45,7 +45,7 @@ pub const Page = struct {
             return "leaf";
         } else if (self.flags & consts.intFromFlags(.meta) != 0) {
             return "meta";
-        } else if (self.flags & consts.intFromFlags(.free_list) != 0) {
+        } else if (self.flags & consts.intFromFlags(.freeList) != 0) {
             return "freelist";
         } else {
             return "unkown";
@@ -277,8 +277,8 @@ pub const LeafPageElement = struct {
 
 /// PageInfo represents human readable information about a page.
 pub const PageInfo = struct {
-    id: isize,
-    typ: []u8,
+    id: PgidType,
+    typ: []const u8,
     count: isize,
     over_flow_count: isize,
 };
