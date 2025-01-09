@@ -8,13 +8,13 @@ const util = @import("util.zig");
 /// A page.
 pub const Page = struct {
     // The page identifier.
-    id: PgidType align(1),
+    id: PgidType align(1) = 0,
     // The page flags.
-    flags: u16 align(1),
+    flags: u16 align(1) = 0,
     // The number of elements in the page.
-    count: u16 align(1),
+    count: u16 align(1) = 0,
     // the number of overflow page
-    overflow: u32 align(1),
+    overflow: u32 align(1) = 0,
 
     const Self = @This();
     // the size of this, but why align(4)?
