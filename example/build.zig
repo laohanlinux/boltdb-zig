@@ -28,9 +28,10 @@ pub fn build(b: *std.Build) void {
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
     b.installArtifact(lib);
-    const boltdbDep = b.dependency("boltdb-zig", .{
+    const boltdbDep = b.dependency("boltdb", .{
         .target = target,
         .optimize = optimize,
+        // .root_source_file = b.path("src/main.zig"),
     });
 
     const exe = b.addExecutable(.{

@@ -3,13 +3,16 @@ const testing = std.testing;
 
 pub const db = @import("db.zig");
 pub const DB = db.DB;
+pub const Stats = db.Stats;
+pub const Info = db.Info;
 pub const consts = @import("consts.zig");
 pub const transaction = @import("tx.zig");
-pub const Transaction = transaction.TX;
+pub const TX = transaction.TX;
 pub const page = @import("page.zig");
 pub const Page = page.Page;
 pub const cursor = @import("cursor.zig");
 pub const Cursor = cursor.Cursor;
+pub const Error = @import("error.zig").Error;
 
 export fn add(a: i32, b: i32) i32 {
     return a + b;
