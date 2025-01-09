@@ -24,8 +24,8 @@
     // internet connectivity.
     .dependencies = .{
         .@"boltdb-zig" = .{
-            .url = "git+https://github.com/laohanlinux/boltdb-zig.git/?ref=align#b57e4db0144d88d11d95853775279692e454b743",
-            .hash = "1220531968799fdb606246675774cc527153b51d022d61ee820394c59d9425a1736b",
+            .url = "git+https://github.com/laohanlinux/boltdb-zig.git/?ref=align#b64a6fcbf2c26d4327b8c28cb884777c8918fc50",
+            .hash = "12208ae58c0cabf3995d0c61dd5c5be17ea9174da26e582d5899733763047efaf683",
         },
     },
     .paths = .{
