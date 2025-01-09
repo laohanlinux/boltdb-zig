@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
 
     // Create module
     _ = b.addModule("boltdb", .{
-        .root_source_file = .{ .path = "src/root.zig" },
+        .root_source_file = b.path("src/root.zig"),
     });
 
     const lib = b.addStaticLibrary(.{
