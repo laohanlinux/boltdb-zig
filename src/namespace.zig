@@ -10,6 +10,7 @@ pub const BucketStats = @import("bucket.zig").BucketStats;
 pub const TxStats = tx.TxStats;
 pub const PageInfo = page.PageInfo;
 pub const Options = consts.Options;
+pub const defaultOptions = consts.defaultOptions;
 
 /// A bucket is a collection of key-value pairs.
 pub const Bucket = struct {
