@@ -8,13 +8,13 @@ const PgidType = consts.PgidType;
 const Page = page.Page;
 const assert = @import("assert.zig").assert;
 const log = std.log.scoped(.BoltNode);
-const LoggerContext = struct {
-    id: u64,
-    pgid: u64,
-    isLeaf: bool,
-    ptr: u64,
-};
-const Logger = @import("log.zig").Logger(LoggerContext).init(.BoltNode);
+// const LoggerContext = struct {
+//     id: u64,
+//     pgid: u64,
+//     isLeaf: bool,
+//     ptr: u64,
+// };
+// const Logger = @import("log.zig").Logger(LoggerContext).init(.BoltNode);
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
@@ -301,11 +301,7 @@ pub const Node = struct {
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            // const dupeKey = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
-            // self.key = dupeKey;
             self.key = self.arenaAllocator.allocator().dupe(u8, self.inodes.items[0].key.?) catch unreachable;
-            // self.key = self.inodes.items[0].key;
-            // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(dupeKey);
             assert(self.key.?.len > 0, "key is null, id: {d}, ptr: 0x{x}", .{ self.id, self.nodePtrInt() });
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
@@ -376,7 +372,7 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            // std.log.info("inode: btr: {}, {s}", .{ @intFromPtr(b.ptr), inode.key.? });
+            // std.log.info("inode: btr: {}, {s}, {s}", .{ @intFromPtr(b.ptr), inode.key.?, inode.value.? });
         }
         // const deump = p.asSlice();
         // std.log.info("deump: {any}", .{deump});
@@ -859,17 +855,6 @@ pub const Node = struct {
         return .{ .index = left, .exact = false };
     }
 
-    inline fn withContextLog(self: *const Self, ctx: ?LoggerContext) Logger {
-        if (ctx) |_ctx| {
-            return Logger.with(_ctx);
-        }
-        return Logger.with(self.getCtx());
-    }
-
-    inline fn getCtx(self: *const Self) LoggerContext {
-        return .{ .id = self.id, .pgid = self.pgid, .isLeaf = self.isLeaf, .ptr = self.nodePtrInt() };
-    }
-
     fn safeCheck(self: *const Self) void {
         defer log.debug("pass safe check node: {d}, inodes len: {d}", .{ self.pgid, self.inodes.items.len });
         for (0..self.inodes.items.len) |i| {
@@ -1041,5 +1026,3 @@ const Nodes = std.ArrayList(*Node);
 //     //       std.debug.print("\n{any}\n", .{inode.key.?});
 //     //   }
 // }
-
-test "bufstr" {}

@@ -5,10 +5,12 @@ const Error = @import("error.zig").Error;
 const std = @import("std");
 const Cursor = @import("cursor.zig").Cursor;
 const assert = @import("util.zig").assert;
+const DB = @import("db.zig").DB;
+const log = std.log.scoped(.cursor_test);
 
 // Ensure that a cursor can return a reference to the bucket that created it.
 test "Cursor_Bucket" {
-    std.testing.log_level = .err;
+    std.testing.log_level = .debug;
     var testCtx = try tests.setup(std.testing.allocator);
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;

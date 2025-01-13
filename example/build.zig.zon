@@ -23,9 +23,9 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .boltdb = .{
-            .url = "git+https://github.com/laohanlinux/boltdb-zig.git/?ref=align#5f193dcd37fd4552ff6541a2400368ca9d860e8a",
-            .hash = "1220884844cdb229f71f06841f7cf23a01907e51e9e0d475db1c8e16c81395d45b3a",
+        .@"boltdb-zig" = .{
+            .url = "git+https://github.com/laohanlinux/boltdb-zig.git/?ref=align#0d7676b6c78817ff2ab6d8722d1895f86d4b4856",
+            .hash = "12205627cd0ac5510e4c5dd66a3739b5236abbcebeb901b0fe6f9c15ba1a69eb1664",
         },
     },
     .paths = .{

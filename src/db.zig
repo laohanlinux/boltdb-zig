@@ -14,6 +14,9 @@ const assert = util.assert;
 const Table = @import("pretty_table.zig").Table;
 const PgidType = consts.PgidType;
 
+// const zoroutine = @import("zoroutine");
+const Mutex = @import("mutex.zig").Mutex;
+
 const Page = page.Page;
 // TODO
 const IgnoreNoSync = false;
@@ -95,9 +98,7 @@ pub const DB = struct {
     stats: Stats,
     pagePool: ?*PagePool = null,
 
-    batchMutex: consts.SharedMutex,
-
-    rwlock: consts.SharedMutex, // Allows only one writer a a time.
+    rwlock: Mutex, // Allows only one writer a a time.
     metalock: std.Thread.Mutex, // Protects meta page access.
     mmaplock: std.Thread.RwLock, // Protects mmap access during remapping.
     statlock: std.Thread.RwLock, // Protects stats access.
@@ -163,7 +164,7 @@ pub const DB = struct {
         db.mmaplock = .{};
         db.metalock = .{};
         db.statlock = .{};
-        db.rwlock = consts.SharedMutex.init();
+        db.rwlock = Mutex{};
         db.rwtx = null;
         db.dataRef = null;
         db.pageSize = options.pageSize;
@@ -175,7 +176,6 @@ pub const DB = struct {
         db.readOnly = options.readOnly;
         db.strictMode = options.strictMode;
         db.pagePool = null;
-        db.batchMutex = consts.SharedMutex.init();
         db.opened = false;
         log.info("load database from path: {s}", .{filePath});
         // Open data file and separate sync handler for metadata writes.
@@ -975,3 +975,12 @@ pub const Meta = struct {
         try table.print();
     }
 };
+
+// // Ensure that opening a database with a bad path returns an error.
+// test "DB-Open_ErrNotExists" {
+//     std.testing.log_level = .err;
+//     const badPath = "bad-path/db.db";
+//     _ = DB.open(std.testing.allocator, badPath, null, defaultOptions) catch |err| {
+//         std.debug.assert(err == std.fs.File.OpenError.NotDir);
+//     };
+// }

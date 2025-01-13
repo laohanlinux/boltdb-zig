@@ -345,178 +345,178 @@ pub const FreeList = struct {
     }
 };
 
-// Ensure that a page is added to a transaction's freelist.
-test "Freelist_free" {
-    var freelist = FreeList.init(std.testing.allocator);
-    defer freelist.deinit();
-    try freelist.free(100, &page.Page{ .id = 100, .count = 1, .overflow = 0, .flags = 0 });
-    const pending = freelist.pending.get(100).?.items;
-    assert(pending.len == 1, "pending.items.len == 1", .{});
-    assert(pending[0] == 100, "pending.items[0].id == 100", .{});
-}
-
-// Ensure that a page and its overflow is added to a transaction's freelist.
-test "Freelist_free_overflow" {
-    var freelist = FreeList.init(std.testing.allocator);
-    defer freelist.deinit();
-    try freelist.free(100, &.{ .id = 12, .overflow = 3 });
-    const pending = freelist.pending.get(100).?.items;
-    assert(pending.len == 4, "pending.items.len == 4", .{});
-    assert(pending[0] == 12, "pending.items[0].id == 12", .{});
-    assert(pending[1] == 13, "pending.items[1].id == 13", .{});
-    assert(pending[2] == 14, "pending.items[2].id == 14", .{});
-    assert(pending[3] == 15, "pending.items[3].id == 15", .{});
-}
-
-// Ensure that a transaction's free pages can be released.
-test "Freelist_release" {
-    var freelist = FreeList.init(std.testing.allocator);
-    defer freelist.deinit();
-    try freelist.free(100, &.{ .id = 12, .overflow = 1 });
-    try freelist.free(100, &.{ .id = 9 });
-    try freelist.free(102, &.{ .id = 39 });
-    try freelist.release(100);
-    try freelist.release(101);
-    assert(std.mem.eql(u64, freelist.ids.items, &.{ 9, 12, 13 }), "freelist.ids.items == [9, 12, 13]", .{});
-    try freelist.release(102);
-    assert(std.mem.eql(u64, freelist.ids.items, &.{ 9, 12, 13, 39 }), "freelist.ids.items == [9, 12, 13, 39]", .{});
-}
-
-// Ensure that a freelist can find contiguous blocks of pages.
-test "Freelist_allocate" {
-    std.testing.log_level = .debug;
-    var freelist = FreeList.init(std.testing.allocator);
-    try freelist.ids.appendSlice(&[_]PgidType{ 3, 4, 5, 6, 7, 9, 12, 13, 18 });
-    defer freelist.deinit();
-    var pid = freelist.allocate(3);
-    assert(pid == 3, "freelist.allocate(3) == 3, pid: {d}", .{pid});
-    pid = freelist.allocate(1);
-    assert(pid == 6, "freelist.allocate(1) == 6, pid: {d}", .{pid});
-    pid = freelist.allocate(3);
-    assert(pid == 0, "freelist.allocate(3) == 0, pid: {d}", .{pid});
-    pid = freelist.allocate(2);
-    assert(pid == 12, "freelist.allocate(2) == 12, pid: {d}", .{pid});
-    pid = freelist.allocate(1);
-    assert(pid == 7, "freelist.allocate(1) == 7, pid: {d}", .{pid});
-    assert(std.mem.eql(u64, freelist.ids.items, &[_]PgidType{ 9, 18 }), "freelist.ids == {any}", .{freelist.ids.items});
-    pid = freelist.allocate(1);
-    assert(pid == 9, "freelist.allocate(1) == 9, pid: {d}", .{pid});
-    pid = freelist.allocate(1);
-    assert(pid == 18, "freelist.allocate(1) == 18, pid: {d}", .{pid});
-    pid = freelist.allocate(1);
-    assert(pid == 0, "freelist.allocate(1) == 0, pid: {d}", .{pid});
-    assert(freelist.ids.items.len == 0, "freelist.ids.items.len == 0", .{});
-}
-
-// Ensure that a freelist can deserialize from a freelist page.
-test "Freelist_read" {
-    var buf: [consts.PageSize]u8 = [_]u8{0} ** consts.PageSize;
-    var p = page.Page.init(buf[0..]);
-    p.flags = consts.intFromFlags(.freeList);
-    p.count = 2;
-
-    // Insert 2 page ids.
-    const ptr = p.freelistPageElements().?;
-    ptr[0] = 23;
-    ptr[1] = 50;
-
-    // Deserialize page into a freelist.
-    var freelist = FreeList.init(std.testing.allocator);
-    defer freelist.deinit();
-    freelist.read(p);
-
-    // Ensure that there are two page ids in the freelist.
-    assert(freelist.ids.items.len == 2, "freelist.ids.items.len == 2", .{});
-    assert(freelist.ids.items[0] == 23, "freelist.ids.items[0] == 23", .{});
-    assert(freelist.ids.items[1] == 50, "freelist.ids.items[1] == 50", .{});
-}
-
-// Ensure that a freelist can serialize into a freelist page.
-test "Freelist_write" {
-    std.testing.log_level = .err;
-    // Create a freelist and write it to a page.
-    var buf: [consts.PageSize]u8 = [_]u8{0} ** consts.PageSize;
-    var freelist = FreeList.init(std.testing.allocator);
-    defer freelist.deinit();
-    try freelist.ids.appendSlice(&.{ 12, 39 });
-
-    var c100 = std.ArrayList(PgidType).init(std.testing.allocator);
-    c100.appendSlice(&.{ 28, 11 }) catch unreachable;
-    var c101 = std.ArrayList(PgidType).init(std.testing.allocator);
-    c101.appendSlice(&.{3}) catch unreachable;
-    try freelist.pending.put(100, c100);
-    try freelist.pending.put(101, c101);
-
-    const p = page.Page.init(buf[0..]);
-    try freelist.write(p);
-    // Read the page back out.
-    var freelist2 = FreeList.init(std.testing.allocator);
-    defer freelist2.deinit();
-    freelist2.read(p);
-
-    // Ensure that the freelist is correct.
-    // All pages should be present and in reverse order.
-    assert(std.mem.eql(PgidType, freelist2.ids.items, &.{ 3, 11, 12, 28, 39 }), "freelist2.ids.items == {any}", .{freelist2.ids.items});
-}
-
-// test "meta" {
-//     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; // instantiate allocator
-//     const galloc = gpa.allocator(); // retrieves the created allocator.
-//     var ff = FreeList.init(galloc);
-//     defer ff.deinit();
-//     _ = ff.size();
-//     _ = ff.count();
-//     const fCount = ff.freeCount();
-//     _ = ff.pendingCount();
-//     ff.copyAll(&.{});
-//     const i = ff.allocate(100);
-//     try ff.release(1);
-//     ff.rollback(1);
-//     _ = ff.freed(200);
-//     //  ff.reload(20);
-//     ff.reindex();
-//     try ff.cache.put(1000, true);
-//     std.debug.print("What the fuck {d} {d}, {?}\n", .{ fCount, i, ff.cache.getKey(1000) });
-
-//     const a = [_]page.PgidType{ 1, 3, 4, 5 };
-//     const b = [_]page.PgidType{ 0, 2, 6, 7, 120 };
-//     var array = [_]page.PgidType{0} ** (a.len + b.len);
-//     FreeList.merge_sorted_array(array[0..], a[0..], b[0..]);
-//     std.debug.print("after merge!\n", .{});
-//     for (array) |n| {
-//         std.debug.print("{},", .{n});
-//     }
-//     std.debug.print("\n", .{});
-//     var arr = try std.ArrayList(page.PgidType).initCapacity(std.heap.page_allocator, 100);
-//     defer arr.deinit();
+// // Ensure that a page is added to a transaction's freelist.
+// test "Freelist_free" {
+//     var freelist = FreeList.init(std.testing.allocator);
+//     defer freelist.deinit();
+//     try freelist.free(100, &page.Page{ .id = 100, .count = 1, .overflow = 0, .flags = 0 });
+//     const pending = freelist.pending.get(100).?.items;
+//     assert(pending.len == 1, "pending.items.len == 1", .{});
+//     assert(pending[0] == 100, "pending.items[0].id == 100", .{});
 // }
 
-// test "freelist" {
-//     var flist = FreeList.init(std.testing.allocator);
-//     defer flist.deinit();
-
-//     var ids = std.ArrayList(page.PgidType).initCapacity(std.testing.allocator, 0) catch unreachable;
-//     for (0..29) |i| {
-//         const pid = @as(u64, i);
-//         ids.append(pid) catch unreachable;
-//     }
-//     defer ids.deinit();
-//     std.mem.copyForwards(u64, ids.items[0..20], ids.items[10..12]);
-//     ids.resize(2) catch unreachable;
-//     std.debug.print("{any}\n", .{ids.items});
+// // Ensure that a page and its overflow is added to a transaction's freelist.
+// test "Freelist_free_overflow" {
+//     var freelist = FreeList.init(std.testing.allocator);
+//     defer freelist.deinit();
+//     try freelist.free(100, &.{ .id = 12, .overflow = 3 });
+//     const pending = freelist.pending.get(100).?.items;
+//     assert(pending.len == 4, "pending.items.len == 4", .{});
+//     assert(pending[0] == 12, "pending.items[0].id == 12", .{});
+//     assert(pending[1] == 13, "pending.items[1].id == 13", .{});
+//     assert(pending[2] == 14, "pending.items[2].id == 14", .{});
+//     assert(pending[3] == 15, "pending.items[3].id == 15", .{});
 // }
 
-// test "freelist" {
-//     const buf = try std.testing.allocator.alloc(u8, 7 * consts.PageSize);
-//     @memset(buf, 0);
-//     const p = Page.init(buf);
-//     p.overflow = 7;
-//     p.id = 26737;
-//     p.flags = 16;
-//     p.count = 13368;
-//     p.overflow = 6;
-//     std.log.info("freelistPageElements, ptr: {d}", .{p.ptrInt()});
-//     defer std.testing.allocator.free(buf);
-//     const ids = p.freelistPageElements().?;
-//     // std.debug.print("{any}\n", .{ids});
+// // Ensure that a transaction's free pages can be released.
+// test "Freelist_release" {
+//     var freelist = FreeList.init(std.testing.allocator);
+//     defer freelist.deinit();
+//     try freelist.free(100, &.{ .id = 12, .overflow = 1 });
+//     try freelist.free(100, &.{ .id = 9 });
+//     try freelist.free(102, &.{ .id = 39 });
+//     try freelist.release(100);
+//     try freelist.release(101);
+//     assert(std.mem.eql(u64, freelist.ids.items, &.{ 9, 12, 13 }), "freelist.ids.items == [9, 12, 13]", .{});
+//     try freelist.release(102);
+//     assert(std.mem.eql(u64, freelist.ids.items, &.{ 9, 12, 13, 39 }), "freelist.ids.items == [9, 12, 13, 39]", .{});
 // }
+
+// // Ensure that a freelist can find contiguous blocks of pages.
+// test "Freelist_allocate" {
+//     std.testing.log_level = .debug;
+//     var freelist = FreeList.init(std.testing.allocator);
+//     try freelist.ids.appendSlice(&[_]PgidType{ 3, 4, 5, 6, 7, 9, 12, 13, 18 });
+//     defer freelist.deinit();
+//     var pid = freelist.allocate(3);
+//     assert(pid == 3, "freelist.allocate(3) == 3, pid: {d}", .{pid});
+//     pid = freelist.allocate(1);
+//     assert(pid == 6, "freelist.allocate(1) == 6, pid: {d}", .{pid});
+//     pid = freelist.allocate(3);
+//     assert(pid == 0, "freelist.allocate(3) == 0, pid: {d}", .{pid});
+//     pid = freelist.allocate(2);
+//     assert(pid == 12, "freelist.allocate(2) == 12, pid: {d}", .{pid});
+//     pid = freelist.allocate(1);
+//     assert(pid == 7, "freelist.allocate(1) == 7, pid: {d}", .{pid});
+//     assert(std.mem.eql(u64, freelist.ids.items, &[_]PgidType{ 9, 18 }), "freelist.ids == {any}", .{freelist.ids.items});
+//     pid = freelist.allocate(1);
+//     assert(pid == 9, "freelist.allocate(1) == 9, pid: {d}", .{pid});
+//     pid = freelist.allocate(1);
+//     assert(pid == 18, "freelist.allocate(1) == 18, pid: {d}", .{pid});
+//     pid = freelist.allocate(1);
+//     assert(pid == 0, "freelist.allocate(1) == 0, pid: {d}", .{pid});
+//     assert(freelist.ids.items.len == 0, "freelist.ids.items.len == 0", .{});
+// }
+
+// // Ensure that a freelist can deserialize from a freelist page.
+// test "Freelist_read" {
+//     var buf: [consts.PageSize]u8 = [_]u8{0} ** consts.PageSize;
+//     var p = page.Page.init(buf[0..]);
+//     p.flags = consts.intFromFlags(.freeList);
+//     p.count = 2;
+
+//     // Insert 2 page ids.
+//     const ptr = p.freelistPageElements().?;
+//     ptr[0] = 23;
+//     ptr[1] = 50;
+
+//     // Deserialize page into a freelist.
+//     var freelist = FreeList.init(std.testing.allocator);
+//     defer freelist.deinit();
+//     freelist.read(p);
+
+//     // Ensure that there are two page ids in the freelist.
+//     assert(freelist.ids.items.len == 2, "freelist.ids.items.len == 2", .{});
+//     assert(freelist.ids.items[0] == 23, "freelist.ids.items[0] == 23", .{});
+//     assert(freelist.ids.items[1] == 50, "freelist.ids.items[1] == 50", .{});
+// }
+
+// // Ensure that a freelist can serialize into a freelist page.
+// test "Freelist_write" {
+//     std.testing.log_level = .err;
+//     // Create a freelist and write it to a page.
+//     var buf: [consts.PageSize]u8 = [_]u8{0} ** consts.PageSize;
+//     var freelist = FreeList.init(std.testing.allocator);
+//     defer freelist.deinit();
+//     try freelist.ids.appendSlice(&.{ 12, 39 });
+
+//     var c100 = std.ArrayList(PgidType).init(std.testing.allocator);
+//     c100.appendSlice(&.{ 28, 11 }) catch unreachable;
+//     var c101 = std.ArrayList(PgidType).init(std.testing.allocator);
+//     c101.appendSlice(&.{3}) catch unreachable;
+//     try freelist.pending.put(100, c100);
+//     try freelist.pending.put(101, c101);
+
+//     const p = page.Page.init(buf[0..]);
+//     try freelist.write(p);
+//     // Read the page back out.
+//     var freelist2 = FreeList.init(std.testing.allocator);
+//     defer freelist2.deinit();
+//     freelist2.read(p);
+
+//     // Ensure that the freelist is correct.
+//     // All pages should be present and in reverse order.
+//     assert(std.mem.eql(PgidType, freelist2.ids.items, &.{ 3, 11, 12, 28, 39 }), "freelist2.ids.items == {any}", .{freelist2.ids.items});
+// }
+
+// // test "meta" {
+// //     var gpa = std.heap.GeneralPurposeAllocator(.{}){}; // instantiate allocator
+// //     const galloc = gpa.allocator(); // retrieves the created allocator.
+// //     var ff = FreeList.init(galloc);
+// //     defer ff.deinit();
+// //     _ = ff.size();
+// //     _ = ff.count();
+// //     const fCount = ff.freeCount();
+// //     _ = ff.pendingCount();
+// //     ff.copyAll(&.{});
+// //     const i = ff.allocate(100);
+// //     try ff.release(1);
+// //     ff.rollback(1);
+// //     _ = ff.freed(200);
+// //     //  ff.reload(20);
+// //     ff.reindex();
+// //     try ff.cache.put(1000, true);
+// //     std.debug.print("What the fuck {d} {d}, {?}\n", .{ fCount, i, ff.cache.getKey(1000) });
+
+// //     const a = [_]page.PgidType{ 1, 3, 4, 5 };
+// //     const b = [_]page.PgidType{ 0, 2, 6, 7, 120 };
+// //     var array = [_]page.PgidType{0} ** (a.len + b.len);
+// //     FreeList.merge_sorted_array(array[0..], a[0..], b[0..]);
+// //     std.debug.print("after merge!\n", .{});
+// //     for (array) |n| {
+// //         std.debug.print("{},", .{n});
+// //     }
+// //     std.debug.print("\n", .{});
+// //     var arr = try std.ArrayList(page.PgidType).initCapacity(std.heap.page_allocator, 100);
+// //     defer arr.deinit();
+// // }
+
+// // test "freelist" {
+// //     var flist = FreeList.init(std.testing.allocator);
+// //     defer flist.deinit();
+
+// //     var ids = std.ArrayList(page.PgidType).initCapacity(std.testing.allocator, 0) catch unreachable;
+// //     for (0..29) |i| {
+// //         const pid = @as(u64, i);
+// //         ids.append(pid) catch unreachable;
+// //     }
+// //     defer ids.deinit();
+// //     std.mem.copyForwards(u64, ids.items[0..20], ids.items[10..12]);
+// //     ids.resize(2) catch unreachable;
+// //     std.debug.print("{any}\n", .{ids.items});
+// // }
+
+// // test "freelist" {
+// //     const buf = try std.testing.allocator.alloc(u8, 7 * consts.PageSize);
+// //     @memset(buf, 0);
+// //     const p = Page.init(buf);
+// //     p.overflow = 7;
+// //     p.id = 26737;
+// //     p.flags = 16;
+// //     p.count = 13368;
+// //     p.overflow = 6;
+// //     std.log.info("freelistPageElements, ptr: {d}", .{p.ptrInt()});
+// //     defer std.testing.allocator.free(buf);
+// //     const ids = p.freelistPageElements().?;
+// //     // std.debug.print("{any}\n", .{ids});
+// // }

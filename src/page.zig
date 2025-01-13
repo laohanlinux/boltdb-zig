@@ -133,6 +133,13 @@ pub const Page = struct {
         return elements[0..self.count];
     }
 
+    /// Returns a pointer to the leaf page element data.
+    pub fn leafPageElementDataPtr(self: *Self) [*]u8 {
+        const ptr = self.getDataPtrIntRef() + self.count * LeafPageElement.headerSize();
+        const slice = @as([*]u8, @ptrFromInt(ptr));
+        return slice;
+    }
+
     /// Retrives a list of freelist page elements.
     pub fn freelistPageElements(self: *Self) ?[]PgidType {
         const ptr = self.getDataPtrInt();
@@ -223,9 +230,9 @@ pub const BranchPageElement = struct {
     //
     // |pageHeader| --> |element0|, |element1|, |element2|, |element3|, |element4| --> |key1| --> |key2| --> |key3| --> |key4|
     //
-    pos: u32 align(1),
-    kSize: u32 align(1),
-    pgid: PgidType align(1),
+    pos: u32 align(1) = 0,
+    kSize: u32 align(1) = 0,
+    pgid: PgidType align(1) = 0,
 
     const Self = @This();
     /// Returns the size of the branch page element header.
@@ -242,14 +249,14 @@ pub const BranchPageElement = struct {
 
 /// A leaf page element.
 pub const LeafPageElement = struct {
-    flags: u32 align(1),
+    flags: u32 align(1) = 0,
     // pos is the offset from first position of the element.
     //
     // |pageHeader| --> |element0|, |element1|, |element2|, |element3|, |element4| --> |key1, value1| --> |key2, value2| --> |key3, value3| --> |key4, value4|
     //
-    pos: u32 align(1),
-    kSize: u32 align(1),
-    vSize: u32 align(1),
+    pos: u32 align(1) = 0,
+    kSize: u32 align(1) = 0,
+    vSize: u32 align(1) = 0,
 
     const Self = @This();
     /// Returns the size of the leaf page element header.
@@ -277,10 +284,10 @@ pub const LeafPageElement = struct {
 
 /// PageInfo represents human readable information about a page.
 pub const PageInfo = struct {
-    id: PgidType,
-    typ: []const u8,
-    count: isize,
-    over_flow_count: isize,
+    id: PgidType = 0,
+    typ: []const u8 = "",
+    count: isize = 0,
+    over_flow_count: isize = 0,
 };
 
 /// Returns the sorted union of a and b.

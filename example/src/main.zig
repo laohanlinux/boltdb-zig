@@ -3,6 +3,7 @@
 //! is to delete this file and start with root.zig instead.
 const std = @import("std");
 const db = @import("boltdb");
+pub const log_level: std.log.Level = .debug;
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
@@ -19,7 +20,19 @@ pub fn main() !void {
     var allocator = std.heap.GeneralPurposeAllocator(.{}).init;
     const option = db.consts.defaultOptions;
     const database = try db.DB.open(allocator.allocator(), "boltdb.tmp", null, option);
-    try database.close();
+    defer database.close() catch unreachable;
+    try database.update(struct {
+        fn update(tx: *db.TX) db.Error!void {
+            const b = try tx.createBucketIfNotExists("user");
+            try b.put(db.consts.KeyPair.init("Lusy", "29"));
+        }
+    }.update);
+    const viewTrans = try database.begin(false);
+    defer viewTrans.rollbackAndDestroy() catch unreachable;
+    const b = viewTrans.getBucket("user").?;
+    const age = b.get("Lusy").?;
+    stdout.print("Lusy's age is: {s}\n", .{age}) catch unreachable;
+
     try bw.flush(); // Don't forget to flush!
 }
 
