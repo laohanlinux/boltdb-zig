@@ -240,23 +240,7 @@ pub const Database = struct {
     //
     // *IMPORTANT*: You must close read-only transactions after you are finished or else the database will not reclaim old pages.
     pub fn begin(self: *Self, writable: bool) Error!*Transaction {
-        if (writable) {
-            return self.beginRWTx();
-        } else {
-            return self.beginTx();
-        }
-    }
-
-    fn beginTx(self: *Self) Error!*Transaction {
-        const _tx = try self._db.beginTx();
-        var trans = self._db.allocator.create(Transaction) catch unreachable;
-        trans._tx = _tx;
-        trans.allocator = self._db.allocator;
-        return trans;
-    }
-
-    fn beginRWTx(self: *Self) Error!*Transaction {
-        const _tx = try self._db.beginRWTx();
+        const _tx = try self._db.begin(writable);
         var trans = self._db.allocator.create(Transaction) catch unreachable;
         trans._tx = _tx;
         trans.allocator = self._db.allocator;
