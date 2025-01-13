@@ -544,7 +544,6 @@ pub const DB = struct {
         return self.readOnly;
     }
 
-    /// close closes the database and releases all associated resources.
     pub fn close(self: *Self) !void {
         defer std.log.info("succeed to close db!", .{});
         defer self.allocator.destroy(self);

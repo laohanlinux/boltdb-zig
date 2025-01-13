@@ -5,5 +5,9 @@ const std = @import("std");
 const db = @import("boltdb");
 pub const log_level: std.log.Level = .debug;
 pub fn main() !void {
-    std.debug.print("{any}\n", .{db.defaultOptions);
+    var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
+    const allocator = gpa.allocator();
+    var database = try db.Database.open(allocator, "boltdb.tmp", null, db.defaultOptions);
+    defer database.close();
+    std.debug.print("{any}\n", .{db.defaultOptions});
 }
