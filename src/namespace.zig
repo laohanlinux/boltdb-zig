@@ -116,20 +116,16 @@ pub const Transaction = struct {
     /// Returns an error if the bucket already exists, if th bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucket(self: *Transaction, name: []const u8) Error!Bucket {
-        if (self._tx.createBucket(name)) |bt| {
-            return .{ ._bt = bt };
-        }
-        return null;
+        const bt = try self._tx.createBucket(name);
+        return .{ ._bt = bt };
     }
 
     /// Creates a new bucket if the bucket if it doesn't already exist.
     /// Returns an error if the bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucketIfNotExists(self: *Transaction, name: []const u8) Error!Bucket {
-        if (self._tx.createBucketIfNotExists(name)) |bt| {
-            return .{ ._bt = bt };
-        }
-        return null;
+        const bt = try self._tx.createBucketIfNotExists(name);
+        return .{ ._bt = bt };
     }
 
     /// Deletes a bucket.
@@ -245,18 +241,26 @@ pub const Database = struct {
     // *IMPORTANT*: You must close read-only transactions after you are finished or else the database will not reclaim old pages.
     pub fn begin(self: *Self, writable: bool) Error!*Transaction {
         if (writable) {
-            const _tx = try self._db.beginRWTx();
-            var trans = self._db.allocator.create(Transaction) catch unreachable;
-            trans._tx = _tx;
-            trans.allocator = self._db.allocator;
-            return trans;
+            return self.beginRWTx();
         } else {
-            const _tx = try self._db.beginTx();
-            var trans = self._db.allocator.create(Transaction) catch unreachable;
-            trans._tx = _tx;
-            trans.allocator = self._db.allocator;
-            return trans;
+            return self.beginTx();
         }
+    }
+
+    fn beginTx(self: *Self) Error!*Transaction {
+        const _tx = try self._db.beginTx();
+        var trans = self._db.allocator.create(Transaction) catch unreachable;
+        trans._tx = _tx;
+        trans.allocator = self._db.allocator;
+        return trans;
+    }
+
+    fn beginRWTx(self: *Self) Error!*Transaction {
+        const _tx = try self._db.beginRWTx();
+        var trans = self._db.allocator.create(Transaction) catch unreachable;
+        trans._tx = _tx;
+        trans.allocator = self._db.allocator;
+        return trans;
     }
 
     /// Executes a function within the context of a read-write managed transaction.
