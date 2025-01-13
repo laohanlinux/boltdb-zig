@@ -220,7 +220,7 @@ pub const Database = struct {
     /// Creates and opens a database at the given path.
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
-    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: Options) !*Self {
+    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: Options) !Self {
         const _db = try DB.open(allocator, filePath, fileMode, options);
         return .{ ._db = _db };
     }

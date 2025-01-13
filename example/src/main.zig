@@ -8,6 +8,5 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     const allocator = gpa.allocator();
     var database = try db.Database.open(allocator, "boltdb.tmp", null, db.defaultOptions);
-    defer database.close();
-    std.debug.print("{any}\n", .{db.defaultOptions});
+    try database.close();
 }
