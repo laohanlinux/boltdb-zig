@@ -5,5 +5,5 @@ const std = @import("std");
 const db = @import("boltdb");
 pub const log_level: std.log.Level = .debug;
 pub fn main() !void {
-    std.debug.print("{any}\n", .{db.Options{}});
+    std.debug.print("{any}\n", .{db.defaultOptions);
 }

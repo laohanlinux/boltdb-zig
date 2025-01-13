@@ -31,7 +31,6 @@ pub fn build(b: *std.Build) void {
     const boltdbDep = b.dependency("boltdb-zig", .{
         .target = target,
         .optimize = optimize,
-        // .root_source_file = b.path("src/main.zig"),
     });
 
     const exe = b.addExecutable(.{
@@ -77,6 +76,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    lib_unit_tests.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe_unit_tests.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
 
     // Create module
     _ = b.addModule("boltdb", .{
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("src/namespace.zig"),
     });
 
     const lib = b.addStaticLibrary(.{
@@ -28,7 +28,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
