@@ -36,7 +36,7 @@ pub const TX = struct {
     // pages is not null only at writable transaction, the pages will store dirty *pages* that need to be written to disk,
     // pages's source from freed pages in freelist. or new page when freelist is not enough.
     pages: ?std.AutoHashMap(PgidType, *Page),
-    autoFreeNodes: AutoFreeObject,
+    autoFreeNodes: ?AutoFreeObject = null,
     stats: TxStats = .{},
 
     // WriteFlag specifies the flag for write-related methods like WriteTo().
@@ -636,7 +636,9 @@ pub const TX = struct {
             self.pages.?.deinit();
             self.pages = null;
         }
-        self.autoFreeNodes.deinit(self.allocator);
+        if (self.autoFreeNodes != null) {
+            self.autoFreeNodes.?.deinit(self.allocator);
+        }
         self.root.deinit();
         self.arenaAllocator.deinit();
     }

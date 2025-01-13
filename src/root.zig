@@ -14,4 +14,7 @@ test "basic add functionality" {
 test {
     _ = @import("cursor_test.zig");
     _ = @import("node_test.zig");
+    _ = @import("bucket_test.zig");
+    _ = @import("tx_test.zig");
+    _ = @import("page.zig");
 }

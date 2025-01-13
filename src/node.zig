@@ -382,7 +382,7 @@ pub const Node = struct {
 
     /// Split breaks up a node into multiple smaller nodes, If appropriate.
     /// This should only be called from the spill() function.
-    fn split(self: *Self, _pageSize: usize) std.ArrayList(*Node) {
+    pub fn split(self: *Self, _pageSize: usize) std.ArrayList(*Node) {
         var nodes = std.ArrayList(*Node).init(self.arenaAllocator.allocator());
         var curNode = self;
         while (true) {
@@ -440,7 +440,7 @@ pub const Node = struct {
             self.parent = Node.init(self.getAllocator());
             self.parent.?.bucket = self.bucket;
             self.parent.?.children.append(self) catch unreachable; // children also is you!
-            self.bucket.?.tx.?.autoFreeNodes.addNode(self.parent.?);
+            self.bucket.?.tx.?.autoFreeNodes.?.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
@@ -980,49 +980,3 @@ pub const INode = struct {
 const INodes = std.ArrayList(INode);
 
 const Nodes = std.ArrayList(*Node);
-
-//
-// test "node" {
-//     const node = Node.init(std.testing.allocator);
-//     defer node.deinit();
-//     _ = node.root();
-//     _ = node.minKeys();
-//     const nodeSize = node.size();
-//     const lessThan = node.sizeLessThan(20);
-//     //_ = node.childAt(0);
-//     //_ = node.childIndex(node);
-//     //_ = node.numChildren();
-//     _ = node.nextSlibling();
-//     _ = node.preSlibling();
-//
-//     const pageSlice = try std.testing.allocator.alloc(u8, page.page_size);
-//     defer std.testing.allocator.free(pageSlice);
-//     // const pagePtr = page.Page.init(pageSlice);
-//     // @memset(pageSlice, 0);
-//     //node.read(pagePtr);
-//     // node.write(pagePtr);
-//     //  var oldKey = [_]u8{0};
-//     //  var newKey = [_]u8{0};
-//     //   var value = [_]u8{ 1, 2, 3 };
-//     //   node.put(oldKey[0..], newKey[0..], value[0..], 29, 0);
-//     // node.del("");
-//     std.debug.print("node size: {}, less: {}\n", .{ nodeSize, lessThan });
-//
-//     //   const n: usize = 14;
-//     //   var inodes = std.testing.allocator.alloc(*INode, n) catch unreachable;
-//     //   defer std.testing.allocator.free(inodes);
-//     //   defer freeInodes(std.testing.allocator, inodes);
-//     //   // random a number
-//     //   var rng = std.rand.DefaultPrng.init(10);
-//     //   for (0..n) |i| {
-//     //       const key = std.testing.allocator.alloc(u8, 10) catch unreachable;
-//     //       rng.fill(key);
-//     //       const inode = INode.init(0x10, 0x20, key, null);
-//     //       inodes[i] = inode;
-//     //   }
-//     //   sortINodes(inodes);
-//     //
-//     //   for (inodes) |inode| {
-//     //       std.debug.print("\n{any}\n", .{inode.key.?});
-//     //   }
-// }

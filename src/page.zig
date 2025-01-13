@@ -362,88 +362,88 @@ fn lessThanPid(context: void, lhs: PgidType, rhs: PgidType) bool {
     return lhs < rhs;
 }
 
-// test "page struct" {
-//     var area = std.heap.ArenaAllocator.init(std.testing.allocator);
-//     defer area.deinit();
-//     const allocator = area.allocator();
-//     const page = Page{ .id = 1, .flags = 2, .count = 1, .overflow = 1 };
-//     _ = page;
-//     const page_size = consts.PageSize;
-//     const slice = allocator.alloc(u8, page_size) catch unreachable;
-//     @memset(slice, 0);
-//     // Meta
-//     {
-//         std.debug.print("Test Meta\n", .{});
-//         var page1 = Page.init(slice);
-//         var page2 = Page.init(slice);
-//         page2.id = 200;
-//         page2.flags = consts.intFromFlags(.leaf);
-//         page2.meta().*.version = 1;
-//         page2.meta().*.version = 2;
-//         try std.testing.expectEqual(page1.meta().*.version, 2);
-//         try std.testing.expectEqual(page1.meta().*.version, page2.meta().*.version);
-//         try std.testing.expectEqual(page1.flags, page2.flags);
-//     }
-//     @memset(slice, 0);
-//     // Branch
-//     {
-//         std.debug.print("Test Branch\n", .{});
-//         const pageRef = Page.init(slice);
-//         pageRef.count = 10;
-//         for (0..10) |i| {
-//             const branch = pageRef.branchPageElement(i);
-//             branch.?.pos = @as(u32, @intCast(i * 9 + 300));
-//             branch.?.kSize = @as(u32, @intCast(i + 1));
-//             branch.?.pgid = @as(u64, i + 2);
-//         }
-//         for (0..10) |i| {
-//             const branch = pageRef.branchPageElementRef(i);
-//             std.debug.print("{} {}\n", .{ branch.?, branch.?.pgid });
-//         }
-//     }
-//     @memset(slice, 0);
-//     std.debug.print("-------------------------------page size {}-----------\n", .{page_size});
-//     // Leaf
-//     {
-//         const pageRef = Page.init(slice);
-//         pageRef.count = 10;
-//         const n: usize = @as(usize, pageRef.count);
-//         var leftPos = pageRef.getDataPtrInt();
-//         var rightPos: usize = @intFromPtr(slice.ptr) + page_size - 1;
-//         // store it
-//         for (0..n) |i| {
-//             const leaf = pageRef.leafPageElement(i).?;
-//             leaf.flags = 0;
-//             leaf.kSize = @as(u32, @intCast(i + 1));
-//             leaf.vSize = @as(u32, @intCast(i + 2));
-//             const kvSize = leaf.kSize + leaf.vSize;
+test "page struct" {
+    var area = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer area.deinit();
+    const allocator = area.allocator();
+    const page = Page{ .id = 1, .flags = 2, .count = 1, .overflow = 1 };
+    _ = page;
+    const page_size = consts.PageSize;
+    const slice = allocator.alloc(u8, page_size) catch unreachable;
+    @memset(slice, 0);
+    // Meta
+    {
+        std.debug.print("Test Meta\n", .{});
+        var page1 = Page.init(slice);
+        var page2 = Page.init(slice);
+        page2.id = 200;
+        page2.flags = consts.intFromFlags(.leaf);
+        page2.meta().*.version = 1;
+        page2.meta().*.version = 2;
+        try std.testing.expectEqual(page1.meta().*.version, 2);
+        try std.testing.expectEqual(page1.meta().*.version, page2.meta().*.version);
+        try std.testing.expectEqual(page1.flags, page2.flags);
+    }
+    @memset(slice, 0);
+    // Branch
+    {
+        std.debug.print("Test Branch\n", .{});
+        const pageRef = Page.init(slice);
+        pageRef.count = 10;
+        for (0..10) |i| {
+            const branch = pageRef.branchPageElement(i);
+            branch.?.pos = @as(u32, @intCast(i * 9 + 300));
+            branch.?.kSize = @as(u32, @intCast(i + 1));
+            branch.?.pgid = @as(u64, i + 2);
+        }
+        for (0..10) |i| {
+            const branch = pageRef.branchPageElementRef(i);
+            std.debug.print("{} {}\n", .{ branch.?, branch.?.pgid });
+        }
+    }
+    @memset(slice, 0);
+    std.debug.print("-------------------------------page size {}-----------\n", .{page_size});
+    // Leaf
+    {
+        const pageRef = Page.init(slice);
+        pageRef.count = 10;
+        const n: usize = @as(usize, pageRef.count);
+        var leftPos = pageRef.getDataPtrInt();
+        var rightPos: usize = @intFromPtr(slice.ptr) + page_size - 1;
+        // store it
+        for (0..n) |i| {
+            const leaf = pageRef.leafPageElement(i).?;
+            leaf.flags = 0;
+            leaf.kSize = @as(u32, @intCast(i + 1));
+            leaf.vSize = @as(u32, @intCast(i + 2));
+            const kvSize = leaf.kSize + leaf.vSize;
 
-//             leaf.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
-//             std.debug.assert(leaf.pos == pageRef.leafPageElement(i).?.pos);
-//             leftPos += LeafPageElement.headerSize();
-//             rightPos -= @as(usize, kvSize);
-//             const keyConst = leaf.key();
-//             var key: []u8 = @constCast(keyConst);
-//             for (0..key.len) |index| {
-//                 key[index] = @as(u8, @intCast(index + 'B'));
-//             }
-//             const value = leaf.value();
-//             for (0..value.len) |index| {
-//                 value[index] = @as(u8, @intCast(index + 'E'));
-//             }
-//         }
-//         const leafElements = pageRef.leafPageElements();
-//         for (leafElements.?) |leaf| {
-//             std.debug.print("{?}\n", .{leaf});
-//         }
-//     }
-// }
+            leaf.pos = @as(u32, @intCast(rightPos - leftPos)) - kvSize;
+            std.debug.assert(leaf.pos == pageRef.leafPageElement(i).?.pos);
+            leftPos += LeafPageElement.headerSize();
+            rightPos -= @as(usize, kvSize);
+            const keyConst = leaf.key();
+            var key: []u8 = @constCast(keyConst);
+            for (0..key.len) |index| {
+                key[index] = @as(u8, @intCast(index + 'B'));
+            }
+            const value = leaf.value();
+            for (0..value.len) |index| {
+                value[index] = @as(u8, @intCast(index + 'E'));
+            }
+        }
+        const leafElements = pageRef.leafPageElements();
+        for (leafElements.?) |leaf| {
+            std.debug.print("{?}\n", .{leaf});
+        }
+    }
+}
 
-// test "check alignments" {
-//     std.debug.print("\n", .{});
-//     std.debug.print("Page alignment: {}\n", .{@alignOf(Page)});
-//     std.debug.print("Page size: {}\n", .{@sizeOf(Page)});
-//     std.debug.print("PgidType alignment: {}\n", .{@alignOf(PgidType)});
-//     std.debug.print("u16 alignment: {}\n", .{@alignOf(u16)});
-//     std.debug.print("u32 alignment: {}\n", .{@alignOf(u32)});
-// }
+test "check alignments" {
+    std.debug.print("\n", .{});
+    std.debug.print("Page alignment: {}\n", .{@alignOf(Page)});
+    std.debug.print("Page size: {}\n", .{@sizeOf(Page)});
+    std.debug.print("PgidType alignment: {}\n", .{@alignOf(PgidType)});
+    std.debug.print("u16 alignment: {}\n", .{@alignOf(u16)});
+    std.debug.print("u32 alignment: {}\n", .{@alignOf(u32)});
+}

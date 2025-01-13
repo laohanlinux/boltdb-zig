@@ -14,15 +14,6 @@ const KeyPair = consts.KeyPair;
 const KeyValueRef = consts.KeyValueRef;
 const Error = @import("error.zig").Error;
 
-/// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
-/// Cursors see nested buckets with value == nil.
-/// Cursors can be obtained from a transaction and are valid as long as the transaction is open.
-///
-/// Keys and values returned from the cursor are only valid for the life of the transaction.
-///
-/// Changing data while traversing with a cursor may cause it to be invalidated
-/// and return unexpected keys and/or values. You must reposition your cursor
-/// after mutating data.
 pub const Cursor = struct {
     _bucket: *Bucket,
     stack: std.ArrayList(ElementRef),
@@ -51,14 +42,10 @@ pub const Cursor = struct {
         }
     }
 
-    /// Returns the bucket that this cursor was created from.
     pub fn bucket(self: *Self) *Bucket {
         return self._bucket;
     }
 
-    /// Moves the cursor to the first item in the bucket and returns its key and value.
-    /// If the bucket is empty then a nil key and value are returned.
-    /// The returned key and value are only valid for the life of the transaction
     pub fn first(self: *Self) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         self.stack.resize(0) catch unreachable;
@@ -86,8 +73,6 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key.?, keyValueRet.value);
     }
 
-    /// Moves the cursor to the last item in the bucket and returns its key and value.
-    /// If the bucket is empty then a nil key and value are returned.
     pub fn last(self: *Self) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         self.stack.resize(0) catch unreachable;
@@ -109,9 +94,6 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
-    /// Moves the cursor to the next item in the bucket and returns its key and value.
-    /// If the cursor is at the end of the bucket then a nil key and value are returned.
-    /// The returned key and value are only valid for the life of the transaction.
     pub fn next(
         self: *Self,
     ) KeyPair {
@@ -136,9 +118,6 @@ pub const Cursor = struct {
         return keyValueRet;
     }
 
-    /// Moves the cursor to the previous item in the bucket and returns its key and value.
-    /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
-    /// The returned key and value are only valid for the life of the transaction.
     pub fn prev(self: *Self) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Attempt to move back one element until we're successful.
@@ -170,10 +149,6 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
-    /// Moves the cursor to a given key and returns it.
-    /// If the key does not exist then the next key is used. If no keys
-    /// follow, a nil key is returned.
-    /// The returned key and value are only valid for the life of the transaction.
     pub fn seek(self: *Self, seekKey: []const u8) KeyPair {
         var keyValueRet = self._seek(seekKey);
         // If we ended up after the last element of a page then move to the next one.
@@ -199,8 +174,6 @@ pub const Cursor = struct {
         return keyValueRet;
     }
 
-    /// Removes the current key/value under the cursor from the bucket.
-    /// Delete fails if current key/value is a bucket or if the transaction is not writable.
     pub fn delete(self: *Self) Error!void {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         if (!self._bucket.tx.?.writable) {

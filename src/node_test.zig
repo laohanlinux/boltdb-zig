@@ -123,3 +123,28 @@ test "Node_write_LeafPage" {
     assert(std.mem.eql(u8, n2.inodes.items[2].key.?, "susy"), "key should be susy", .{});
     assert(std.mem.eql(u8, n2.inodes.items[2].value.?, "que"), "value should be que", .{});
 }
+
+// Ensure that a node can split into appropriate subgroups.
+test "Node_split" {
+    std.testing.log_level = .debug;
+    var testContext = try tests.setup(std.testing.allocator);
+    defer tests.teardown(&testContext);
+    const db = testContext.db;
+    const trx = try db.begin(true);
+    defer trx.rollbackAndDestroy() catch {};
+    const b = try trx.createBucketIfNotExists("test");
+    const node = Node.init(testContext.allocator);
+    node.bucket = b;
+    defer node.deinit();
+    _ = node.put("00000001", "00000001", toValue("0123456701234567"), 0, 0);
+    _ = node.put("00000002", "00000002", toValue("0123456701234567"), 0, 0);
+    _ = node.put("00000003", "00000003", toValue("0123456701234567"), 0, 0);
+    _ = node.put("00000004", "00000004", toValue("0123456701234567"), 0, 0);
+    _ = node.put("00000005", "00000005", toValue("0123456701234567"), 0, 0);
+    // Split between 2 & 3.
+    // _ = node.split(100);
+}
+
+fn toValue(key: []const u8) []u8 {
+    return @constCast(key)[0..];
+}
