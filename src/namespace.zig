@@ -91,15 +91,15 @@ pub const Transaction = struct {
         if (self.allocator) |allocator| {
             defer allocator.destroy(self);
         }
-        try self._tx.commitAndDestroy();
+        return self._tx.commitAndDestroy();
     }
 
     /// Rolls back the transaction and destroys the transaction.
-    pub fn rollback(self: *Transaction) void {
+    pub fn rollback(self: *Transaction) Error!void {
         if (self.allocator) |allocator| {
             allocator.destroy(self);
         }
-        try self._tx.rollbackAndDestroy();
+        return self._tx.rollbackAndDestroy();
     }
 
     /// Retrieves a bucket any name.
@@ -199,7 +199,7 @@ pub const Transaction = struct {
         ?*anyopaque,
         *Transaction,
     ) void) void {
-        return self._tx.onCommit(onCtx, struct {
+        self._tx.onCommit(onCtx, struct {
             fn exec(_: void, trans: *tx.TX) void {
                 const _trans = Transaction{ .allocator = null, ._tx = trans };
                 return f(onCtx, &_trans);
@@ -227,7 +227,7 @@ pub const Database = struct {
 
     /// close closes the database and releases all associated resources.
     pub fn close(self: *Self) !void {
-        self._db.close();
+        return self._db.close();
     }
 
     // Begin starts a new transaction.
