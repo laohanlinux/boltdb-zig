@@ -79,6 +79,8 @@ test "Cursor_Seek" {
 
 test "Cursor_Delete" {
     std.testing.log_level = .err;
+    var options = consts.defaultOptions;
+    options.pageSize = 16 * 1024;
     var testCtx = try tests.setup(std.testing.allocator);
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
