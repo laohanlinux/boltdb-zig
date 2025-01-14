@@ -135,7 +135,7 @@ test "Cursor_Delete" {
             const got = b.get("0000000000");
             assert(got == null, "the key should be deleted, key: {s}", .{"0000000000"});
             const stats = b.stats();
-            assert(stats.keyN == (count / 2 + 1), "the key number is invalid, keyN: {d}, count: {d}", .{ stats.keyN, count / 2 + 1 });
+            assert(stats.keyN == (count / 2 + 1), "the key number is invalid, pageSize: {d}, keyN: {d}, count: {d}", .{ trx.getDB().pageSize, stats.keyN, count / 2 + 1 });
         }
     }.view;
     try kvDB.view(viewFn);
