@@ -4,6 +4,8 @@ const db = @import("db.zig");
 const std = @import("std");
 const consts = @import("consts.zig");
 const DB = db.DB;
+const InnerBucket = @import("bucket.zig").Bucket;
+const cursor = @import("cursor.zig");
 pub const Error = @import("error.zig").Error;
 pub const Stats = db.Stats;
 pub const BucketStats = @import("bucket.zig").BucketStats;
@@ -31,20 +33,16 @@ pub const Bucket = struct {
     /// Returns an error if the key already exists, if the bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucket(self: Self, key: []const u8) Error!Bucket {
-        if (self._bt.createBucket(key)) |bt| {
-            return .{ ._bt = bt };
-        }
-        return null;
+        const bt = try self._bt.createBucket(key);
+        return .{ ._bt = bt };
     }
 
     /// Creates a new bucket if it doesn't already exist and returns a reference to it.
     /// Returns an error if the bucket name is blank, or if the bucket name is too long.
     /// The bucket instance is only valid for the lifetime of the transaction.
     pub fn createBucketIfNotExists(self: Self, key: []const u8) Error!Bucket {
-        if (self._bt.createBucketIfNotExists(key)) |bt| {
-            return .{ ._bt = bt };
-        }
-        return null;
+        const bt = try self._bt.createBucketIfNotExists(key);
+        return .{ ._bt = bt };
     }
 
     /// Deletes a bucket at the give key.
@@ -77,29 +75,93 @@ pub const Bucket = struct {
     pub fn delete(self: *Self, key: []const u8) Error!void {
         return self._bt.delete(key);
     }
+
+    /// Create a cursor associated with the bucket.
+    /// The cursor is only valid as long as the transaction is open.
+    /// Do not use a cursor after the transaction is closed.
+    pub fn cursor(self: *Self) Cursor {
+        return .{ ._cursor = self._bt.cursor() };
+    }
+
+    /// Updates the sequence number for the bucket.
+    pub fn setSequence(self: *Self, v: u64) Error!void {
+        return self._bt.setSequence(v);
+    }
+
+    /// Returns an autoincrementing integer for the bucket.
+    pub fn nextSequence(self: *Self) Error!u64 {
+        return self._bt.nextSequence();
+    }
+
+    /// Root returns the root of the bucket.
+    pub fn root(self: *const Self) u64 {
+        return self._bt.root();
+    }
+
+    /// Return stats on a bucket.
+    pub fn stats(self: *const Self) BucketStats {
+        return self._bt.stats();
+    }
+
+    /// Returns the tx of the bucket.
+    pub fn transaction(self: *Self) *Transaction {
+        var allocator = self._bt.getAllocator();
+        var trans = allocator.create(Transaction) catch unreachable;
+        trans._tx = self._bt.getTx().?;
+        return trans;
+    }
+
+    /// Returns whether the bucket is writable.
+    pub fn writable(self: *const Self) bool {
+        return self._bt.tx.?.writable;
+    }
+
+    // Like bucket.forEachWithContext
+    pub fn forEach(self: *Self, func: fn (bt: *Bucket, key: []const u8, value: ?[]const u8) Error!void) Error!void {
+        return self.forEachWithContext({}, struct {
+            fn f(_: void, bt: *Bucket, key: []const u8, value: ?[]const u8) Error!void {
+                return func(bt, key, value);
+            }
+        }.f);
+    }
+
+    /// Executes a function for each key/value pair in a bucket(if the value is nil, then the key is a bucket)
+    /// If the provided function returns an error then the iteration is stopped and
+    /// the error is returned to the caller. The provided function must not modify
+    /// the bucket; this will result in undefined behavior.
+    pub fn forEachWithContext(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), bt: *Bucket, key: []const u8, value: ?[]const u8) Error!void) Error!void {
+        return self._bt.forEachContext(context, struct {
+            fn f(ctx: @TypeOf(context), bt: *InnerBucket, keyPair: *const consts.KeyPair) Error!void {
+                var btRef = Bucket{ ._bt = bt };
+                return func(ctx, &btRef, keyPair.key.?, keyPair.value);
+            }
+        }.f);
+    }
 };
 
 /// A transaction is a read-write managed transaction.
 pub const Transaction = struct {
     allocator: ?std.mem.Allocator,
-    _tx: tx.TX,
+    _tx: *tx.TX,
 
     /// Writes all changes to disk and updates the meta page.
     /// Returns an error if a disk write error occurs, or if commit is
     /// called on a ready-only transaction.
     pub fn commit(self: *Transaction) Error!void {
-        if (self.allocator) |allocator| {
-            defer allocator.destroy(self);
-        }
-        return self._tx.commitAndDestroy();
+        _ = self._tx.commitAndDestroy() catch |err| {
+            self.allocator.?.destroy(self);
+            return err;
+        };
+        self.allocator.?.destroy(self);
     }
 
     /// Rolls back the transaction and destroys the transaction.
     pub fn rollback(self: *Transaction) Error!void {
-        if (self.allocator) |allocator| {
-            allocator.destroy(self);
-        }
-        return self._tx.rollbackAndDestroy();
+        _ = return self._tx.rollbackAndDestroy() catch |err| {
+            self.allocator.?.destroy(self);
+            return err;
+        };
+        self.allocator.?.destroy(self);
     }
 
     /// Retrieves a bucket any name.
@@ -155,7 +217,7 @@ pub const Transaction = struct {
     }
 
     /// Returns the stats of the transaction.
-    pub fn stats(self: *const Transaction) Stats {
+    pub fn stats(self: *const Transaction) TxStats {
         return self._tx.getStats();
     }
 
@@ -205,7 +267,7 @@ pub const Transaction = struct {
 
     /// Creates a cursor assosicated with the root bucket.
     pub fn cursor(self: *Transaction) Cursor {
-        return self._tx.cursor();
+        return .{ ._cursor = self._tx.cursor() };
     }
 };
 
@@ -216,14 +278,29 @@ pub const Database = struct {
     /// Creates and opens a database at the given path.
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
-    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: Options) !Self {
-        const _db = try DB.open(allocator, filePath, fileMode, options);
+    pub fn open(_allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: Options) !Self {
+        const _db = try DB.open(_allocator, filePath, fileMode, options);
         return .{ ._db = _db };
     }
 
     /// close closes the database and releases all associated resources.
     pub fn close(self: *Self) !void {
         return self._db.close();
+    }
+
+    /// Return the path to currently open database file.
+    pub fn path(self: *const Self) []const u8 {
+        return self._db.path();
+    }
+
+    /// Returns the string representation of the database.
+    pub fn string(self: *const Self, _allocator: std.mem.Allocator) []const u8 {
+        return self._db.string(_allocator);
+    }
+
+    /// Syncs the database file to disk.
+    pub fn sync(self: *Self) Error!void {
+        try self._db.sync();
     }
 
     // Begin starts a new transaction.
@@ -240,9 +317,9 @@ pub const Database = struct {
     //
     // *IMPORTANT*: You must close read-only transactions after you are finished or else the database will not reclaim old pages.
     pub fn begin(self: *Self, writable: bool) Error!*Transaction {
-        const _tx = try self._db.begin(writable);
+        const innerTrans = try self._db.begin(writable);
         var trans = self._db.allocator.create(Transaction) catch unreachable;
-        trans._tx = _tx;
+        trans._tx = innerTrans;
         trans.allocator = self._db.allocator;
         return trans;
     }
@@ -256,9 +333,9 @@ pub const Database = struct {
     /// Attempting to manually commit or rollback within the function will cause a panic.
     pub fn update(self: *Self, execFn: fn (self: *Transaction) Error!void) Error!void {
         return self._db.update(struct {
-            fn exec(_: void, trans: *tx.TX) Error!void {
-                const _trans = Transaction{ .allocator = null, ._tx = trans };
-                return execFn(&_trans._tx);
+            fn exec(innerTrans: *tx.TX) Error!void {
+                var trans = Transaction{ .allocator = null, ._tx = innerTrans };
+                return execFn(&trans);
             }
         }.exec);
     }
@@ -278,10 +355,10 @@ pub const Database = struct {
     ///
     /// Attempting to manually rollback within the function will cause a panic.
     pub fn view(self: *Self, func: fn (self: *Transaction) Error!void) Error!void {
-        return self.viewWithContext({}, struct {
-            fn exec(_: void, trx: *tx.TX) Error!void {
-                const _trans = Transaction{ .allocator = null, ._tx = trx };
-                return func(&_trans);
+        return self._db.view(struct {
+            fn exec(innerTrans: *tx.TX) Error!void {
+                var trans = Transaction{ ._tx = innerTrans, .allocator = null };
+                return func(&trans);
             }
         }.exec);
     }
@@ -289,11 +366,21 @@ pub const Database = struct {
     /// Executes a function within the context of a managed read-only transaction.
     pub fn viewWithContext(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *Transaction) Error!void) Error!void {
         return self._db.viewWithContext(context, struct {
-            fn exec(_: void, trx: *tx.TX) Error!void {
-                const _trans = Transaction{ .allocator = null, ._tx = trx };
-                return func(context, &_trans);
+            fn exec(_ctx: @TypeOf(context), innerTrans: *tx.TX) Error!void {
+                var trans = Transaction{ .allocator = null, ._tx = innerTrans };
+                return func(_ctx, &trans);
             }
         }.exec);
+    }
+
+    /// Returns true if the database is read-only.
+    pub fn isReadOnly(self: *const Self) bool {
+        return self._db.isReadOnly();
+    }
+
+    /// Returns the allocator of the database.
+    pub fn allocator(self: *const Self) std.mem.Allocator {
+        return self._db.allocator;
     }
 };
 
@@ -307,7 +394,7 @@ pub const Database = struct {
 /// and return unexpected keys and/or values. You must reposition your cursor
 /// after mutating data.
 pub const Cursor = struct {
-    _cursor: *tx.Cursor,
+    _cursor: cursor.Cursor,
     const Self = @This();
 
     pub const KeyPair = consts.KeyPair;

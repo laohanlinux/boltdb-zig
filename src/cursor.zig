@@ -328,7 +328,7 @@ pub const Cursor = struct {
             // std.log.debug("return a last reference node", .{});
             return lastRef.node;
         }
-        std.log.debug("start from root and traveerse down the hierarchy, the last reference is {any}", .{lastRef});
+        // std.log.debug("start from root and traveerse down the hierarchy, the last reference is {any}", .{lastRef});
         // Start from root and traveerse down the hierarchy.
         var n: ?*Node = null;
         if (self.stack.items[0].node != null) {
@@ -343,7 +343,7 @@ pub const Cursor = struct {
         }
 
         assert(n.?.isLeaf, "expect leaf node", .{});
-        std.log.debug("return a node, pgid: {}, refIndex: {}", .{ n.?.pgid, self.getLastElementRef().?.index });
+        // std.log.debug("return a node, pgid: {}, refIndex: {}", .{ n.?.pgid, self.getLastElementRef().?.index });
         return n;
     }
 

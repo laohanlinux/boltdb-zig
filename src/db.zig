@@ -120,6 +120,14 @@ pub const DB = struct {
         return self._path;
     }
 
+    /// Syncs the database file to disk.
+    pub fn sync(self: *Self) Error!void {
+        self.file.sync() catch |err| {
+            log.err("failed to sync the database file: {any}", .{err});
+            return Error.FileIOError;
+        };
+    }
+
     /// Returns the string representation of the database.
     pub fn string(self: *const Self, _allocator: std.mem.Allocator) []u8 {
         var buf = std.ArrayList(u8).init(_allocator);
@@ -321,7 +329,7 @@ pub const DB = struct {
     /// Opens the underlying memory-mapped file and initializes the meta references.
     /// minsz is the minimum size that the new mmap can be.
     pub fn mmap(self: *Self, minsz: usize) !void {
-        defer log.info("succeed to mmap", .{});
+        // defer log.info("succeed to mmap", .{});
         // log.err("mmap minsz: {}", .{minsz});
         self.mmaplock.lock();
         defer self.mmaplock.unlock();
@@ -352,7 +360,7 @@ pub const DB = struct {
         self.dataRef = try util.mmap(self.file, size, true);
         self.datasz = size;
         assert(self.dataRef.?.len == size, "the size of dataRef is not equal to the size: {d}, dataRef.len: {d}", .{ size, self.dataRef.?.len });
-        log.info("succeed to init data reference, size: {}", .{size});
+        // log.info("succeed to init data reference, size: {}", .{size});
         // Save references to the meta pages.
         self.meta0 = if (self.tryPageById(0)) |p| p.meta() else return Error.Invalid;
         self.meta1 = if (self.tryPageById(1)) |p| p.meta() else return Error.Invalid;
@@ -496,7 +504,7 @@ pub const DB = struct {
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
         if (p.id != 0) {
-            log.debug("allocate a new page from freedlist, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
+            // log.debug("allocate a new page from freedlist, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
             return p;
         }
         // Resize mmap() if we're at the end.
@@ -508,7 +516,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(PgidType, count);
-        log.debug("allow a new page (pgid={}) from mmap and update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ p.id, self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
+        // log.debug("allow a new page (pgid={}) from mmap and update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ p.id, self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
         return p;
     }
 
@@ -641,7 +649,9 @@ pub const DB = struct {
         const trx = TX.init(self, true);
         trx.writable = true;
         self.rwtx = trx;
-        log.debug("After create a write transaction, txPtrInt: 0x{x}, meta: {any}", .{ trx.getTxPtr(), trx.root.*._b.? });
+        if (@import("builtin").is_test) {
+            log.debug("After create a write transaction, txPtrInt: 0x{x}, meta: {any}", .{ trx.getTxPtr(), trx.root.*._b.? });
+        }
 
         // Free any pages associated with closed read-only transactions.
         assert(self.txs.items.len <= 1, comptime "only one transaction need to be released", .{});
@@ -679,9 +689,9 @@ pub const DB = struct {
     /// Executes a function within the context of a read-write managed transaction.
     pub fn updateWithContext(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
-        const trxID = trx.getID();
-        log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer log.info("End a write transaction, txid: {}", .{trxID});
+        // const trxID = trx.getID();
+        // log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        // defer log.info("End a write transaction, txid: {}", .{trxID});
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
@@ -689,11 +699,11 @@ pub const DB = struct {
         execFn(context, trx) catch |err| {
             trx.managed = false;
             trx.rollbackAndDestroy() catch unreachable;
-            log.info("after execute transaction commit handle", .{});
+            // log.info("after execute transaction commit handle", .{});
             return err;
         };
         trx.managed = false;
-        log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        // log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer trx.destroy();
         try trx.commit();
     }
@@ -714,8 +724,11 @@ pub const DB = struct {
     pub fn viewWithContext(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
         const trxID = trx.getID();
-        log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer log.info("End a read-only transaction, txid: {}", .{trxID});
+        if (@import("builtin").is_test) {
+            log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+            defer log.info("End a read-only transaction, txid: {}", .{trxID});
+        }
+
         // Mark as managed tx so that the inner function cannot manually rollback.
         trx.managed = true;
         // If an error is returned from the function then pass it through.
@@ -728,7 +741,7 @@ pub const DB = struct {
         };
         trx.managed = false;
         try trx.rollbackAndDestroy();
-        log.info("after execute transaction rollback handle", .{});
+        // log.info("after execute transaction rollback handle", .{});
     }
     /// Removes a transaction from the database.
     pub fn removeTx(self: *Self, trx: *TX) void {

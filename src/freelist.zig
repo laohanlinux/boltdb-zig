@@ -35,11 +35,13 @@ pub const FreeList = struct {
 
     /// deinit freelist
     pub fn deinit(self: *Self) void {
-        log.info("deinit freelist", .{});
+        // log.info("deinit freelist", .{});
         defer self.allocator.destroy(self);
         var itr = self.pending.iterator();
         while (itr.next()) |entry| {
-            log.info("free pending, txid: {}, ids: {any}", .{ entry.key_ptr.*, entry.value_ptr.items });
+            if (@import("builtin").is_test) {
+                log.info("free pending, txid: {}, ids: {any}", .{ entry.key_ptr.*, entry.value_ptr.items });
+            }
             entry.value_ptr.deinit();
         }
         self.pending.deinit();
@@ -130,7 +132,9 @@ pub const FreeList = struct {
                 }
                 const afterCount = self.ids.items.len;
                 assert(beforeCount == (n + afterCount), "{} != {}", .{ beforeCount, afterCount });
-                log.debug("allocate a new page from freelist, pgid: {d}, n: {d}, ids from {any} change to {any}", .{ initial, n, beforeIds, self.ids.items });
+                if (@import("builtin").is_test) {
+                    log.debug("allocate a new page from freelist, pgid: {d}, n: {d}, ids from {any} change to {any}", .{ initial, n, beforeIds, self.ids.items });
+                }
                 self.allocator.free(beforeIds);
                 return initial;
             }
@@ -176,12 +180,12 @@ pub const FreeList = struct {
         defer array.deinit();
         try array.appendNTimes(0, arrayIDs.items.len + self.ids.items.len);
         assert(array.items.len == (arrayIDs.items.len + self.ids.items.len), "array.items.len == (arrayIDs.items.len + self.ids.items.len)", .{});
-        log.info("Release a tx's pages, before merge:\t {any} <= [{any}, {any}]", .{ array.items, arrayIDs.items, self.ids.items });
+        // log.info("Release a tx's pages, before merge:\t {any} <= [{any}, {any}]", .{ array.items, arrayIDs.items, self.ids.items });
         Self.mergeSortedArray(array.items, arrayIDs.items, self.ids.items);
         try self.ids.resize(0);
         try self.ids.appendSlice(array.items);
         assert(self.ids.items.len == array.items.len, "self.ids.items.len == array.items.len", .{});
-        log.info("Release a tx's pages, after merge:\t {any}", .{self.ids.items});
+        // log.info("Release a tx's pages, after merge:\t {any}", .{self.ids.items});
     }
 
     /// Removes the pages from a given pending tx.
@@ -250,7 +254,7 @@ pub const FreeList = struct {
             p.overflow = @as(u32, @intCast(lenids));
             self.copyAll(overflow[1..]);
         }
-        log.info("𓃠 after write freelist to page, pgid: {}, ids: {any}", .{ p.id, p.freelistPageElements().? });
+        // log.info("𓃠 after write freelist to page, pgid: {}, ids: {any}", .{ p.id, p.freelistPageElements().? });
     }
 
     /// Reads the freelist from a page and filters out pending itmes.

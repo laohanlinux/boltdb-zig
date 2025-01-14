@@ -245,7 +245,7 @@ pub const TX = struct {
     /// Returns an error if a disk write error occurs, or if commit is
     /// called on a ready-only transaction.
     pub fn commit(self: *Self) Error!void {
-        defer std.log.debug("finish commit", .{});
+        // defer std.log.debug("finish commit", .{});
         if (@import("builtin").is_test and self.managed) {
             return Error.ManagedTxCommitNotAllowed;
         }
@@ -334,7 +334,7 @@ pub const TX = struct {
             handler(self.onCommitCtx, self);
         }
         self.onCommitCtx = null;
-        std.log.debug("after close transaction, cost: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
+        // std.log.debug("after close transaction, cost: {}ms", .{self.stats.writeTime / std.time.ns_per_ms});
     }
 
     /// Closes the transaction and ignores all previous updates. Read-only
@@ -616,17 +616,17 @@ pub const TX = struct {
             _db.statlock.unlock();
         } else {
             _db.removeTx(self);
-            std.log.info("remove tx({}) from db", .{self.meta.txid});
+            // std.log.info("remove tx({}) from db", .{self.meta.txid});
         }
-        std.log.info("before clear all reference", .{});
+        // std.log.info("before clear all reference", .{});
         // Clear all reference.
         self.allocator.destroy(self.meta);
-        std.log.info("after destroy meta", .{});
+        // std.log.info("after destroy meta", .{});
         self.db = null;
         if (self.pages) |_pages| {
             var itr = _pages.valueIterator();
             while (itr.next()) |p| {
-                std.log.debug("free page object: pgid: {}, overflow: {}", .{ p.*.id, p.*.overflow });
+                // std.log.debug("free page object: pgid: {}, overflow: {}", .{ p.*.id, p.*.overflow });
                 if (p.*.overflow <= 0 and _db.pagePool != null) {
                     _db.pagePool.?.delete(p.*);
                 } else {

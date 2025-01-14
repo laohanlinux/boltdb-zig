@@ -278,7 +278,7 @@ pub const Node = struct {
         self.pgid = p.id;
         self.isLeaf = p.isLeaf();
         self.inodes.resize(0) catch unreachable;
-        std.log.info("read page, pgid: {}, isLeaf: {}, count:{}, overflow:{}", .{ p.id, self.isLeaf, p.count, p.overflow });
+        // std.log.info("read page, pgid: {}, isLeaf: {}, count:{}, overflow:{}", .{ p.id, self.isLeaf, p.count, p.overflow });
         for (0..@as(usize, p.count)) |i| {
             var inode = INode.init(0, 0, null, null);
             if (self.isLeaf) {
@@ -307,9 +307,11 @@ pub const Node = struct {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
         }
-        const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
-        const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
-        std.log.info("read node from page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len });
+        if (@import("builtin").is_test) {
+            const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
+            const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
+            std.log.info("read node from page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len });
+        }
     }
 
     /// Writes the items into one or more pages.
@@ -326,7 +328,7 @@ pub const Node = struct {
         p.count = @as(u16, @intCast(self.inodes.items.len));
         // Stop here if there are no items to write.
         if (p.count == 0) {
-            std.log.info("no inode need write, pgid={}, flags: {any}", .{ p.id, consts.toFlags(p.flags) });
+            // std.log.info("no inode need write, pgid={}, flags: {any}", .{ p.id, consts.toFlags(p.flags) });
             return 0;
         }
         // |e1|e2|e3|b1|b2|b3|
@@ -336,9 +338,11 @@ pub const Node = struct {
         var b = p.asSlice()[dataStart..];
         // assert(b.len >= (self.pageElementSize() * self.inodes.items.len), "the page({d}) is too small to write all inodes, data size: {d}, need size: {d}", .{ p.id, dataSlice.len, self.pageElementSize() * self.inodes.items.len });
         var written: usize = 0;
-        const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
-        const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
-        std.log.info("write node(nodeid: {d}) into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ self.pgid, @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
+        if (@import("builtin").is_test) {
+            const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
+            const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
+            std.log.info("write node(nodeid: {d}) into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ self.pgid, @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
+        }
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
@@ -372,7 +376,6 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            // std.log.info("inode: btr: {}, {s}, {s}", .{ @intFromPtr(b.ptr), inode.key.?, inode.value.? });
         }
         // const deump = p.asSlice();
         // std.log.info("deump: {any}", .{deump});
@@ -392,14 +395,14 @@ pub const Node = struct {
             // a.?.printKeysString();
             // If we can't split then exit the loop.
             if (b == null) {
-                log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
+                // log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
                 break;
             } else {
-                const aFirstKey = a.?.inodes.items[0].key.?;
-                const aLastKey = a.?.inodes.items[a.?.inodes.items.len - 1].key.?;
-                const bFirstKey = b.?.inodes.items[0].key.?;
-                const bLastKey = b.?.inodes.items[b.?.inodes.items.len - 1].key.?;
-                log.info("the node[ a=>[len:{d}, key:{any}-{any}], b=>[len:{d}, key:{any}-{any}]] is need to split, isLeaf: {}", .{ a.?.inodes.items.len, aFirstKey, aLastKey, b.?.inodes.items.len, bFirstKey, bLastKey, a.?.isLeaf });
+                // const aFirstKey = a.?.inodes.items[0].key.?;
+                // const aLastKey = a.?.inodes.items[a.?.inodes.items.len - 1].key.?;
+                // const bFirstKey = b.?.inodes.items[0].key.?;
+                // const bLastKey = b.?.inodes.items[b.?.inodes.items.len - 1].key.?;
+                // log.info("the node[ a=>[len:{d}, key:{any}-{any}], b=>[len:{d}, key:{any}-{any}]] is need to split, isLeaf: {}", .{ a.?.inodes.items.len, aFirstKey, aLastKey, b.?.inodes.items.len, bFirstKey, bLastKey, a.?.isLeaf });
             }
 
             // Set node to be so it gets split on the next function.
@@ -505,12 +508,14 @@ pub const Node = struct {
     /// Returns and error if dirty pages cannot be allocated
     pub fn spill(self: *Self) !void {
         if (self.spilled) {
-            log.debug("the node has already spilled, pgid: {d}", .{self.pgid});
+            // log.debug("the node has already spilled, pgid: {d}", .{self.pgid});
             return;
         }
         const pgid = self.pgid;
-        log.info("\t.start spill node: {d}, isLeaf: {}", .{ pgid, self.isLeaf });
-        defer log.info("\t.end spill node: {d}", .{pgid});
+        if (@import("builtin").is_test) {
+            log.info("\t.start spill node: {d}, isLeaf: {}", .{ pgid, self.isLeaf });
+            defer log.info("\t.end spill node: {d}", .{pgid});
+        }
         const _tx = self.bucket.?.tx.?;
         const _db = _tx.getDB();
 
@@ -546,13 +551,13 @@ pub const Node = struct {
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
         defer nodes.deinit();
-        log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.items.len, self.key orelse "empty" });
-        for (nodes.items, 0..) |node, i| {
-            log.debug("spill node: {d}, count:{}, index: {d}", .{ node.pgid, nodes.items.len, i });
+        // log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.items.len, self.key orelse "empty" });
+        for (nodes.items) |node| {
+            // log.debug("spill node: {d}, count:{}, index: {d}", .{ node.pgid, nodes.items.len, i });
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
-                log.debug("free a page to freelist, pgid: {}", .{node.pgid});
+                // log.debug("free a page to freelist, pgid: {}", .{node.pgid});
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 // reset the pgid to 0, so the node will be a new node.
                 node.pgid = 0;
@@ -574,7 +579,7 @@ pub const Node = struct {
                 _ = parent.put(oldKey, newKey, null, node.pgid, 0);
                 node.key = node.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
-                log.debug("spill a node from parent, parent's pgid: {d}, parent's inodes len: {d}, children len: {d}, node's pgid: {d}, key: {s}", .{ parent.pgid, parent.inodes.items.len, parent.children.items.len, node.pgid, node.key.? });
+                // log.debug("spill a node from parent, parent's pgid: {d}, parent's inodes len: {d}, children len: {d}, node's pgid: {d}, key: {s}", .{ parent.pgid, parent.inodes.items.len, parent.children.items.len, node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
 
             // Update the statistics.
@@ -587,18 +592,18 @@ pub const Node = struct {
             self.children.clearAndFree();
             return self.parent.?.spill();
         }
-        log.debug("Try to spill parent, pgid: {d}", .{self.pgid});
+        // log.debug("Try to spill parent, pgid: {d}", .{self.pgid});
     }
 
     /// Attempts to combine the node with sibling nodes if the node fill
     /// size is below a threshold or if there are not enough keys.
     pub fn rebalance(self: *Self) void {
         if (!self.unbalance) {
-            std.log.debug("i has rebalance, pgid: {}", .{self.pgid});
+            // std.log.debug("i has rebalance, pgid: {}", .{self.pgid});
             return;
         }
         self.unbalance = false;
-        std.log.info("rebalance node: {d}", .{self.pgid});
+        // std.log.info("rebalance node: {d}", .{self.pgid});
 
         // Update statistics.
         self.bucket.?.tx.?.stats.rebalance += 1;
@@ -606,13 +611,13 @@ pub const Node = struct {
         // Ignore if node is above threshold (25%) and has enough keys.
         const threshold = self.bucket.?.tx.?.db.?.pageSize / 4;
         if (self.size() > threshold and self.inodes.items.len > self.minKeys()) {
-            std.log.debug("the node size is too large, so don't rebalance: {d}", .{self.pgid});
+            // std.log.debug("the node size is too large, so don't rebalance: {d}", .{self.pgid});
             return;
         }
 
         // Root node has special handling.
         if (self.parent == null) {
-            std.log.debug("the node parent is null, so rebalance root node: {d}\n", .{self.pgid});
+            // std.log.debug("the node parent is null, so rebalance root node: {d}\n", .{self.pgid});
             // If root node is a branch and only has one node then collapse it.
             if (!self.isLeaf and self.inodes.items.len == 1) {
                 // Move root's child up.
@@ -642,13 +647,13 @@ pub const Node = struct {
                 assert(exist, "rebalance: node({d}) not found in nodes map", .{child.pgid});
                 child.free();
                 child.deinitWhenRemoved();
-                std.log.debug("only one child, merge it, pgid: {d}, ptr: 0x{x}, key={any}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.nodePtrInt(), self.key orelse "empty", self.isLeaf, self.inodes.items.len });
+                // std.log.debug("only one child, merge it, pgid: {d}, ptr: 0x{x}, key={any}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.nodePtrInt(), self.key orelse "empty", self.isLeaf, self.inodes.items.len });
                 return;
             }
-            std.log.debug("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
+            // std.log.debug("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
             return;
         } else {
-            std.log.debug("the node parent is not null, so rebalance: {d}, parent: {d}", .{ self.pgid, self.parent.?.pgid });
+            // std.log.debug("the node parent is not null, so rebalance: {d}, parent: {d}", .{ self.pgid, self.parent.?.pgid });
         }
 
         // If node has no keys then just remove it.

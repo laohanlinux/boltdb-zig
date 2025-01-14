@@ -60,11 +60,11 @@ pub const AutoFreeObject = struct {
         const ptr = @intFromPtr(value.ptr);
         const got = self.autoFreeBytes.getOrPut(ptr) catch unreachable;
         if (got.found_existing) {
-            std.log.debug("the auto free bytes({}: 0x{x}) is already in the auto free bytes", .{ value.len, ptr });
+            // std.log.debug("the auto free bytes({}: 0x{x}) is already in the auto free bytes", .{ value.len, ptr });
         } else {
             got.value_ptr.* = value;
             self.allocSize += value.len;
-            std.log.info("add auto free bytes, size: {d}, ptr: 0x{x}, allocSize: {d}", .{ value.len, ptr, self.allocSize });
+            // std.log.info("add auto free bytes, size: {d}, ptr: 0x{x}, allocSize: {d}", .{ value.len, ptr, self.allocSize });
         }
     }
 
@@ -184,7 +184,9 @@ pub const Bucket = struct {
         // only writable transaction will destroy the buckets.
         var btIter = self.buckets.?.iterator();
         while (btIter.next()) |nextBucket| {
-            std.log.info("deinit bucket, key: {s}", .{nextBucket.key_ptr.*});
+            if (@import("builtin").is_test) {
+                std.log.info("deinit bucket, key: {s}", .{nextBucket.key_ptr.*});
+            }
             nextBucket.value_ptr.*.deinit();
         }
         self.buckets.?.deinit();
@@ -216,12 +218,11 @@ pub const Bucket = struct {
     inline fn freeInlinePage(self: *Self) void {
         assert(self.page != null, "the bucket has no inline page", .{});
         const inlinePage = self.page.?;
-        std.log.debug("free inline page, rid: {}, page: 0x{x}", .{ self._b.?.root, inlinePage.*.ptrInt() });
+        if (@import("builtin").is_test) {
+            std.log.debug("free inline page, rid: {}, page: 0x{x}", .{ self._b.?.root, inlinePage.*.ptrInt() });
+        }
     }
 
-    /// Create a cursor associated with the bucket.
-    /// The cursor is only valid as long as the transaction is open.
-    /// Do not use a cursor after the transaction is closed.
     pub fn cursor(self: *Self) Cursor {
         // Update transaction statistics.
         self.tx.?.stats.cursor_count += 1;
@@ -292,9 +293,13 @@ pub const Bucket = struct {
             child.page = page.Page.init(alignedValue[Bucket.bucketHeaderSize()..]);
             assert(child.page.?.id == 0, "the page({}) should be inline", .{child.page.?.id});
             assert(child.page.?.flags == consts.intFromFlags(.leaf), "the page({}) should be a leaf page", .{child.page.?.id});
-            std.log.info("Save a reference to the inline page if the bucket is inline", .{});
+            if (@import("builtin").is_test) {
+                std.log.info("Save a reference to the inline page if the bucket is inline", .{});
+            }
         } else {
-            std.log.info("The bucket is not inline, pgid: {}", .{child._b.?.root});
+            if (@import("builtin").is_test) {
+                std.log.info("The bucket is not inline, pgid: {}", .{child._b.?.root});
+            }
         }
         return child;
     }
@@ -498,7 +503,6 @@ pub const Bucket = struct {
         self._b.?.sequence = v;
     }
 
-    /// Returns an autoincrementing integer for the bucket.
     pub fn nextSequence(self: *Self) Error!u64 {
         if (self.tx.?.db == null) {
             return Error.TxClosed;
@@ -567,7 +571,6 @@ pub const Bucket = struct {
         }
     }
 
-    /// Return stats on a bucket.
     pub fn stats(self: *Self) BucketStats {
         var s = BucketStats.init();
         var subStats = BucketStats.init();
@@ -601,7 +604,7 @@ pub const Bucket = struct {
 
             // used totals the used bytes for the page.
             var used = page.Page.headerSize();
-            std.log.debug("travelStats: depth: {d}, ptr: 0x{x}, page: {any}", .{ depth, p.ptrInt(), p });
+            // std.log.debug("travelStats: depth: {d}, ptr: 0x{x}, page: {any}", .{ depth, p.ptrInt(), p });
             if (p.count != 0) {
                 // If page has any elements, add all element headers.
                 used += page.LeafPageElement.headerSize() * @as(usize, p.count - 1); // TODO why -1.
@@ -635,8 +638,8 @@ pub const Bucket = struct {
                         // and recursively call Stats on the contained bucket.
                         var newCtx = context.clone();
                         newCtx.name = elem.key();
-                        const bucketName = elem.key();
-                        std.log.debug("travel subBucket: {s}, element: {any}", .{ bucketName, elem });
+                        // const bucketName = elem.key();
+                        // std.log.debug("travel subBucket: {s}, element: {any}", .{ bucketName, elem });
                         const childBucket = b.openBucket(elem.value());
                         subStats.add(&childBucket.stats());
                         childBucket.deinit();
@@ -659,10 +662,10 @@ pub const Bucket = struct {
             s.BranchInuse += used;
             s.BranchOverflowN += @as(usize, p.overflow);
         }
-        std.log.debug("travelStats: depth: {d}, pgid: {d}", .{
-            depth,
-            p.id,
-        });
+        // std.log.debug("travelStats: depth: {d}, pgid: {d}", .{
+        //     depth,
+        //     p.id,
+        // });
         // Keep track of maximum page depth.
         if (depth + 1 > s.depth) {
             s.depth = (depth + 1);
@@ -673,7 +676,7 @@ pub const Bucket = struct {
     fn forEachPageWithContext(self: *Self, context: anytype, travel: fn (@TypeOf(context), p: *const page.Page, depth: usize) void) void {
         // If we have an inline page then just use that.
         if (self.page) |_p| {
-            std.log.debug("forEachPage: depth: {d}, root: {d}", .{ 0, self._b.?.root });
+            // std.log.debug("forEachPage: depth: {d}, root: {d}", .{ 0, self._b.?.root });
             travel(context, _p, 0);
             return;
         }
@@ -725,7 +728,7 @@ pub const Bucket = struct {
         defer arenaAllocator.deinit();
         var valueBytes = std.ArrayList(u8).init(arenaAllocator.allocator());
         while (itr.next()) |entry| {
-            std.log.info("\t\tRun at bucket({s}) spill!\t\t", .{entry.key_ptr.*});
+            // std.log.info("\t\tRun at bucket({s}) spill!\t\t", .{entry.key_ptr.*});
             // If the child bucket is small enough and it has no child buckets then
             // write it inline into the parent bucket's page. Otherwise spill it
             // like a normal bucket and make the parent value a pointer to the page.
@@ -737,7 +740,7 @@ pub const Bucket = struct {
                     valueBytes.resize(bucketSize) catch unreachable;
                 }
                 entry.value_ptr.*.write(valueBytes.items[0..bucketSize]);
-                std.log.info("\t\tspill a inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
+                // std.log.info("\t\tspill a inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
             } else {
                 try entry.value_ptr.*.spill(); // TODO Opz code
                 // reset the valueBytes
@@ -746,7 +749,7 @@ pub const Bucket = struct {
                 // Update the child bucket header in this bucket.
                 const bt = _Bucket.init(valueBytes.items[0.._Bucket.size()]);
                 bt.* = entry.value_ptr.*._b.?;
-                std.log.info("\t\tspill a non-inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
+                // std.log.info("\t\tspill a non-inlineable bucket({s}) done!\t\t", .{entry.key_ptr.*});
             }
 
             // Skip writing the bucket if there are no matterialized nodes.
@@ -766,14 +769,14 @@ pub const Bucket = struct {
             const newKey = keyPairRef.dupeKey(keyNode.arenaAllocator.allocator()).?;
             const oldKey = keyNode.arenaAllocator.allocator().dupe(u8, entry.key_ptr.*) catch unreachable;
 
-            std.log.info("update the bucket header, oldKey: {s}, newKey: {s}, header.node.pgid: {d}, nodePtr: 0x{x}", .{ oldKey, newKey, keyNode.pgid, keyNode.nodePtrInt() });
+            // std.log.info("update the bucket header, oldKey: {s}, newKey: {s}, header.node.pgid: {d}, nodePtr: 0x{x}", .{ oldKey, newKey, keyNode.pgid, keyNode.nodePtrInt() });
             const newVal = keyNode.arenaAllocator.allocator().dupe(u8, valueBytes.items) catch unreachable;
             _ = keyNode.put(oldKey, newKey, newVal, 0, consts.BucketLeafFlag);
             c.deinit();
         }
         // Ignore if there's not a materialized root node.
         if (self.rootNode == null) {
-            std.log.debug("the rootNode is null", .{});
+            // std.log.debug("the rootNode is null", .{});
             return;
         }
         const oldRootNode = self.rootNode.?;
@@ -783,20 +786,22 @@ pub const Bucket = struct {
         // Update the root node for this bucket.
         assert(self.rootNode.?.pgid < self.tx.?.meta.pgid, "pgid ({}) above high water mark ({})", .{ self.rootNode.?.pgid, self.tx.?.meta.pgid });
         self._b.?.root = self.rootNode.?.pgid;
-        std.log.info("the rootNode from {d} updated to {d}, isLeaf:{}, inodes: {any}\n", .{ oldRootNode.pgid, self._b.?.root, self.rootNode.?.isLeaf, self.rootNode.?.inodes.items.len });
+        if (@import("builtin").is_test) {
+            std.log.info("the rootNode from {d} updated to {d}, isLeaf:{}, inodes: {any}\n", .{ oldRootNode.pgid, self._b.?.root, self.rootNode.?.isLeaf, self.rootNode.?.inodes.items.len });
+        }
     }
 
     // Returns true if a bucket is small enough to be written inline
     // and if it contains no subbuckets. Otherwise returns false.
     fn inlineable(self: *const Self) bool {
-        const logger = std.log.scoped(.inlineable);
+        // const logger = std.log.scoped(.inlineable);
         const n = self.rootNode;
         // Bucket must only contain a single leaf node.
         if (n == null or !n.?.isLeaf) { // the inline node has not parent rootNode, because it inline.
-            logger.debug("the rootNode is null or not a leaf node: {d}", .{self._b.?.root});
+            // logger.debug("the rootNode is null or not a leaf node: {d}", .{self._b.?.root});
             return false;
         }
-        logger.debug("execute page inlineable process, the inode size: {}, node ptr: 0x{x}", .{ n.?.inodes.items.len, n.?.nodePtrInt() });
+        // logger.debug("execute page inlineable process, the inode size: {}, node ptr: 0x{x}", .{ n.?.inodes.items.len, n.?.nodePtrInt() });
         // Bucket is not inlineable if it contains subbuckets or if it goes beyond
         // our threshold for inline bucket size.
         var size = page.Page.headerSize();
@@ -865,7 +870,7 @@ pub const Bucket = struct {
 
     /// Attemps to balance all nodes
     pub fn rebalance(self: *Self) void {
-        std.log.debug("rebalance bucket: {d}", .{self._b.?.root});
+        // std.log.debug("rebalance bucket: {d}", .{self._b.?.root});
         var valueItr = self.nodes.?.valueIterator();
         while (valueItr.next()) |n| {
             n.*.rebalance();
@@ -967,15 +972,25 @@ pub const Bucket = struct {
         // Read the page into the node and cacht it.
         n.read(p.?);
         assert(n.inodes.items.len == p.?.count, "nodes count: {}, page count: {}", .{ n.inodes.items.len, p.?.count });
-        const parentPtrInt = if (parentNode == null) 0 else @intFromPtr(parentNode.?);
-        const key = if (n.key == null) "" else n.key.?;
-        std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}, parentPtr: 0x{x}, key: {any}", .{ pgid, n.nodePtrInt(), parentNode == null, parentPtrInt, key });
+        // const parentPtrInt = if (parentNode == null) 0 else @intFromPtr(parentNode.?);
+        // const key = if (n.key == null) "" else n.key.?;
+        // std.log.info("read node, pgid: {d}, ptr: 0x{x}, isTop: {}, parentPtr: 0x{x}, key: {any}", .{ pgid, n.nodePtrInt(), parentNode == null, parentPtrInt, key });
         const entry = self.nodes.?.getOrPut(pgid) catch unreachable;
         assert(!entry.found_existing, "the node is already exist, pgid: {d}, ptr: 0x{x}", .{ pgid, n.nodePtrInt() });
         entry.value_ptr.* = n;
         // Update statistic.
         self.tx.?.stats.nodeCount += 1;
         return n;
+    }
+
+    /// Returns the root of the bucket.
+    pub fn root(self: *const Self) PgidType {
+        return if (self.page) |_p| _p.id else self._b.?.root;
+    }
+
+    /// Returns the transaction of the bucket.
+    pub fn getTx(self: *Self) ?*tx.TX {
+        return self.tx;
     }
 
     /// #TODO
