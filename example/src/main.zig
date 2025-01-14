@@ -3,8 +3,6 @@
 //! is to delete this file and start with root.zig instead.
 const std = @import("std");
 const db = @import("boltdb");
-const Error = db.Error;
-pub const log_level: std.log.Level = .debug;
 
 pub fn main() !void {
     std.testing.log_level = .debug;
