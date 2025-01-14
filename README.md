@@ -19,20 +19,29 @@ boltdb-zig is a Zig port of the original [BoltDB](https://github.com/boltdb/bolt
 ## Usage
 
 ```zig
-// Example code will be added once the implementation is ready
+# zig fetch --save git+https://github.com/laohanlinux/boltdb-zig.git
 ```
 
-## Building
+import the library in your build.zig.zon file: [link](example/build.zig.zon)
 
-```bash
-zig build
+```
+const boltdbDep = b.dependency("boltdb-zig", .{
+    .target = target,
+    .optimize = optimize,
+});
+
+const exe = b.addExecutable(.{
+    .name = "example",
+    .root_source_file = b.path("src/main.zig"),
+    .target = target,
+    .optimize = optimize,
+});
+
+exe.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
 ```
 
-## Testing
-
-```bash
-zig build test
-```
+How use?
+[link](example/src/main.zig)
 
 ## License
 
