@@ -79,8 +79,6 @@ test "Cursor_Seek" {
 
 test "Cursor_Delete" {
     std.testing.log_level = .err;
-    var options = consts.defaultOptions;
-    options.pageSize = 16 * 1024;
     var testCtx = try tests.setup(std.testing.allocator);
     defer tests.teardown(&testCtx);
     const kvDB = testCtx.db;
@@ -129,6 +127,10 @@ test "Cursor_Delete" {
     }.update;
     try kvDB.update(updateFn2);
 
+    if (kvDB.pageSize != 16 * 1024) {
+        std.debug.print("skipping test because page size is not 16KB, it page is: {d}\n", .{kvDB.pageSize});
+        return;
+    }
     const viewFn = struct {
         fn view(trx: *TX) Error!void {
             const b = trx.getBucket("widgets") orelse unreachable;
