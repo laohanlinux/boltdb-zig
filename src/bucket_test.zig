@@ -149,6 +149,10 @@ test "Bucket_Put_Repeat" {
 // Ensure that a bucket can write a bunch of large values.
 test "Bucket_Put_LargeValue" {
     std.testing.log_level = .err;
+    if (!tests.isLongModel()) {
+        std.log.warn("skipping test Bucket_Put_LargeValue", .{});
+        return;
+    }
     var arenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arenaAllocator.deinit();
     var testCtx = tests.setup(arenaAllocator.allocator()) catch unreachable;
