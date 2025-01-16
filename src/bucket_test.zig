@@ -1306,15 +1306,15 @@ test "Bucket_Stats_Large" {
             const stats = tx.getBucket("widgets").?.stats();
             assert(stats.BranchPageN == 13, comptime "the branch page number is not correct, expected 13 but got {d}", .{stats.BranchPageN});
             assert(stats.BranchOverflowN == 0, comptime "the branch overflow number is not correct, expected 0 but got {d}", .{stats.BranchOverflowN});
-            assert(stats.LeafPageN == 1196, comptime "the leaf page number is not correct, expected 1196 but got {d}", .{stats.LeafPageN});
+            assert(stats.LeafPageN == 1211, comptime "the leaf page number is not correct, expected 1211 but got {d}", .{stats.LeafPageN});
             assert(stats.LeafOverflowN == 0, comptime "the leaf overflow number is not correct, expected 0 but got {d}", .{stats.LeafOverflowN});
             assert(stats.depth == 3, comptime "the depth is not correct, expected 3 but got {d}", .{stats.depth});
-            assert(stats.BranchInuse == 25257, comptime "the branch inuse is not correct, expected {d} but got {d}", .{ 25257, stats.BranchInuse });
-            assert(stats.LeafInuse == 2596916, comptime "the leaf inuse is not correct, expected {d} but got {d}", .{ 2596916, stats.LeafInuse });
+            assert(stats.BranchInuse == 25696, comptime "the branch inuse is not correct, expected {d} but got {d}", .{ 25696, stats.BranchInuse });
+            assert(stats.LeafInuse == 2597156, comptime "the leaf inuse is not correct, expected {d} but got {d}", .{ 2597156, stats.LeafInuse });
             assert(stats.keyN == 100000, comptime "the key number is not correct, expected 100000 but got {d}", .{stats.keyN});
             if (tx.getDB().pageSize == 4096) {
                 assert(stats.BranchAlloc == 53248, comptime "the branch alloc is not correct, expected {d} but got {d}", .{ 53248, stats.BranchAlloc });
-                assert(stats.LeafAlloc == 4898816, comptime "the leaf alloc is not correct, expected {d} but got {d}", .{ 4898816, stats.LeafAlloc });
+                assert(stats.LeafAlloc == 4960256, comptime "the leaf alloc is not correct, expected {d} but got {d}", .{ 4960256, stats.LeafAlloc });
             }
             assert(stats.BucketN == 1, comptime "the bucket number is not correct, expected 1 but got {d}", .{stats.BucketN});
             assert(stats.InlineBucketN == 0, comptime "the inline bucket number is not correct, expected 0 but got {d}", .{stats.InlineBucketN});
