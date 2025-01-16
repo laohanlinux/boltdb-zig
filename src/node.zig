@@ -242,20 +242,16 @@ pub const Node = struct {
                 inodeRef.value = null;
             }
         }
-        // if (oldKey.ptr != newKey.ptr) {
-        //     self.allocator.free(oldKey);
-        // }
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
-        // self.safeCheck();
         // std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
         return inodeRef;
     }
 
     /// Removes a key from the node.
     pub fn del(self: *Self, key: []const u8) ?usize {
-        std.log.debug("del key: {any} at node: {d}", .{ key, self.pgid });
+        // std.log.debug("del key: {any} at node: {d}", .{ key, self.pgid });
         // Find index of key.
         const indexRef = self.searchInodes2(key);
         var inode = self.inodes.orderedRemove(indexRef.index);
@@ -422,20 +418,12 @@ pub const Node = struct {
         }
 
         // Determine the threshold before starting a new node.
-        var fillPercent = self.bucket.?.fillPercent;
-        if (fillPercent < consts.MinFillPercent) {
-            fillPercent = consts.MinFillPercent;
-        } else if (fillPercent > consts.MaxFillPercent) {
-            fillPercent = consts.MaxFillPercent;
-        }
-
-        const fPageSize: f64 = @floatFromInt(_pageSize);
-        const threshold = @as(usize, @intFromFloat(fPageSize * fillPercent));
-
+        const fillPercent = self.bucket.?.fillPercent;
+        const threshold = consts.calThreshold(fillPercent, _pageSize);
         // Determin split position and sizes of the two pages.
         const _splitIndex, _ = self.splitIndex(threshold);
         assert(_splitIndex < self.inodes.items.len, "the split index is out of range, index: {}, inodes len: {}", .{ _splitIndex, self.inodes.items.len });
-        // std.log.info("split index: {}, threshold: {}, inodes len: {}", .{ _splitIndex, threshold, self.inodes.items.len });
+        // std.log.err("split index: {}, threshold: {}, fillPercent: {d}, inodes len: {}", .{ _splitIndex, threshold, fillPercent, self.inodes.items.len });
         // Split node into two separate nodes.
         // if the node is the root node, then create a new node as the parent node
         // and set the current node as the child node
@@ -448,24 +436,20 @@ pub const Node = struct {
 
         // Create a new node and add it to the parent.
         const next = Node.init(self.bucket.?.getAllocator());
-        // self.bucket.?.autoFreeObject.addNode(next);
-        // self.bucket.?.tx.?.autoFreeNodes.addNode(next);
         next.bucket = self.bucket;
         next.isLeaf = self.isLeaf;
         next.parent = self.parent;
         // TODO: maybe here is a bug
         self.parent.?.children.append(next) catch unreachable;
-
-        // Split inodes across two nodes.
-        // next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch |err| {
-        //     log.err("failed to append slice, _splitIndex: {d}, inodes len: {d}, next nodes len: {d}, err: {}", .{ _splitIndex, self.inodes.items.len, next.inodes.items.len, err });
-        //     unreachable;
-        // };
         next.inodes.ensureTotalCapacity(self.inodes.items.len - _splitIndex) catch unreachable;
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
+        assert(next.inodes.items.len == (self.inodes.items.len - _splitIndex), "the next node's inodes length is not equal to the self node's inodes length - the split index", .{});
         // shrink self.inodes to _splitIndex
         self.inodes.resize(_splitIndex) catch unreachable;
-
+        // const firstKey = self.inodes.items[0].key.?;
+        // const lastKey = self.inodes.getLast().key.?;
+        // std.log.err("split node, self: {s}-{s}, next: {s}-{s}", .{ firstKey, lastKey, next.inodes.items[0].key.?, next.inodes.items[next.inodes.items.len - 1].key.? });
+        assert(self.inodes.items.len == _splitIndex, "the self node's inodes length is not equal to the split index", .{});
         // Update the statistics.
         self.bucket.?.tx.?.stats.split += 1;
 
@@ -486,7 +470,6 @@ pub const Node = struct {
         var i: usize = 0;
         var index: usize = 0;
         while (i < self.inodes.items.len - consts.MinKeysPage) {
-            index = i;
             const inode = self.inodes.items[i];
             var elsize = self.pageElementSize() + inode.key.?.len;
             if (inode.value) |value| {
@@ -498,6 +481,7 @@ pub const Node = struct {
                 break;
             }
             // Add the element size to the total size.
+            index = i;
             sz += elsize;
             i += 1;
         }
@@ -533,16 +517,9 @@ pub const Node = struct {
             {},
             lessFn,
         );
-        // const childrenCount = self.children.items.len;
-        // for (self.children.items, 0..) |child, i| {
-        //     assert(self.children.items.len == childrenCount, "the children length is not equal to the children count", .{});
-        //     assert(i <= 0 or std.mem.order(u8, self.children.items[i].key.?, self.children.items[i - 1].key.?) == .gt, "the children node is not in order", .{});
-        //     std.log.debug("spill child node: {d}", .{child.pgid});
-        //     try child.spill();
-        // }
         for (0..self.children.items.len) |i| {
             const child = self.children.items[i];
-            std.log.debug("spill child node: {d}, index: {d}", .{ child.pgid, i });
+            // std.log.debug("spill child node: {d}, index: {d}", .{ child.pgid, i });
             try child.spill();
         }
         // We no longer need the children list because it's only used for spilling tracking.

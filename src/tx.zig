@@ -654,6 +654,7 @@ pub const TX = struct {
         travel(context, p, depth);
         // Recursively loop over children.
         if (p.flags & consts.intFromFlags(consts.PageFlag.branch) != 0) {
+            // std.log.err("page is branch, count: {d}", .{p.count});
             for (0..p.count) |i| {
                 const elem = p.branchPageElementRef(i).?;
                 self.forEachPageWithContext(elem.pgid, depth + 1, context, travel);

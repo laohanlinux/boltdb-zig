@@ -74,8 +74,7 @@ pub const AutoFreeObject = struct {
     }
 
     /// Deinit the auto free object.
-    pub fn deinit(self: *AutoFreeObject, allocator: std.mem.Allocator) void {
-        _ = allocator; // autofix
+    pub fn deinit(self: *AutoFreeObject, _: std.mem.Allocator) void {
         assert(self.isFreed == false, "the auto free object is already freed", .{});
         self.isFreed = true;
         {
@@ -776,7 +775,6 @@ pub const Bucket = struct {
         }
         // Ignore if there's not a materialized root node.
         if (self.rootNode == null) {
-            // std.log.debug("the rootNode is null", .{});
             return;
         }
         const oldRootNode = self.rootNode.?;

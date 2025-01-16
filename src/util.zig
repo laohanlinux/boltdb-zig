@@ -5,7 +5,7 @@ pub inline fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     if (ok) {
         return;
     }
-    std.debug.print(fmt, args);
+    std.debug.print(fmt ++ "\n", args);
     std.debug.assert(ok);
 }
 

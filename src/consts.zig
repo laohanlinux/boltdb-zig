@@ -7,14 +7,14 @@ const Node = @import("node.zig").Node;
 /// Represents a marker value to indicate that a file is a Bolt DB.
 pub const Magic = 0xED0CDAED;
 /// The data file format verison.
-pub const Version = 1;
+pub const Version = 2;
 
 /// The largest step that can be taken when remapping the mmap.
 pub const MaxMMapStep: u64 = 1 << 30; // 1 GB
 
 /// Default values if not set in a DB instance.
-pub const DefaultMaxBatchSize = 1000;
-pub const DefaultMaxBatchDelay = 10; // millisecond
+pub const DefaultMaxBatchSize = 1000; // not used yet
+pub const DefaultMaxBatchDelay = 10 * std.time.ms_per_s; // millisecond, not used yet
 pub const DefaultAllocSize = 16 * 1024 * 1024;
 
 /// A bucket leaf flag.
@@ -159,3 +159,11 @@ pub const KeyPair = struct {
         return !self.isNotFound() and self.value == null;
     }
 };
+
+/// Calculate the threshold before starting a new node.
+pub fn calThreshold(fillPercent: f64, pageSize: usize) usize {
+    const _fillPercent = if (fillPercent < MinFillPercent) MinFillPercent else if (fillPercent > MaxFillPercent) MaxFillPercent else fillPercent;
+    const fPageSize: f64 = @floatFromInt(pageSize);
+    const threshold = @as(usize, @intFromFloat(fPageSize * _fillPercent));
+    return threshold;
+}

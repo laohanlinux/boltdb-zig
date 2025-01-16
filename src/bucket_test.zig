@@ -1061,6 +1061,7 @@ test "Bucket_Stats_RandomFill" {
     var testCtx = tests.setup(std.testing.allocator) catch unreachable;
     defer tests.teardown(&testCtx);
     const db = testCtx.db;
+    assert(db.pageSize == 4096, "expected 4096 but got {d}", .{db.pageSize});
     // Add a set of values in random order. It will be the same random
     // order so we can maintain consistency between test runs.
     const randomBytes = testCtx.generateBytes(1000);
@@ -1073,7 +1074,9 @@ test "Bucket_Stats_RandomFill" {
         count: usize = 0,
         fixAllocator: std.heap.FixedBufferAllocator = undefined,
     };
+
     var ctx = context{ .index = 0, .ctx = testCtx, .fixAllocator = std.heap.FixedBufferAllocator.init(buf[0..]) };
+
     for (randomBytes, 0..) |v, i| {
         ctx.index = i;
         ctx.v = v;
@@ -1095,23 +1098,24 @@ test "Bucket_Stats_RandomFill" {
         try db.updateWithContext(&ctx, updateFn);
     }
     db.mustCheck();
+    ctx.index = 0;
 
     const viewFn = struct {
-        fn view(vCtx: context, tx: *TX) Error!void {
+        fn view(_: *context, tx: *TX) Error!void {
             const stats = tx.getBucket("woojits").?.stats();
-            assert(stats.keyN == vCtx.count, comptime "expected {d} but got {d}", .{ vCtx.count, stats.keyN });
-            // assert(stats.BranchPageN == 98, comptime "expected 98 but got {d}", .{stats.BranchPageN});
+            assert(stats.keyN == 100000, comptime "expected {d} but got {d}", .{ 100000, stats.keyN });
+            assert(stats.BranchPageN == 36, comptime "expected 36 but got {d}", .{stats.BranchPageN});
             assert(stats.BranchOverflowN == 0, comptime "expected 0 but got {d}", .{stats.BranchOverflowN});
-            assert(stats.BranchInuse == 130984, comptime "expected 130984 but got {d}", .{stats.BranchInuse});
-            assert(stats.BranchAlloc == 401408, comptime "expected 401408 but got {d}", .{stats.BranchAlloc});
+            assert(stats.BranchInuse == 57235, comptime "expected 57235 but got {d}", .{stats.BranchInuse});
+            assert(stats.BranchAlloc == 147456, comptime "expected 147456 but got {d}", .{stats.BranchAlloc});
 
-            assert(stats.LeafPageN == 3412, comptime "expected 3412 but got {d}", .{stats.LeafPageN});
+            assert(stats.LeafPageN == 1511, comptime "expected 1511 but got {d}", .{stats.LeafPageN});
             assert(stats.LeafOverflowN == 0, comptime "expected 0 but got {d}", .{stats.LeafOverflowN});
-            assert(stats.LeafInuse == 4742482, comptime "expected 4742482 but got {d}", .{stats.LeafInuse});
-            assert(stats.LeafAlloc == 13975552, comptime "expected 13975552 but got {d}", .{stats.LeafAlloc});
+            assert(stats.LeafInuse == 4712066, comptime "expected 4712066 but got {d}", .{stats.LeafInuse});
+            assert(stats.LeafAlloc == 6189056, comptime "expected 6189056 but got {d}", .{stats.LeafAlloc});
         }
     }.view;
-    try db.viewWithContext(ctx, viewFn);
+    try db.viewWithContext(&ctx, viewFn);
 }
 
 // Ensure a bucket can calculate stats.

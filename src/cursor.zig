@@ -224,8 +224,6 @@ pub const Cursor = struct {
                 pgid = ref.p.?.branchPageElementRef(ref.index).?.pgid;
             }
             const pNode = self._bucket.pageNode(pgid);
-            // assert(self.stack.items.len < 3, "the stack is too long, stack: {any}", .{self.stack.items});
-            // std.log.info("the pNode is {any}", .{pNode});
             self.stack.append(ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 }) catch unreachable;
             assert(self.getLastElementRef().?.index == 0, "the index is not 0, index: {}", .{self.getLastElementRef().?.index});
         }
@@ -259,6 +257,20 @@ pub const Cursor = struct {
     /// If the cursor is at the last leaf element then it stays there and return null.
     pub fn _next(self: *Self) KeyValueRef {
         while (true) {
+            // {
+            //     const elementRef = self.getLastElementRef().?;
+            //     if (elementRef.isLeaf() and elementRef.index == 0) {
+            //         const threshold = consts.calThreshold(self._bucket.fillPercent, self._bucket.tx.?.db.?.pageSize);
+            //         if (elementRef.p) |p| {
+            //             var pSize = page.Page.headerSize();
+            //             for (0..p.count) |index| {
+            //                 const leafElement = p.leafPageElement(index).?;
+            //                 pSize += page.LeafPageElement.headerSize() + leafElement.kSize + leafElement.vSize;
+            //             }
+            //             assert(pSize <= threshold, "the page size is greater than the threshold, page size: {d}, threshold: {d}, fillPercent: {d}, pgid: {d}, count: {d}, pageSize: {d}", .{ pSize, threshold, self._bucket.fillPercent, p.id, p.count, self._bucket.tx.?.db.?.pageSize });
+            //         }
+            //     }
+            // }
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
             var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
@@ -504,5 +516,13 @@ const ElementRef = struct {
             return node.inodes.items.len;
         }
         return @as(usize, self.p.?.count);
+    }
+
+    // Returns the key for the current element.
+    inline fn pgid(self: *const ElementRef) PgidType {
+        if (self.node) |node| {
+            return node.pgid;
+        }
+        return self.p.?.id;
     }
 };
