@@ -14,54 +14,51 @@ const KeyPair = consts.KeyPair;
 const KeyValueRef = consts.KeyValueRef;
 const Error = @import("error.zig").Error;
 
-/// Cursor represents an iterator that can traverse over all key/value pairs in a bucket in sorted order.
-/// Cursors see nested buckets with value == nil.
-/// Cursors can be obtained from a transaction and are valid as long as the transaction is open.
-///
-/// Keys and values returned from the cursor are only valid for the life of the transaction.
-///
-/// Changing data while traversing with a cursor may cause it to be invalidated
-/// and return unexpected keys and/or values. You must reposition your cursor
-/// after mutating data.
 pub const Cursor = struct {
     _bucket: *Bucket,
     stack: std.ArrayList(ElementRef),
 
     allocator: std.mem.Allocator,
+    arenaAllocator: ?std.heap.ArenaAllocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, _bt: *Bucket) Self {
+    /// Initialize the cursor.
+    pub fn init(_bt: *Bucket) Self {
+        const allocator = _bt.getAllocator();
         return Cursor{
             ._bucket = _bt,
             .stack = std.ArrayList(ElementRef).init(allocator),
             .allocator = allocator,
+            .arenaAllocator = null,
         };
     }
 
+    /// Deinitialize the cursor.
     pub fn deinit(self: *Self) void {
         self.stack.deinit();
+        if (self.arenaAllocator) |arenaAllocator| {
+            arenaAllocator.deinit();
+        }
     }
 
-    /// Returns the bucket that this cursor was created from.
     pub fn bucket(self: *Self) *Bucket {
         return self._bucket;
     }
 
-    /// Moves the cursor to the first item in the bucket and returns its key and value.
-    /// If the bucket is empty then a nil key and value are returned.
-    /// The returned key and value are only valid for the life of the transaction
     pub fn first(self: *Self) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         self.stack.resize(0) catch unreachable;
         const pNode = self._bucket.pageNode(self._bucket._b.?.root);
 
-        const ref = ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 };
-        self.stack.append(ref) catch unreachable;
-        _ = self._first();
+        {
+            const ref = ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 };
+            self.stack.append(ref) catch unreachable;
+            _ = self._first();
+        }
         // If we land on an empty page then move to the next value.
         // https://github.com/boltdb/bolt/issues/450
-        if (self.stack.getLast().count() == 0) {
+        if (self.getLastElementRef().?.count() == 0) {
             std.log.info("the last element count is 0, try to move to the next", .{});
             _ = self._next();
         }
@@ -76,8 +73,6 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key.?, keyValueRet.value);
     }
 
-    /// Moves the cursor to the last item in the bucket and returns its key and value.
-    /// If the bucket is empty then a nil key and value are returned.
     pub fn last(self: *Self) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         self.stack.resize(0) catch unreachable;
@@ -99,9 +94,6 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
-    /// Moves the cursor to the next item in the bucket and returns its key and value.
-    /// If the cursor is at the end of the bucket then a nil key and value are returned.
-    /// The returned key and value are only valid for the life of the transaction.
     pub fn next(
         self: *Self,
     ) KeyPair {
@@ -117,9 +109,15 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
-    /// Moves the cursor to the previous item in the bucket and returns its key and value.
-    /// If the cursor is at the beginning of the bucket then a nil key and value are returned.
-    /// The returned key and value are only valid for the life of the transaction.
+    /// Moves the cursor to the next item in the bucket and returns its key and value.
+    pub fn tryNext(self: *Self) ?KeyPair {
+        const keyValueRet = self.next();
+        if (keyValueRet.isNotFound()) {
+            return null;
+        }
+        return keyValueRet;
+    }
+
     pub fn prev(self: *Self) KeyPair {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Attempt to move back one element until we're successful.
@@ -151,14 +149,10 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
-    /// Moves the cursor to a given key and returns it.
-    /// If the key does not exist then the next key is used. If no keys
-    /// follow, a nil key is returned.
-    /// The returned key and value are only valid for the life of the transaction.
     pub fn seek(self: *Self, seekKey: []const u8) KeyPair {
         var keyValueRet = self._seek(seekKey);
         // If we ended up after the last element of a page then move to the next one.
-        const ref = self.stack.getLast();
+        const ref = self.getLastElementRef().?;
         if (ref.index >= ref.count()) {
             // the level page has remove all key?
             keyValueRet = self._next();
@@ -171,8 +165,15 @@ pub const Cursor = struct {
         return KeyPair.init(keyValueRet.key, keyValueRet.value);
     }
 
-    /// Removes the current key/value under the cursor from the bucket.
-    /// Delete fails if current key/value is a bucket or if the transaction is not writable.
+    /// Returns the current key and value without moving the cursor.
+    pub fn getKeyPair(self: *Self) ?KeyValueRef {
+        const keyValueRet = self.keyValue();
+        if (keyValueRet.key == null) {
+            return null;
+        }
+        return keyValueRet;
+    }
+
     pub fn delete(self: *Self) Error!void {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         if (!self._bucket.tx.?.writable) {
@@ -184,7 +185,7 @@ pub const Cursor = struct {
             return Error.IncompactibleValue;
         }
 
-        self.getNode().?.del(keyValueRet.key.?);
+        _ = self.getNode().?.del(keyValueRet.key.?);
     }
 
     // Moves the cursor to a given key and returns it.
@@ -193,8 +194,8 @@ pub const Cursor = struct {
         assert(self._bucket.tx.?.db != null, "tx closed", .{});
         // Start from root page/node and traverse to correct page.
         self.stack.resize(0) catch unreachable;
-        // std.log.info("seekKey: {s}, root: {}\n", .{ seekKey, self._bucket._b.?.root });
         self.search(seekKey, self._bucket._b.?.root);
+        // self.prettyPrint();
         const ref = self.getLastElementRef().?;
         // If the cursor is pointing to the end of page/node then return nil.
         // TODO, if not found the key, the index should be 0, but the count maybe > 0
@@ -208,9 +209,8 @@ pub const Cursor = struct {
     // Moves the cursor to the first leaf element under that last page in the stack.
     fn _first(self: *Self) void {
         while (true) {
-            // std.log.info("the stack is {}", .{self.stack.items.len});
             // Exit when we hit a leaf page.
-            const ref = self.stack.getLast();
+            const ref = self.getLastElementRef().?;
             if (ref.isLeaf()) {
                 // had move to the first element that first leaf's key.
                 break;
@@ -224,20 +224,16 @@ pub const Cursor = struct {
                 pgid = ref.p.?.branchPageElementRef(ref.index).?.pgid;
             }
             const pNode = self._bucket.pageNode(pgid);
-            // assert(self.stack.items.len < 3, "the stack is too long, stack: {any}", .{self.stack.items});
-            // std.log.info("the pNode is {any}", .{pNode});
             self.stack.append(ElementRef{ .p = pNode.page, .node = pNode.node, .index = 0 }) catch unreachable;
-            assert(self.stack.getLast().index == 0, "the index is not 0, index: {}", .{self.stack.getLast().index});
+            assert(self.getLastElementRef().?.index == 0, "the index is not 0, index: {}", .{self.getLastElementRef().?.index});
         }
-
-        // std.log.info("now, the stack len is {}, the last element ref is {any}", .{ self.stack.items.len, self.stack.getLast() });
     }
 
     // Moves the cursor to the last leaf element under that last page in the stack.
     fn _last(self: *Self) void {
         while (true) {
             // Exit when we hit a leaf page.
-            const ref = self.stack.getLast();
+            const ref = self.getLastElementRef().?;
             if (ref.isLeaf()) {
                 break;
             }
@@ -260,9 +256,21 @@ pub const Cursor = struct {
     /// Moves to the next leaf element and returns the key and value.
     /// If the cursor is at the last leaf element then it stays there and return null.
     pub fn _next(self: *Self) KeyValueRef {
-            // defer std.log.info("the stack is {}", .{self.stack.items.len});
         while (true) {
-            // assert(self.stack.items.len > 0, "the stack is empty", .{});
+            // {
+            //     const elementRef = self.getLastElementRef().?;
+            //     if (elementRef.isLeaf() and elementRef.index == 0) {
+            //         const threshold = consts.calThreshold(self._bucket.fillPercent, self._bucket.tx.?.db.?.pageSize);
+            //         if (elementRef.p) |p| {
+            //             var pSize = page.Page.headerSize();
+            //             for (0..p.count) |index| {
+            //                 const leafElement = p.leafPageElement(index).?;
+            //                 pSize += page.LeafPageElement.headerSize() + leafElement.kSize + leafElement.vSize;
+            //             }
+            //             assert(pSize <= threshold, "the page size is greater than the threshold, page size: {d}, threshold: {d}, fillPercent: {d}, pgid: {d}, count: {d}, pageSize: {d}", .{ pSize, threshold, self._bucket.fillPercent, p.id, p.count, self._bucket.tx.?.db.?.pageSize });
+            //         }
+            //     }
+            // }
             // Attempt to move over one element until we're successful.
             // Move up the stack as we hit the end of each page in our stack.
             var i: isize = @as(isize, @intCast(self.stack.items.len - 1));
@@ -274,7 +282,6 @@ pub const Cursor = struct {
                     break;
                 }
                 // pop the current page by index that same to pop the current inode from the stack.
-                // _ = self.stack.pop();
             }
 
             // If we've hit the root page then stop and return. This will leave the
@@ -315,7 +322,6 @@ pub const Cursor = struct {
             self.nsearch(key);
             return;
         }
-
         if (n) |_node| {
             self.searchNode(key, _node);
             return;
@@ -329,45 +335,52 @@ pub const Cursor = struct {
         assert(self.stack.items.len > 0, "accessing a node with a zero-length cursor stack", .{});
 
         // If the top of the stack is a leaf node then just return it.
-        const topRef = self.getLastElementRef().?;
-        if (topRef.node != null and topRef.node.?.isLeaf) {
-            std.log.debug("return a topRef node", .{});
-            return topRef.node;
+        const lastRef = self.getLastElementRef().?;
+        if (lastRef.node != null and lastRef.node.?.isLeaf) {
+            // std.log.debug("return a last reference node", .{});
+            return lastRef.node;
         }
-
+        // std.log.debug("start from root and traveerse down the hierarchy, the last reference is {any}", .{lastRef});
         // Start from root and traveerse down the hierarchy.
-        var n = self.stack.items[0].node orelse self._bucket.node(self.stack.items[0].p.?.id, null);
+        var n: ?*Node = null;
+        if (self.stack.items[0].node != null) {
+            n = self.stack.items[0].node;
+        } else {
+            // the root node is not in the stack, so we need to get the root node from the bucket.
+            n = self._bucket.node(self.stack.items[0].p.?.id, null);
+        }
         for (self.stack.items[0 .. self.stack.items.len - 1]) |ref| {
-            assert(!n.isLeaf, "expected branch node", .{});
-            n = n.childAt(ref.index).?;
+            assert(!n.?.isLeaf, "expected branch node", .{});
+            n = n.?.childAt(ref.index).?;
         }
 
-        assert(n.isLeaf, "expect leaf node", .{});
+        assert(n.?.isLeaf, "expect leaf node", .{});
+        // std.log.debug("return a node, pgid: {}, refIndex: {}", .{ n.?.pgid, self.getLastElementRef().?.index });
         return n;
     }
 
     // Search key from nodes.
     fn searchNode(self: *Self, key: []const u8, n: *const Node) void {
-        const printNodes = struct {
-            fn print(curNode: *const Node) void {
-                for (curNode.inodes.items, 0..) |iNode, i| {
-                    const iKey = iNode.getKey().?;
-                    std.log.debug("i={}, key={s}, iKey = {s}", .{ i, curNode.key.?, iKey });
-                }
-            }
-        }.print;
-        _ = printNodes;
+        // const printNodes = struct {
+        //     fn print(curNode: *const Node) void {
+        //         for (curNode.inodes.items, 0..) |iNode, i| {
+        //             const iKey = iNode.getKey().?;
+        //             std.log.debug("i={}, pgid: {d}, key={any}, len={}, iKey = {any}, len={}", .{ i, curNode.pgid, curNode.key.?, curNode.key.?.len, iKey, iKey.len });
+        //         }
+        //     }
+        // }.print;
+        // // _ = printNodes;
         // printNodes(n);
-        const searchFn = struct {
-            fn searchFn(context: []const u8, inode: INode) std.math.Order {
-                return std.mem.order(u8, context, inode.getKey().?);
-            }
-        }.searchFn;
-        const index = std.sort.binarySearch(INode, n.inodes.items, key, searchFn) orelse (n.inodes.items.len - 1);
+        assert(n.inodes.items.len > 0, "the node is empty", .{});
+        var indexRef = n.searchInodes2(key);
+        if (!indexRef.exact) {
+            indexRef.index -= 1;
+        }
+        // std.log.debug("find index: {}, current pgid: {d}, current node len: {}, next pgid: {d}", .{ indexRef.index, n.pgid, n.inodes.items.len, n.inodes.items[indexRef.index].pgid });
         // Recursively search to the next node.
-        var lastEntry = self.stack.getLast();
-        lastEntry.index = index;
-        self.search(key, n.inodes.items[index].pgid);
+        const lastEntry = self.getLastElementRef().?;
+        lastEntry.index = indexRef.index;
+        self.search(key, n.inodes.items[indexRef.index].pgid);
     }
 
     // Search key from pages
@@ -378,12 +391,6 @@ pub const Cursor = struct {
         if (!elementRef.exact and elementRef.index > 0) {
             elementRef.index -= 1;
         }
-        // if (p.id == 117) {
-        //     for (0..p.count) |i| {
-        //         const elem = p.branchPageElement(i);
-        //         std.log.debug("branch page element: {any}, elementRef: {any}", .{ elem, elementRef });
-        //     }
-        // }
         self.getLastElementRef().?.index = elementRef.index;
         // Recursively search to the next page.
         const nextPgid = p.branchPageElementRef(elementRef.index).?.pgid;
@@ -410,7 +417,7 @@ pub const Cursor = struct {
 
     // get the key and value of the cursor.
     fn keyValue(self: *Self) KeyValueRef {
-        const ref = self.stack.getLast();
+        const ref = self.getLastElementRef().?;
         if (ref.count() == 0 or ref.index >= ref.count()) {
             // 1: all key remove of tx, the page's keys are 0,
             // 2: index == count indicate not found the key.
@@ -461,6 +468,19 @@ pub const Cursor = struct {
         }
         return &self.stack.items[self.stack.items.len - 1];
     }
+
+    fn prettyPrint(self: *const Self) void {
+        std.log.debug("\t----------- the cursor stack -----------\t", .{});
+        std.log.debug("the boot root is {}", .{self._bucket._b.?.root});
+        for (self.stack.items, 0..) |ref, i| {
+            if (ref.node) |n| {
+                std.log.debug("index: {}, is a node, pgid: {}, key index: {}", .{ i, n.pgid, ref.index });
+            } else if (ref.p) |p| {
+                std.log.debug("index: {}, is a page, id: {}, key index: {}", .{ i, p.id, ref.index });
+            }
+        }
+        std.log.debug("\t----------------------------------------\t", .{});
+    }
 };
 
 // Represents a reference to an element on a given page/node.
@@ -483,7 +503,7 @@ const ElementRef = struct {
     }
 
     // Returns true if the element is a leaf element.
-    fn isLeaf(self: *const ElementRef) bool {
+    inline fn isLeaf(self: *const ElementRef) bool {
         if (self.node) |node| {
             return node.isLeaf;
         }
@@ -491,10 +511,18 @@ const ElementRef = struct {
     }
 
     // returns the number of inodes or page elements.
-    fn count(self: *const ElementRef) usize {
+    inline fn count(self: *const ElementRef) usize {
         if (self.node) |node| {
             return node.inodes.items.len;
         }
         return @as(usize, self.p.?.count);
+    }
+
+    // Returns the key for the current element.
+    inline fn pgid(self: *const ElementRef) PgidType {
+        if (self.node) |node| {
+            return node.pgid;
+        }
+        return self.p.?.id;
     }
 };

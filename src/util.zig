@@ -1,19 +1,16 @@
 const std = @import("std");
 
 /// Asserts that `ok` is true. If not, it will print the formatted message and panic.
-pub fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
+pub inline fn assert(ok: bool, comptime fmt: []const u8, args: anytype) void {
     if (ok) {
         return;
     }
-    const allocator = std.heap.page_allocator;
-    const s = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
-    std.debug.print("{s}\n", .{s});
-    defer allocator.free(s);
-    @panic(s);
+    std.debug.print(fmt ++ "\n", args);
+    std.debug.assert(ok);
 }
 
 /// panic the program with the formatted message
-pub fn panicFmt(comptime fmt: []const u8, args: anytype) noreturn {
+pub inline fn panicFmt(comptime fmt: []const u8, args: anytype) noreturn {
     const allocator = std.heap.page_allocator;
     const s = std.fmt.allocPrint(allocator, fmt, args) catch unreachable;
     std.debug.print("{s}\n", .{s});
@@ -64,95 +61,27 @@ pub fn munmap(ptr: []u8) void {
     }
 }
 
-pub fn Closure(comptime T: type) type {
-    return struct {
-        captureVar: *T,
-        _callback: *const fn (t: *T) void,
-        const Self = @This();
-        pub fn init(capture: *T, callback: fn (_: *T) void) Self {
-            return Self{
-                .captureVar = capture,
-                ._callback = callback,
-            };
-        }
-        pub fn getCallBack(self: *const Self) *const fn (_: *T) void {
-            return self._callback;
-        }
-        pub fn onCommit(self: *const Self) void {
-            self._callback(self.captureVar);
-        }
-
-        pub fn execute(self: *const Self) void {
-            self._callback(self.captureVar);
-        }
-    };
-}
-
-fn onCmt(n: *usize) void {
-    n.* += 1;
-}
-
-fn onCmt2(n: *usize) void {
-    n.* -= 1;
-}
-
-test "arm" {
-    var n: usize = 2000;
-    const c = Closure(usize).init(&n, onCmt);
-    var closures = std.ArrayList(Closure(usize)).init(std.testing.allocator);
-    defer closures.deinit();
-    try closures.append(c);
-    try closures.append(c);
-    for (closures.items) |cFn| {
-        cFn.execute();
-        std.debug.print("{}\n", .{c.captureVar.*});
+/// binary search the key in the items, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
+pub fn binarySearch(
+    comptime T: type,
+    items: []const T,
+    context: anytype,
+    comptime compareFn: fn (@TypeOf(context), T) std.math.Order,
+) struct { index: usize, exact: bool } {
+    if (items.len == 0) {
+        return .{ .index = 0, .exact = false };
     }
-
-    // const arch = @import("builtin").cpu.arch;
-
-    // if (target == .arm or target == .aarch64) {
-    //     std.debug.print("This is an ARM platform.\n", .{});
-    // } else {
-    //     std.debug.print("This is not an ARM platform.\n", .{});
-    // }
-    // std.debug.print("{}\n", .{std.Target.Cpu.Arch.isAARCH64(arch)});
-
-    // const fp = try std.fs.cwd().createFile("map.test", .{});
-    // defer fp.close();
-    // const fileSize = 1024 * 1024;
-    // const ptr = try mmap(fp, fileSize, true);
-    // defer munmap(ptr);
-
-    // const file_path = "example.txt";
-    //
-    // // 打开文件
-    // const file_descriptor = try std.fs.cwd().createFile(file_path, .{});
-    // try file_descriptor.setEndPos(std.mem.page_size);
-    // const buf = try mmap(file_descriptor, std.mem.page_size, true);
-    // const alignData: []align(std.mem.page_size) const u8 = @alignCast(buf);
-    // defer std.posix.munmap(alignData); // 确保在函数结束时撤销映射
-    //
-    // // 关闭文件描述符
-    // _ = std.posix.close(file_descriptor.handle);
-}
-
-test "lowerBound" {
-    const cmp = struct {
-        fn cmp(context: []const u8, b: []const u8) std.math.Order {
-            return std.mem.order(u8, context, b);
+    var left: usize = 0;
+    var right: usize = items.len;
+    while (left < right) {
+        const mid = left + (right - left) / 2;
+        const element = items[mid];
+        const cmp = compareFn(context, element);
+        switch (cmp) {
+            .eq => return .{ .index = mid, .exact = true },
+            .lt => left = mid + 1,
+            .gt => right = mid,
         }
-    };
-    var slice = std.ArrayList([]const u8).init(std.testing.allocator);
-    defer slice.deinit();
-    try slice.append("0000000493");
-    try slice.append("0000000494");
-    try slice.append("0000000495");
-    try slice.append("0000000496");
-    try slice.append("0000000497");
-    const key: []const u8 = "0000000493";
-    const index = std.sort.binarySearch([]const u8, slice.items, key, cmp.cmp);
-    assert(index.? == 0, "index should be 0, but got {}", .{index.?});
-    _ = slice.orderedRemove(index.?);
-    const index2 = std.sort.binarySearch([]const u8, slice.items[0..], key, cmp.cmp);
-    assert(index2 == null, "index should be null, but got {any}", .{index2});
+    }
+    return .{ .index = left, .exact = false };
 }

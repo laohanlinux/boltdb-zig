@@ -1,18 +1,20 @@
 const std = @import("std");
-const assert = @import("util.zig").assert;
+const util = @import("util.zig");
+const assert = util.assert;
+const panicFmt = util.panicFmt;
 const Page = @import("page.zig").Page;
 const Node = @import("node.zig").Node;
 /// Represents a marker value to indicate that a file is a Bolt DB.
 pub const Magic = 0xED0CDAED;
 /// The data file format verison.
-pub const Version = 1;
+pub const Version = 2;
 
 /// The largest step that can be taken when remapping the mmap.
 pub const MaxMMapStep: u64 = 1 << 30; // 1 GB
 
 /// Default values if not set in a DB instance.
-pub const DefaultMaxBatchSize = 1000;
-pub const DefaultMaxBatchDelay = 10; // millisecond
+pub const DefaultMaxBatchSize = 1000; // not used yet
+pub const DefaultMaxBatchDelay = 10 * std.time.ms_per_s; // millisecond, not used yet
 pub const DefaultAllocSize = 16 * 1024 * 1024;
 
 /// A bucket leaf flag.
@@ -47,8 +49,48 @@ pub const PgidType = u64;
 /// A slice of page ids.
 pub const PgIds = []PgidType;
 /// The size of a page.
-// pub const PageSize: usize = std.mem.page_size;
-pub const PageSize: usize = 512;
+pub const PageSize: usize = std.mem.page_size;
+// pub const PageSize: usize = 4096;
+
+/// Represents the options that can be set when opening a database.
+pub const Options = packed struct {
+    // The amount of time to what wait to obtain a file lock.
+    // When set to zero it will wait indefinitely. This option is only
+    // available on Darwin and Linux.
+    timeout: i64 = 0, // unit:nas
+
+    // Sets the DB.no_grow_sync flag before money mapping the file.
+    noGrowSync: bool = false,
+
+    // Open database in read-only mode, Uses flock(..., LOCK_SH | LOCK_NB) to
+    // grab a shared lock (UNIX).
+    readOnly: bool = false,
+
+    // Sets the DB.strict_mode flag before memory mapping the file.
+    strictMode: bool = false,
+
+    // Sets the DB.mmap_flags before memory mapping the file.
+    mmapFlags: isize = 0,
+
+    // The initial mmap size of the database
+    // in bytes. Read transactions won't block write transaction
+    // if the initial_mmap_size is large enough to hold database mmap
+    // size. (See DB.begin for more information)
+    //
+    // If <= 0, the initial map size is 0.
+    // If initial_mmap_size is smaller than the previous database size.
+    // it takes no effect.
+    initialMmapSize: usize = 0,
+    // The page size of the database, it only use to test, don't set at in production
+    pageSize: usize = 0,
+};
+
+/// Represents the options used if null options are passed into open().
+/// No timeout is used which will cause Bolt to wait indefinitely for a lock.
+pub const defaultOptions = Options{
+    .timeout = 0,
+    .noGrowSync = false,
+};
 
 /// Returns the size of a page given the page size and branching factor.
 pub fn intFromFlags(pageFlage: PageFlag) u16 {
@@ -72,7 +114,8 @@ pub fn toFlags(flag: u16) PageFlag {
         return PageFlag.freeList;
     }
 
-    @panic("invalid flag");
+    assert(false, "invalid flag: {}", .{flag});
+    @panic("");
 }
 
 /// Represents the internal transaction indentifier.
@@ -92,13 +135,6 @@ pub const KeyValueRef = struct {
     pub fn dupeKey(self: *const KeyValueRef, allocator: std.mem.Allocator) ?[]const u8 {
         if (self.key) |key| {
             return allocator.dupe(u8, key) catch unreachable;
-        }
-        return null;
-    }
-
-    fn dupeValue(self: *const KeyValueRef, allocator: std.mem.Allocator) ?[]u8 {
-        if (self.value) |value| {
-            return allocator.dupe(u8, value) catch unreachable;
         }
         return null;
     }
@@ -124,10 +160,10 @@ pub const KeyPair = struct {
     }
 };
 
-// global general purpose allocator
-const gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
-/// Get the global general purpose allocator.
-pub fn getGpa() *std.heap.GeneralPurposeAllocator {
-    return &gpa;
+/// Calculate the threshold before starting a new node.
+pub fn calThreshold(fillPercent: f64, pageSize: usize) usize {
+    const _fillPercent = if (fillPercent < MinFillPercent) MinFillPercent else if (fillPercent > MaxFillPercent) MaxFillPercent else fillPercent;
+    const fPageSize: f64 = @floatFromInt(pageSize);
+    const threshold = @as(usize, @intFromFloat(fPageSize * _fillPercent));
+    return threshold;
 }

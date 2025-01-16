@@ -7,17 +7,25 @@ const freelist = @import("freelist.zig");
 const util = @import("util.zig");
 const consts = @import("consts.zig");
 const Error = @import("error.zig").Error;
+const PagePool = @import("gc.zig").PagePool;
 const TX = tx.TX;
 const PageFlag = consts.PageFlag;
 const assert = util.assert;
-const Table = consts.Table;
+const Table = @import("pretty_table.zig").Table;
 const PgidType = consts.PgidType;
+
+// const zoroutine = @import("zoroutine");
+const Mutex = @import("mutex.zig").Mutex;
 
 const Page = page.Page;
 // TODO
 const IgnoreNoSync = false;
 // Page size for db is set to the OS page size.
 const default_page_size = std.os.getPageSize();
+// default options
+const defaultOptions = consts.defaultOptions;
+
+const log = std.log.scoped(.BoltDB);
 
 /// DB is the main struct that holds the database state.
 pub const DB = struct {
@@ -83,10 +91,14 @@ pub const DB = struct {
 
     rwtx: ?*tx.TX = null,
     txs: std.ArrayList(*tx.TX),
+    // the freelist is used to manage the *dirty* pages in the transaction, it only changes at writable transaction, but has only writable transaction once.
+    // So we don't need to lock the freelist and it is safe by rwlock.
     freelist: *freelist.FreeList,
-    stats: Stats,
 
-    rwlock: std.Thread.Mutex, // Allows only one writer a a time.
+    stats: Stats,
+    pagePool: ?*PagePool = null,
+
+    rwlock: Mutex, // Allows only one writer a a time.
     metalock: std.Thread.Mutex, // Protects meta page access.
     mmaplock: std.Thread.RwLock, // Protects mmap access during remapping.
     statlock: std.Thread.RwLock, // Protects stats access.
@@ -106,6 +118,14 @@ pub const DB = struct {
     /// Return the path to currently open database file.
     pub fn path(self: *const Self) []const u8 {
         return self._path;
+    }
+
+    /// Syncs the database file to disk.
+    pub fn sync(self: *Self) Error!void {
+        self.file.sync() catch |err| {
+            log.err("failed to sync the database file: {any}", .{err});
+            return Error.FileIOError;
+        };
     }
 
     /// Returns the string representation of the database.
@@ -138,7 +158,8 @@ pub const DB = struct {
     /// Creates and opens a database at the given path.
     /// If the file does not exist then it will be created automatically.
     /// Passing in null options will cause Bolt to open the database with the default options.
-    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: Options) !*Self {
+    pub fn open(allocator: std.mem.Allocator, filePath: []const u8, fileMode: ?std.fs.File.Mode, options: consts.Options) !*Self {
+        log.info("Start to open the database", .{});
         const db = try allocator.create(DB);
         db.allocator = allocator;
         // Set default options if no options are proveide.
@@ -151,17 +172,24 @@ pub const DB = struct {
         db.mmaplock = .{};
         db.metalock = .{};
         db.statlock = .{};
-        db.rwlock = .{};
+        db.rwlock = Mutex{};
         db.rwtx = null;
         db.dataRef = null;
-        db.pageSize = 0;
+        db.pageSize = options.pageSize;
+        if (db.pageSize == 0) {
+            db.pageSize = consts.PageSize;
+        }
         db.txs = std.ArrayList(*TX).init(allocator);
         db.stats = Stats{};
         db.readOnly = options.readOnly;
         db.strictMode = options.strictMode;
-
+        db.pagePool = null;
+        db.opened = false;
+        log.info("load database from path: {s}", .{filePath});
         // Open data file and separate sync handler for metadata writes.
         db._path = db.allocator.dupe(u8, filePath) catch unreachable;
+        errdefer db.close() catch unreachable;
+
         if (options.readOnly) {
             db.file = try std.fs.cwd().openFile(db._path, std.fs.File.OpenFlags{
                 .lock = .shared,
@@ -181,6 +209,7 @@ pub const DB = struct {
                 const fileFp = std.fs.cwd().createFile(db._path, createFlag) catch |err| switch (err) {
                     std.fs.File.OpenError.PathAlreadyExists => {
                         const fp = try std.fs.cwd().openFile(db._path, .{ .mode = .read_write });
+                        log.info("the db file already exists", .{});
                         break :blk fp;
                     },
                     else => {
@@ -205,22 +234,34 @@ pub const DB = struct {
         const stat = try db.file.stat();
         if (stat.size == 0) {
             // Initialize new files with meta pagess.
+            log.info("initialize a new db", .{});
             try db.init();
         } else {
+            log.info("db size: {}", .{stat.size});
             // Read the first meta page to determine the page size.
-            const buf = try db.allocator.alloc(u8, 0x1000);
+            const buf = try db.allocator.alloc(u8, db.pageSize);
             defer db.allocator.free(buf);
             const sz = try db.file.readAll(buf[0..]);
-            std.log.info("has load meta size: {}", .{sz});
-            const m = db.pageInBuffer(buf[0..sz], 0).meta();
+            log.info("has load meta size: {}", .{sz});
+            if (sz < Page.headerSize()) {
+                return Error.Invalid;
+            }
+            var m: *Meta = undefined;
+            if (sz < db.pageSize) {
+                const _p = Page.init(buf[0..sz]);
+                m = _p.meta();
+            } else {
+                m = db.pageInBuffer(buf[0..sz], 0).meta();
+            }
             db.pageSize = blk: {
-                m.validate() catch {
+                m.validate() catch { // if the meta page is invalid, then set the page size to the default page size
+                    log.warn("the meta page is invalid, set the page size to the default page size: {}", .{consts.PageSize});
                     break :blk consts.PageSize;
                 };
                 break :blk m.pageSize;
             };
+            log.info("pageSize has change to: {}", .{db.pageSize});
         }
-        errdefer db.close() catch unreachable;
         // Memory map the data file.
         try db.mmap(options.initialMmapSize);
 
@@ -229,14 +270,15 @@ pub const DB = struct {
         const allocPage = db.pageById(db.getMeta().freelist);
         db.freelist.read(allocPage);
         db.opened = true;
+        db.pagePool = db.allocator.create(PagePool) catch unreachable;
+        db.pagePool.?.* = PagePool.init(db.allocator, db.pageSize);
         return db;
     }
 
     /// init creates a new database file and initializes its meta pages.
     pub fn init(self: *Self) !void {
-        std.log.info("init a new db!", .{});
+        log.info("init a new db!", .{});
         // Set the page size to the OS page size.
-        self.pageSize = consts.PageSize;
         // Create two meta pages on a buffer, and
         const buf = try self.allocator.alloc(u8, self.pageSize * 4);
         defer self.allocator.free(buf);
@@ -257,7 +299,7 @@ pub const DB = struct {
             m.pgid = 4; // 0, 1 = meta, 2 = freelist, 3 = root bucket
             m.txid = @as(consts.TxId, i);
             m.flags = consts.intFromFlags(PageFlag.meta);
-            std.log.info("init meta{}", .{i});
+            log.info("init meta{}", .{i});
             m.check_sum = m.sum64();
         }
 
@@ -287,7 +329,8 @@ pub const DB = struct {
     /// Opens the underlying memory-mapped file and initializes the meta references.
     /// minsz is the minimum size that the new mmap can be.
     pub fn mmap(self: *Self, minsz: usize) !void {
-        std.log.info("mmap minsz: {}", .{minsz});
+        // defer log.info("succeed to mmap", .{});
+        // log.err("mmap minsz: {}", .{minsz});
         self.mmaplock.lock();
         defer self.mmaplock.unlock();
         const fileInfo = try self.file.metadata();
@@ -317,10 +360,10 @@ pub const DB = struct {
         self.dataRef = try util.mmap(self.file, size, true);
         self.datasz = size;
         assert(self.dataRef.?.len == size, "the size of dataRef is not equal to the size: {d}, dataRef.len: {d}", .{ size, self.dataRef.?.len });
-        std.log.info("succeed to init data reference, size: {}", .{size});
+        // log.info("succeed to init data reference, size: {}", .{size});
         // Save references to the meta pages.
-        self.meta0 = self.pageById(0).meta();
-        self.meta1 = self.pageById(1).meta();
+        self.meta0 = if (self.tryPageById(0)) |p| p.meta() else return Error.Invalid;
+        self.meta1 = if (self.tryPageById(1)) |p| p.meta() else return Error.Invalid;
 
         // Validate the meta pages. We only return an error if both meta pages fail
         // validation, since meta0 failing validation means that it wasn't saved
@@ -330,6 +373,10 @@ pub const DB = struct {
                 return err0;
             };
         };
+        if (@import("builtin").is_test) {
+            try self.meta0.print(self.allocator);
+            try self.meta1.print(self.allocator);
+        }
     }
 
     /// Determines the appropriate size for the mmap given the current size
@@ -368,20 +415,41 @@ pub const DB = struct {
 
     /// Retrieves ongoing performance stats for the database.
     /// This is only updated when a transaction closes.
-    pub fn getStats(self: *const Self) Stats {
+    pub fn getStats(self: *Self) Stats {
         self.statlock.lockShared();
         defer self.statlock.unlockShared();
         return self.stats;
     }
 
+    /// tryPageById retrives a page reference from the mmap based on the current page size.
+    pub fn tryPageById(self: *const Self, id: consts.PgidType) ?*Page {
+        const pos: u64 = id * @as(u64, self.pageSize);
+        if (self.dataRef.?.len < pos) {
+            return null;
+        }
+        var buf: []u8 = undefined;
+        if (self.dataRef.?.len < (pos + self.pageSize)) {
+            std.log.warn("dataRef.len: {}, pos: {}, pageSize: {}, id: {}", .{ self.dataRef.?.len, pos, self.pageSize, id });
+            // buf = self.dataRef.?[pos..self.dataRef.?.len];
+            return null;
+        } else {
+            buf = self.dataRef.?[pos..(pos + self.pageSize)];
+        }
+        const p = Page.init(buf);
+        return p;
+    }
+
     /// Retrives a page reference from the mmap based on the current page size.
     /// TODO if the page is overflowed?
     pub fn pageById(self: *const Self, id: consts.PgidType) *Page {
-        std.log.debug("retrive a page by pgid: {}, pageSize: {}", .{ id, self.pageSize });
         const pos: u64 = id * @as(u64, self.pageSize);
         assert(self.dataRef.?.len >= (pos + self.pageSize), "dataRef.len: {}, pos: {}, pageSize: {}, id: {}", .{ self.dataRef.?.len, pos, self.pageSize, id });
         const buf = self.dataRef.?[pos..(pos + self.pageSize)];
-        return Page.init(buf);
+        // log.debug("==>retrive a page by pgid: {}, buf: {any}", .{ id, buf });
+
+        const p = Page.init(buf);
+        // log.debug("==>retrive a page by pgid<===", .{});
+        return p;
     }
 
     /// Retrives a page reference from a given byte array based on the current page size.
@@ -398,7 +466,7 @@ pub const DB = struct {
         // in a consistent state. metaA is the one with thwe higher txid.
         var metaA = self.meta0;
         var metaB = self.meta1;
-        std.log.debug("meta0: {}, meta1: {}", .{ metaA.txid, metaB.txid });
+        // std.log.debug("meta0: {}, meta1: {}", .{ metaA.txid, metaB.txid });
 
         if (self.meta1.txid > self.meta0.txid) {
             metaA = self.meta1;
@@ -423,19 +491,22 @@ pub const DB = struct {
 
     /// Allocates a count pages
     pub fn allocatePage(self: *Self, count: usize) !*Page {
-        // TODO Allocate a tempory buffer for the page.
-        // TODO Use PageAllocator.
-        const buf = try self.allocator.alloc(u8, count * self.pageSize);
-        @memset(buf, 0);
-        const p = Page.init(buf);
+        var p: *Page = undefined;
+        if (count == 1 and self.pagePool != null) {
+            p = try self.pagePool.?.new();
+        } else {
+            log.warn("allocate more than one page, count: {}, pageSize: {}", .{ count, self.pageSize });
+            const buf = try self.allocator.alloc(u8, count * self.pageSize);
+            @memset(buf, 0);
+            p = Page.init(buf);
+        }
         p.overflow = @as(u32, @intCast(count)) - 1;
         // Use pages from the freelist if they are availiable.
         p.id = self.freelist.allocate(count);
-        defer std.log.debug("allocate a new page, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
         if (p.id != 0) {
+            // log.debug("allocate a new page from freedlist, ptr: 0x{x}, pgid: {}, countPage:{}, overflowPage: {}, totalPageSize: {}, everyPageSize: {}", .{ p.ptrInt(), p.id, count, p.overflow, count * self.pageSize, self.pageSize });
             return p;
         }
-
         // Resize mmap() if we're at the end.
         p.id = self.rwtx.?.meta.pgid;
         const minsz: usize = (@as(usize, @intCast(p.id)) + 1 + count) * self.pageSize;
@@ -445,7 +516,7 @@ pub const DB = struct {
 
         // Move the page id high water mark.
         self.rwtx.?.meta.pgid += @as(PgidType, count);
-        std.log.debug("update the meta page, pgid: {}, flags:{} minsz: {}, datasz: {}", .{ self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
+        // log.debug("allow a new page (pgid={}) from mmap and update the meta page, pgid: from: {}, to: {}, flags:{} minsz: {}, datasz: {}", .{ p.id, self.rwtx.?.meta.pgid - @as(PgidType, count), self.rwtx.?.meta.pgid, p.flags, minsz, self.datasz });
         return p;
     }
 
@@ -472,7 +543,7 @@ pub const DB = struct {
                 _ = std.os.linux.fsync(self.file.handle);
             }
         }
-
+        log.warn("grow the database from {} to {} bytes", .{ self.filesz, sz });
         self.filesz = sz;
     }
 
@@ -481,7 +552,6 @@ pub const DB = struct {
         return self.readOnly;
     }
 
-    /// close closes the database and releases all associated resources.
     pub fn close(self: *Self) !void {
         defer std.log.info("succeed to close db!", .{});
         defer self.allocator.destroy(self);
@@ -562,7 +632,7 @@ pub const DB = struct {
         // Obtain writer lock. This released by the transaction when it closes.
         // This is enforces only one writer transaction at a time.
         self.rwlock.lock();
-        // std.log.debug("lock rwlock!", .{});
+        // std.log.warn("lock rwlock!", .{});
 
         // Once we have the writer lock then we can lock the meta pages so that
         // we can set up the transaction.
@@ -579,9 +649,12 @@ pub const DB = struct {
         const trx = TX.init(self, true);
         trx.writable = true;
         self.rwtx = trx;
-        std.log.debug("After create a write transaction, meta: {any}", .{trx.root.*._b.?});
+        if (@import("builtin").is_test) {
+            log.debug("After create a write transaction, txPtrInt: 0x{x}, meta: {any}", .{ trx.getTxPtr(), trx.root.*._b.? });
+        }
 
         // Free any pages associated with closed read-only transactions.
+        assert(self.txs.items.len <= 1, comptime "only one transaction need to be released", .{});
         var minid: u64 = std.math.maxInt(u64);
         for (self.txs.items) |_trx| {
             if (_trx.meta.txid < minid) {
@@ -604,28 +677,33 @@ pub const DB = struct {
     /// returned from the update() method.
     ///
     /// Attempting to manually commit or rollback within the function will cause a panic.
-    pub fn update(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
+    pub fn update(self: *Self, execFn: fn (self: *TX) Error!void) Error!void {
+        const execFnWithContext = struct {
+            fn exec(_: void, trx: *TX) Error!void {
+                return execFn(trx);
+            }
+        }.exec;
+        return self.updateWithContext({}, execFnWithContext);
+    }
+
+    /// Executes a function within the context of a read-write managed transaction.
+    pub fn updateWithContext(self: *Self, context: anytype, execFn: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(true);
-        const trxID = trx.getID();
-        std.log.info("Star a write transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer std.log.info("End a write transaction, txid: {}", .{trxID});
-        // Make sure the transaction rolls back in the event of a panic.
-        // errdefer if (trx.db != null) {
-        //     trx._rollback();
-        // };
+        // const trxID = trx.getID();
+        // log.info("Star a write transaction, txid: {}, meta.txid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        // defer log.info("End a write transaction, txid: {}", .{trxID});
 
         // Mark as a managed tx so that the inner function cannot manually commit.
         trx.managed = true;
-
         // If an errors is returned from the function then rollback and return error.
         execFn(context, trx) catch |err| {
             trx.managed = false;
-            trx.rollback() catch {};
-            std.log.info("after execute transaction commit handle", .{});
+            trx.rollbackAndDestroy() catch unreachable;
+            // log.info("after execute transaction commit handle", .{});
             return err;
         };
         trx.managed = false;
-        std.log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+        // log.info("before commit transaction, txid: {}, metaid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
         defer trx.destroy();
         try trx.commit();
     }
@@ -634,37 +712,37 @@ pub const DB = struct {
     /// Any error that is returned from the function is returned from the view() method.
     ///
     /// Attempting to manually rollback within the function will cause a panic.
-    pub fn view(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
+    pub fn view(self: *Self, func: fn (self: *TX) Error!void) Error!void {
+        return self.viewWithContext({}, struct {
+            fn exec(_: void, trx: *TX) Error!void {
+                return func(trx);
+            }
+        }.exec);
+    }
+
+    /// Executes a function within the context of a managed read-only transaction.
+    pub fn viewWithContext(self: *Self, context: anytype, func: fn (ctx: @TypeOf(context), self: *TX) Error!void) Error!void {
         const trx = try self.begin(false);
         const trxID = trx.getID();
-        std.log.info("Star a read-only transaction, txid: {}, meta_id: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
-        defer std.log.info("End a read-only transaction, txid: {}", .{trxID});
-        var isDrop = false;
-        // Make sure the transaction rolls back in the event of a panic.
-        defer {
-            if (!isDrop and trx.db != null) {
-                trx._rollback();
-            }
+        if (@import("builtin").is_test) {
+            log.info("Star a read-only transaction, txid: {}, meta_tx_id: {}, max_pgid: {}, root: {}, sequence: {}, _Bucket: {any}", .{ trxID, trx.meta.txid, trx.meta.pgid, trx.meta.root.root, trx.meta.root.sequence, trx.root._b.? });
+            defer log.info("End a read-only transaction, txid: {}", .{trxID});
         }
 
         // Mark as managed tx so that the inner function cannot manually rollback.
         trx.managed = true;
-
         // If an error is returned from the function then pass it through.
         func(context, trx) catch |err| {
+            std.log.warn("has error when execute transaction, txid: {}", .{trxID});
             trx.managed = false;
-            trx.rollback() catch {};
-            isDrop = true;
-            std.log.info("after execute transaction commit handle", .{});
+            trx.rollback() catch unreachable;
+            trx.destroy();
             return err;
         };
         trx.managed = false;
-        defer {
-            isDrop = true;
-        }
-        try trx.rollback();
+        try trx.rollbackAndDestroy();
+        // log.info("after execute transaction rollback handle", .{});
     }
-
     /// Removes a transaction from the database.
     pub fn removeTx(self: *Self, trx: *TX) void {
         // Release the read lock on the mmap.
@@ -673,7 +751,7 @@ pub const DB = struct {
         // Use the meta lock to restrict access to the DB object.
         self.metalock.lock();
 
-        std.log.info("transaction executes rollback!", .{});
+        // std.log.info("remove tx({}) from db", .{trx.getID()});
         // Remove the transaction.
         for (self.txs.items, 0..) |_trx, i| {
             if (_trx == trx) {
@@ -693,8 +771,64 @@ pub const DB = struct {
         self.statlock.unlock();
     }
 
+    /// mustCheck runs a consistency check on the database and panics if any errors are found.
+    pub fn mustCheck(self: *Self) void {
+        log.info("🎲 Start to check the database consistency", .{});
+        const updateFn = struct {
+            fn update(_db: *DB, trx: *TX) Error!void {
+                trx.check() catch |e| {
+                    const tmpFilePath = DB.tempFilePath(_db.allocator);
+                    defer _db.allocator.free(tmpFilePath);
+                    const tmpFile = std.fs.createFileAbsolute(tmpFilePath, .{}) catch unreachable;
+                    defer tmpFile.close();
+                    try trx.copyFile(tmpFile);
+
+                    log.info("\n\n", .{});
+                    log.info("❌ Consistency check failed, error: {any}", .{e});
+                    log.info("\n\n", .{});
+                    log.info("db saved to:", .{});
+                    log.info("{s}", .{tmpFilePath});
+                    log.info("\n\n", .{});
+                    std.process.exit(1);
+                };
+            }
+        }.update;
+        self.updateWithContext(self, updateFn) catch |err| switch (err) {
+            Error.DatabaseNotOpen => return,
+            else => util.panicFmt("consistency check failed, error: {}", .{err}),
+        };
+    }
+
+    pub fn copyTempFile(self: *Self) Error!void {
+        const filePath = Self.tempFilePath(self.allocator);
+        const viewFn = struct {
+            fn view(_: void, trx: *TX) Error!void {
+                try trx.copyFile(filePath, std.fs.File.OpenMode.read_only);
+            }
+        }.view;
+        try self.view({}, viewFn);
+        std.log.info("db copied to: {}", .{filePath});
+    }
+
+    /// tempFilePath returns a temporary file path.
+    fn tempFile(allocator: std.mem.Allocator, flags: std.fs.File.OpenFlags) std.fs.File {
+        const fileName = tempFilePath(allocator);
+        defer allocator.free(fileName);
+        const fp = std.fs.openFileAbsolute(fileName, flags) catch unreachable;
+        return fp;
+    }
+
+    fn tempFilePath(allocator: std.mem.Allocator) []const u8 {
+        var random = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.microTimestamp())));
+        const randomInt = random.random().uintLessThan(u32, std.math.maxInt(u32));
+        const fileName = std.fmt.allocPrint(allocator, "/tmp/{d}.tmp", .{randomInt}) catch unreachable;
+        return fileName;
+    }
+
     fn _close(self: *Self) void {
+        self.allocator.free(self._path);
         if (!self.opened) {
+            log.info("the database is not opened", .{});
             return;
         }
         self.opened = false;
@@ -702,58 +836,27 @@ pub const DB = struct {
         util.munmap(self.dataRef.?);
 
         self.file.close();
-        self.allocator.free(self._path);
-
         self.freelist.deinit();
 
         for (self.txs.items) |trx| {
             trx.destroy();
         }
         self.txs.deinit();
+        if (self.pagePool != null) {
+            self.pagePool.?.deinit();
+            self.allocator.destroy(self.pagePool.?);
+        }
     }
 
+    /// opsWriteAt writes bytes to the file at the given offset.
     fn opsWriteAt(fp: std.fs.File, bytes: []const u8, offset: u64) Error!usize {
-        const writeN = fp.pwrite(bytes, offset) catch unreachable;
+        // std.log.err("write at offset: {}, bytes: {any}", .{ offset, bytes.len });
+        const writeN = fp.pwrite(bytes, offset) catch |err| {
+            log.err("write at offset: {} failed, error: {any}", .{ offset, err });
+            return Error.FileIOError;
+        };
         return writeN;
     }
-};
-
-/// Represents the options that can be set when opening a database.
-pub const Options = packed struct {
-    // The amount of time to what wait to obtain a file lock.
-    // When set to zero it will wait indefinitely. This option is only
-    // available on Darwin and Linux.
-    timeout: i64 = 0, // unit:nas
-
-    // Sets the DB.no_grow_sync flag before money mapping the file.
-    noGrowSync: bool = false,
-
-    // Open database in read-only mode, Uses flock(..., LOCK_SH | LOCK_NB) to
-    // grab a shared lock (UNIX).
-    readOnly: bool = false,
-
-    // Sets the DB.strict_mode flag before memory mapping the file.
-    strictMode: bool = false,
-
-    // Sets the DB.mmap_flags before memory mapping the file.
-    mmapFlags: isize = 0,
-
-    // The initial mmap size of the database
-    // in bytes. Read transactions won't block write transaction
-    // if the initial_mmap_size is large enough to hold database mmap
-    // size. (See DB.begin for more information)
-    //
-    // If <= 0, the initial map size is 0.
-    // If initial_mmap_size is smaller than the previous database size.
-    // it takes no effect.
-    initialMmapSize: usize = 0,
-};
-
-/// Represents the options used if null options are passed into open().
-/// No timeout is used which will cause Bolt to wait indefinitely for a lock.
-pub const defaultOptions = Options{
-    .timeout = 0,
-    .noGrowSync = false,
 };
 
 /// Represents statistics about the database
@@ -773,7 +876,7 @@ pub const Stats = packed struct {
     const Self = @This();
 
     /// Subtracts the statistics of one Stats from another.
-    pub fn sub(self: *Self, other: *Stats) Stats {
+    pub fn sub(self: *Self, other: ?*Stats) Stats {
         if (other == null) {
             return self.*;
         }
@@ -782,8 +885,8 @@ pub const Stats = packed struct {
             .pendingPageN = self.pendingPageN,
             .freeAlloc = self.freeAlloc,
             .freelistInuse = self.freelistInuse,
-            .txN = self.txN - other.txN,
-            .txStats = self.txStats.sub(other.txStats),
+            .txN = self.txN - other.?.txN,
+            .txStats = self.txStats.sub(&other.?.txStats),
         };
         return diff;
     }
@@ -800,7 +903,7 @@ pub const Info = packed struct {
 };
 
 /// Represents the meta data of the database.
-pub const Meta = packed struct {
+pub const Meta = struct {
     magic: u32 = 0,
     version: u32 = 0,
     pageSize: u32 = 0,
@@ -859,6 +962,10 @@ pub const Meta = packed struct {
         const meta = p.meta();
         meta.* = self.*;
         assert(meta.check_sum == p.meta().check_sum, "CheckSum is invalid", .{});
+        if (@import("builtin").is_test) {
+            assert(p.id == 0 or p.id == 1, "page id should be 0 or 1, but got {}", .{p.id});
+            assert(std.mem.eql(u8, p.typ(), "meta"), "page: {} type should be meta, but got {s}", .{ p.id, p.typ() });
+        }
         return;
     }
 
@@ -881,183 +988,11 @@ pub const Meta = packed struct {
     }
 };
 
-// test "meta" {
-//     const stats = Info{ .data = 10, .page_size = 20 };
-//     std.debug.print("{}\n", .{stats});
-
-//     const meta = Meta{};
-//     std.debug.print("{}\n", .{meta});
+// // Ensure that opening a database with a bad path returns an error.
+// test "DB-Open_ErrNotExists" {
+//     std.testing.log_level = .err;
+//     const badPath = "bad-path/db.db";
+//     _ = DB.open(std.testing.allocator, badPath, null, defaultOptions) catch |err| {
+//         std.debug.assert(err == std.fs.File.OpenError.NotDir);
+//     };
 // }
-
-// test "DB-Read" {
-//     var options = defaultOptions;
-//     options.read_only = false;
-//     options.initialMmapSize = 10 * consts.PageSize;
-//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
-//     defer std.testing.allocator.free(filePath);
-//     {
-//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-//         try kvDB.close();
-//     }
-//     {
-//         const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-//         const dbStr = kvDB.string(std.testing.allocator);
-//         defer std.testing.allocator.free(dbStr);
-//         std.debug.print("String: {s}\n", .{dbStr});
-//
-//         const pageStr = kvDB.pageString(std.testing.allocator);
-//         defer std.testing.allocator.free(pageStr);
-//         std.debug.print("{s}\n", .{pageStr});
-//         defer kvDB.close() catch unreachable;
-//         {
-//             const viewFn = struct {
-//                 fn view(_kvDB: ?*DB, _: *TX) Error!void {
-//                     if (_kvDB == null) {
-//                         return Error.DatabaseNotOpen;
-//                     }
-//                     std.debug.print("page count: {}\n", .{_kvDB.?.pageSize});
-//                 }
-//             };
-//             for (0..10) |i| {
-//                 try kvDB.view(?*DB, kvDB, viewFn.view);
-//                 std.debug.assert(kvDB.stats.tx_n == (i + 1));
-//                 if (i == 9) {
-//                     const err = kvDB.view(?*DB, null, viewFn.view);
-//                     std.debug.assert(err == Error.DatabaseNotOpen);
-//                 }
-//             }
-//         }
-//
-//         // parallel read
-//         {
-//             var joins = std.ArrayList(std.Thread).init(std.testing.allocator);
-//             defer joins.deinit();
-//             const parallelViewFn = struct {
-//                 fn view(_kdb: *DB) void {
-//                     const viewFn = struct {
-//                         fn view(_kvDB: ?*DB, _: *TX) Error!void {
-//                             if (_kvDB == null) {
-//                                 return Error.DatabaseNotOpen;
-//                             }
-//                             std.debug.print("tid: {}\n", .{std.Thread.getCurrentId()});
-//                         }
-//                     };
-//                     _kdb.view(?*DB, _kdb, viewFn.view) catch unreachable;
-//                 }
-//             };
-//             for (0..10) |_| {
-//                 const sp = try std.Thread.spawn(.{}, parallelViewFn.view, .{kvDB});
-//                 try joins.append(sp);
-//             }
-//
-//             for (joins.items) |join| {
-//                 join.join();
-//             }
-//
-//             std.debug.print("after stats count: {}\n", .{kvDB.readOnly});
-//             std.debug.assert(kvDB.stats.tx_n == 21);
-//         }
-//
-//         // update
-//     }
-// }
-
-// test "DB-Write" {
-//     std.testing.log_level = .debug;
-//     var options = defaultOptions;
-//     options.readOnly = false;
-//     options.initialMmapSize = 10 * consts.PageSize;
-//     // options.strictMode = true;
-//     const filePath = try std.fmt.allocPrint(std.testing.allocator, "dirty/{}.db", .{std.time.timestamp()});
-//     defer std.testing.allocator.free(filePath);
-
-//     const kvDB = DB.open(std.testing.allocator, filePath, null, options) catch unreachable;
-
-//     const updateFn = struct {
-//         fn update(_kvDB: ?*DB, trx: *TX) Error!void {
-//             if (_kvDB == null) {
-//                 return Error.DatabaseNotOpen;
-//             }
-//             const Context = struct {
-//                 _tx: *TX,
-//             };
-//             const ctx = Context{ ._tx = trx };
-//             const forEach = struct {
-//                 fn inner(_: Context, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
-//                     std.log.info("execute forEach, bucket name: {s}", .{bucketName});
-//                 }
-//             };
-//             std.log.info("Execute write transaction: {}", .{trx.getID()});
-//             return trx.forEach(ctx, forEach.inner);
-//         }
-//     }.update;
-//     {
-//         // test "DB-update"
-//         for (0..1) |i| {
-//             _ = i; // autofix
-//             try kvDB.update(kvDB, updateFn);
-//             const meta = kvDB.getMeta();
-//             // because only freelist page is used, so the max pgid is 5
-//             assert(meta.pgid == 5, "the max pgid is invalid: {}", .{meta.pgid});
-//             assert((meta.freelist == 2 or meta.freelist == 4), "the freelist is invalid: {}", .{meta.freelist});
-//             assert(meta.root.root == 3, "the root is invalid: {}", .{meta.root.root});
-//         }
-
-//         // Create a bucket
-//         const updateFn2 = struct {
-//             fn update(_: void, trx: *TX) Error!void {
-//                 var buf: [1000]usize = undefined;
-//                 randomBuf(buf[0..]);
-//                 std.log.info("random: {any}\n", .{buf});
-//                 for (buf) |i| {
-//                     const bucketName = std.fmt.allocPrint(std.testing.allocator, "hello-{d}", .{i}) catch unreachable;
-//                     defer std.testing.allocator.free(bucketName);
-//                     const bt = try trx.createBucket(bucketName);
-//                     _ = bt; // autofix
-//                 }
-
-//                 const forEachCtx = struct {
-//                     _tx: *TX,
-//                 };
-//                 const ctx = forEachCtx{ ._tx = trx };
-//                 const forEachFn = struct {
-//                     fn inner(_: forEachCtx, bucketName: []const u8, _: ?*bucket.Bucket) Error!void {
-//                         std.log.info("execute forEach, bucket name: {s}", .{bucketName});
-//                     }
-//                 };
-//                 try trx.forEach(ctx, forEachFn.inner);
-
-//                 const bt = trx.getBucket("hello-0") orelse unreachable;
-//                 try bt.put(consts.KeyPair.init("ping", "pong"));
-//                 try bt.put(consts.KeyPair.init("echo", "ok"));
-//                 try bt.put(consts.KeyPair.init("Alice", "Bod"));
-//                 const got = bt.get("ping");
-//                 std.debug.assert(got != null);
-//                 std.debug.assert(std.mem.eql(u8, got.?, "pong"));
-
-//                 const got2 = bt.get("not");
-//                 std.debug.assert(got2 == null);
-//             }
-//         }.update;
-//         try kvDB.update({}, updateFn2);
-
-//         const viewFn = struct {
-//             fn view(_: void, trx: *TX) Error!void {
-//                 for (0..100) |_| {
-//                     const bt = trx.getBucket("Alice");
-//                     assert(bt == null, "the bucket is not null", .{});
-//                 }
-//                 for (0..100) |_| {
-//                     const bt = trx.getBucket("hello-0").?;
-//                     const kv = bt.get("not");
-//                     assert(kv == null, "should be not found the key", .{});
-//                 }
-//             }
-//         };
-//         try kvDB.view({}, viewFn.view);
-//         kvDB.close() catch unreachable;
-//     }
-//     // test "DB-read" {
-//     {}
-// }
-

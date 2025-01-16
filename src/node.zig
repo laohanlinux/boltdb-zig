@@ -7,6 +7,14 @@ const consts = @import("consts.zig");
 const PgidType = consts.PgidType;
 const Page = page.Page;
 const assert = @import("assert.zig").assert;
+const log = std.log.scoped(.BoltNode);
+// const LoggerContext = struct {
+//     id: u64,
+//     pgid: u64,
+//     isLeaf: bool,
+//     ptr: u64,
+// };
+// const Logger = @import("log.zig").Logger(LoggerContext).init(.BoltNode);
 
 /// Represents an in-memory, deserialized page.
 pub const Node = struct {
@@ -26,16 +34,18 @@ pub const Node = struct {
     // The id of the node.
     id: u64 = 0,
 
-    allocator: std.mem.Allocator,
+    // allocator: std.mem.Allocator,
+    arenaAllocator: std.heap.ArenaAllocator,
 
     const Self = @This();
 
     /// init a node with allocator.
     pub fn init(allocator: std.mem.Allocator) *Self {
-        const self = allocator.create(Self) catch unreachable;
+        var arenaAllocator = std.heap.ArenaAllocator.init(allocator);
+        const self = arenaAllocator.allocator().create(Self) catch unreachable;
         const id = std.crypto.random.int(u64);
         self.* = .{
-            .allocator = allocator,
+            .arenaAllocator = arenaAllocator,
             .children = std.ArrayList(*Node).init(allocator),
             .inodes = std.ArrayList(INode).init(allocator),
             .id = id,
@@ -43,41 +53,53 @@ pub const Node = struct {
         return self;
     }
 
+    /// free the node memory and destroy the node
+    pub fn deinitAndDestroy(self: *Self) void {
+        self.deinit();
+    }
+
+    /// free the node memory when the node is removed
+    pub fn deinitWhenRemoved(self: *Self) void {
+        if (self.isFreed) {
+            return;
+        }
+        self.isFreed = true;
+        // TODO, if the key is equal the first key of the node, we should be not free the key
+        // because the key is reference to the key in the inodes that bytes slice is reference to the key in the page.
+        if (!self.isFirstKeyReference()) {
+            log.info("free key, ptr: 0x{x}", .{@intFromPtr(self.key.?.ptr)});
+        }
+
+        self.inodes.clearAndFree();
+        assert(self.inodes.items.len == 0, "the inodes is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+        self.children.clearAndFree();
+        assert(self.children.items.len == 0, "the children is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+    }
+
     /// free the node memory
     pub fn deinit(self: *Self) void {
         if (self.isFreed) {
             return;
         }
-        const ptr = @intFromPtr(self);
-        _ = ptr; // autofix
-        const nKey = self.key orelse "empty";
-        _ = nKey; // autofix
-        const isParent = self.parent != null;
-        _ = isParent; // autofix
-        // std.log.debug("deinit node, key: {s}, node id: {d}, pgid: {d}, ptr: 0x{x}, isParent: {}", .{ nKey, self.id, self.pgid, ptr, isParent });
         assert(self.isFreed == false, "the node is already freed", .{});
         self.isFreed = true;
         // The is a inline node, so we should free the inline node memory
-        if (self.bucket) |inBucket| {
-            if (inBucket._b) |inBucketRoot| {
-                if (inBucketRoot.root == 0) {
-                    std.log.debug("this is inline bucket", .{});
-                }
-            }
-        }
         // Just free the inodes, the inode are reference of page, so the inode should not be free.
         for (0..self.inodes.items.len) |i| {
-            self.inodes.items[i].deinit(self.allocator);
+            self.inodes.items[i].deinit(null);
         }
 
-        if (self.key) |key| {
-            // std.log.info("free key: {s}, ptr: 0x{x}, len: {d}", .{ key, @intFromPtr(key.ptr), key.len });
-            self.allocator.free(key);
-        }
+        // if (self.key) |key| {
+        //     std.log.info("free key, ptr: 0x{x}", .{@intFromPtr(key.ptr)});
+        //     self.allocator.free(key);
+        // }
         self.key = null;
 
-        self.inodes.deinit();
-        self.children.deinit();
+        self.inodes.clearAndFree();
+        assert(self.inodes.items.len == 0, "the inodes is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+        self.children.clearAndFree();
+        assert(self.children.items.len == 0, "the children is not empty, id: {d}, pgid: {d}, ptr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt() });
+        self.arenaAllocator.deinit();
     }
 
     /// Returns the top-level node this node is attached to.
@@ -101,7 +123,6 @@ pub const Node = struct {
     pub fn size(self: *const Self) usize {
         var sz = page.Page.headerSize();
         const elsz = self.pageElementSize();
-        // std.log.info("node, id: {d}, ptr: 0x{x}, inodes: {any}", .{ self.id, self.nodePtrInt(), self.inodes.items.len });
         for (self.inodes.items) |item| {
             const vLen: usize = if (item.value) |value| value.len else 0;
             sz += elsz + item.key.?.len + vLen;
@@ -194,13 +215,10 @@ pub const Node = struct {
         } else if (newKey.len <= 0) {
             assert(false, "put: zero-length new key", .{});
         }
-        assert(@intFromPtr(oldKey.ptr) != @intFromPtr(newKey.ptr), "the oldKey and newKey is the same", .{});
-        // std.log.debug("put key: {s}, keyPtr: 0x{x}, valuePtr: 0x{x}", .{ newKey, @intFromPtr(newKey.ptr), @intFromPtr(value.?.ptr) });
         // Find insertion index.
         const index = std.sort.lowerBound(INode, self.inodes.items, oldKey, INode.lowerBoundFn);
         const exact = (index < self.inodes.items.len and std.mem.eql(u8, oldKey, self.inodes.items[index].getKey().?));
         if (!exact) {
-            // not found, allocate previous a new memory
             const insertINode = INode.init(0, 0, null, null);
             self.inodes.insert(index, insertINode) catch unreachable;
         }
@@ -208,18 +226,10 @@ pub const Node = struct {
         inodeRef.*.flags = flags;
         inodeRef.*.pgid = pgid;
         if (!exact) {
-            // not found, allocate a new memory
             inodeRef.key = newKey;
         } else {
-            // if (!std.mem.eql(u8, newKey, inodeRef.key.?)) {
-            //     // free
-            //     self.allocator.free(inodeRef.getKey().?);
-            //     inodeRef.key = newKey;
-            // }
             if (inodeRef.key != null and inodeRef.isNew) {
-                std.log.info("free old key, id: {d}, key: 0x{x}", .{ inodeRef.id, @intFromPtr(inodeRef.key.?.ptr) });
-                self.allocator.free(inodeRef.key.?);
-                // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.key.?);
+                // std.log.info("free old key, id: {d}, key: 0x{x}", .{ inodeRef.id, @intFromPtr(inodeRef.key.?.ptr) });
                 inodeRef.key = null;
             }
             inodeRef.key = newKey;
@@ -227,35 +237,35 @@ pub const Node = struct {
             // Free old value.
             if (inodeRef.value != null and inodeRef.isNew) {
                 if (value != null) {
-                    assert(@intFromPtr(inodeRef.value.?.ptr) != @intFromPtr(value.?.ptr), "the value is null", .{});
+                    assert(inodeRef.value.?.ptr != value.?.ptr, "the value is null", .{});
                 }
-                // std.log.info("free old value, id: {d}, key: {s}, vPtr: [0x{x}, 0x{x}], value: [{any}, {any}]", .{ inodeRef.id, inodeRef.key.?, @intFromPtr(inodeRef.value.?.ptr), @intFromPtr(value.?.ptr), inodeRef.value, value });
-                // self.bucket.?.tx.?.autoFreeNodes.addAutoFreeBytes(inodeRef.value.?);
-                self.allocator.free(inodeRef.value.?);
                 inodeRef.value = null;
             }
         }
-        self.allocator.free(oldKey);
         inodeRef.value = value;
         inodeRef.isNew = true; // the inode is new inserted
         assert(inodeRef.key.?.len > 0, "put: zero-length inode key", .{});
-        self.safeCheck();
-        const vLen: usize = if (inodeRef.value) |v| v.len else 0;
-        std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
-        std.log.info("create a new key: {s}", .{newKey});
+        // std.log.info("ptr: 0x{x}, id: {d}, succeed to put key: {s}, len: {d}, vLen:{d}, before count: {d}", .{ self.nodePtrInt(), self.id, inodeRef.key.?, inodeRef.key.?.len, vLen, self.inodes.items.len });
         return inodeRef;
     }
 
     /// Removes a key from the node.
-    pub fn del(self: *Self, key: []const u8) void {
+    pub fn del(self: *Self, key: []const u8) ?usize {
+        // std.log.debug("del key: {any} at node: {d}", .{ key, self.pgid });
         // Find index of key.
-        const index = std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) orelse return;
-        const inode = self.inodes.orderedRemove(index);
-        assert(std.mem.eql(u8, inode.key.?, key), "the key is not equal to the inode key, key: {s}, inode key: {s}", .{ key, inode.key.? });
-        assert(std.sort.binarySearch(INode, self.inodes.items, key, INode.lowerBoundFn) == null, "the key is should be deleted, key: {s}", .{key});
+        const indexRef = self.searchInodes2(key);
+        var inode = self.inodes.orderedRemove(indexRef.index);
+        assert(indexRef.exact, "the key is not found, key: {s}, index: {d}, node len: {d}, node key: {s}", .{ key, indexRef.index, self.inodes.items.len, inode.key.? });
+        // free the inode
+        inode.deinit(self.arenaAllocator.allocator());
+        if (self.inodes.items.len == 0) {
+            const keyPtr = if (self.key) |k| @intFromPtr(k.ptr) else 0;
+            std.log.info("the node is empty, id: {d}, pgid: {d}, ptr: 0x{x}, keyPtr: 0x{x}", .{ self.id, self.pgid, self.nodePtrInt(), keyPtr });
+        }
         // Mark the node as needing rebalancing.
         self.unbalance = true;
         // self.printKeysString();
+        return indexRef.index;
     }
 
     /// Read initializes the node from a page.
@@ -264,7 +274,7 @@ pub const Node = struct {
         self.pgid = p.id;
         self.isLeaf = p.isLeaf();
         self.inodes.resize(0) catch unreachable;
-        std.log.info("read page, pgid: {}, isLeaf: {}, count:{}, overflow:{}", .{ p.id, self.isLeaf, p.count, p.overflow });
+        // std.log.info("read page, pgid: {}, isLeaf: {}, count:{}, overflow:{}", .{ p.id, self.isLeaf, p.count, p.overflow });
         for (0..@as(usize, p.count)) |i| {
             var inode = INode.init(0, 0, null, null);
             if (self.isLeaf) {
@@ -287,13 +297,17 @@ pub const Node = struct {
 
         // Save first key so we can find the node in the parent when we spill.
         if (self.inodes.items.len > 0) {
-            self.key = self.allocator.dupe(u8, self.inodes.items[0].key.?) catch unreachable;
+            self.key = self.arenaAllocator.allocator().dupe(u8, self.inodes.items[0].key.?) catch unreachable;
             assert(self.key.?.len > 0, "key is null, id: {d}, ptr: 0x{x}", .{ self.id, self.nodePtrInt() });
         } else {
             // Note: if the node is the top node, it is a empty bucket without name, so it key is empty
             self.key = null;
         }
-        // std.log.info("ptr: 0x{x}, id: {d}, key: {}", .{ self.nodePtrInt(), self.id, self.key == null });
+        if (@import("builtin").is_test) {
+            const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
+            const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
+            std.log.info("read node from page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len });
+        }
     }
 
     /// Writes the items into one or more pages.
@@ -305,12 +319,12 @@ pub const Node = struct {
         } else {
             p.flags |= consts.intFromFlags(.branch);
         }
-
+        assert(p.count == 0, "the page count is not zero, pgid: {d}, count: {d}", .{ p.id, p.count });
         assert(self.inodes.items.len < 0xFFFF, "inode({}) overflow: {} > {}", .{ p.id, self.inodes.items.len, 0xFFFF });
         p.count = @as(u16, @intCast(self.inodes.items.len));
         // Stop here if there are no items to write.
         if (p.count == 0) {
-            std.log.info("no inode need write, pgid={}, flags: {any}", .{ p.id, consts.toFlags(p.flags) });
+            // std.log.info("no inode need write, pgid={}, flags: {any}", .{ p.id, consts.toFlags(p.flags) });
             return 0;
         }
         // |e1|e2|e3|b1|b2|b3|
@@ -320,7 +334,11 @@ pub const Node = struct {
         var b = p.asSlice()[dataStart..];
         // assert(b.len >= (self.pageElementSize() * self.inodes.items.len), "the page({d}) is too small to write all inodes, data size: {d}, need size: {d}", .{ p.id, dataSlice.len, self.pageElementSize() * self.inodes.items.len });
         var written: usize = 0;
-        std.log.info("write node into page(ptr: 0x{x}, id: {d}, flags: {any}), countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ @intFromPtr(p), p.id, consts.toFlags(p.flags), p.count, p.overflow, p.asSlice().len, b.len });
+        if (@import("builtin").is_test) {
+            const firstKey = if (self.inodes.items.len > 0) self.inodes.items[0].key.? else "";
+            const lastkey = if (self.inodes.items.len > 0) self.inodes.getLast().key.? else "";
+            std.log.info("write node(nodeid: {d}) into page(ptr: 0x{x}, id: {d}, flags: {any}), key[{any}->{any}] countElement: {d}, overflow: {d}, pageSize: {d}, bSize: {d}", .{ self.pgid, @intFromPtr(p), p.id, consts.toFlags(p.flags), firstKey, lastkey, p.count, p.overflow, p.asSlice().len, b.len });
+        }
         // Loop pver each inode and write it to the page.
         for (self.inodes.items, 0..) |inode, i| {
             assert(inode.key.?.len > 0, "write: zero-length inode key", .{});
@@ -346,7 +364,6 @@ pub const Node = struct {
             // See: https://github.com/boltdb/bolt/pull/335
             const kLen = inode.key.?.len;
             const vLen: usize = if (inode.value) |value| value.len else 0;
-            // assert(b.len >= (kLen + vLen), "it should be not happen, i: {d}, key: {s}, kLen: {d}, vLen: {d}, b.len: {d}", .{ i, inode.key.?, kLen, vLen, b.len });
             written += kLen + vLen;
             // Write data for the element to the end of the page.
             std.mem.copyForwards(u8, b[0..kLen], inode.key.?);
@@ -355,7 +372,6 @@ pub const Node = struct {
                 std.mem.copyForwards(u8, b[0..vLen], value);
                 b = b[vLen..];
             }
-            // std.log.info("inode: btr: {}, {s}", .{ @intFromPtr(b.ptr), inode.key.? });
         }
         // const deump = p.asSlice();
         // std.log.info("deump: {any}", .{deump});
@@ -365,28 +381,31 @@ pub const Node = struct {
 
     /// Split breaks up a node into multiple smaller nodes, If appropriate.
     /// This should only be called from the spill() function.
-    fn split(self: *Self, _pageSize: usize) []*Node {
-        var nodes = std.ArrayList(*Node).init(self.allocator);
+    pub fn split(self: *Self, _pageSize: usize) std.ArrayList(*Node) {
+        var nodes = std.ArrayList(*Node).init(self.arenaAllocator.allocator());
         var curNode = self;
         while (true) {
             // Split node into two.
-            const count = curNode.inodes.items.len;
             const a, const b = curNode.splitTwo(_pageSize);
             nodes.append(a.?) catch unreachable;
             // a.?.printKeysString();
             // If we can't split then exit the loop.
             if (b == null) {
-                std.log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
+                // log.info("the node is not need to split, id: {d}, key: {s}, hasParent: {}", .{ curNode.pgid, curNode.key orelse "empty", a.?.parent != null });
                 break;
             } else {
-                std.log.info("the node[{d} -> a: {d}, b: {d}] is need to split, isLeaf: {}", .{ count, a.?.inodes.items.len, b.?.inodes.items.len, a.?.isLeaf });
+                // const aFirstKey = a.?.inodes.items[0].key.?;
+                // const aLastKey = a.?.inodes.items[a.?.inodes.items.len - 1].key.?;
+                // const bFirstKey = b.?.inodes.items[0].key.?;
+                // const bLastKey = b.?.inodes.items[b.?.inodes.items.len - 1].key.?;
+                // log.info("the node[ a=>[len:{d}, key:{any}-{any}], b=>[len:{d}, key:{any}-{any}]] is need to split, isLeaf: {}", .{ a.?.inodes.items.len, aFirstKey, aLastKey, b.?.inodes.items.len, bFirstKey, bLastKey, a.?.isLeaf });
             }
 
             // Set node to be so it gets split on the next function.
             curNode = b.?;
         }
 
-        return nodes.toOwnedSlice() catch unreachable;
+        return nodes;
     }
 
     // Breaks up a node into two smaller nodes, if approprivate.
@@ -399,43 +418,38 @@ pub const Node = struct {
         }
 
         // Determine the threshold before starting a new node.
-        var fillPercent = self.bucket.?.fillPercent;
-        if (fillPercent < consts.MinFillPercent) {
-            fillPercent = consts.MinFillPercent;
-        } else if (fillPercent > consts.MaxFillPercent) {
-            fillPercent = consts.MaxFillPercent;
-        }
-
-        const fPageSize: f64 = @floatFromInt(_pageSize);
-        const threshold = @as(usize, @intFromFloat(fPageSize * fillPercent));
-
+        const fillPercent = self.bucket.?.fillPercent;
+        const threshold = consts.calThreshold(fillPercent, _pageSize);
         // Determin split position and sizes of the two pages.
         const _splitIndex, _ = self.splitIndex(threshold);
-
+        assert(_splitIndex < self.inodes.items.len, "the split index is out of range, index: {}, inodes len: {}", .{ _splitIndex, self.inodes.items.len });
+        // std.log.err("split index: {}, threshold: {}, fillPercent: {d}, inodes len: {}", .{ _splitIndex, threshold, fillPercent, self.inodes.items.len });
         // Split node into two separate nodes.
         // if the node is the root node, then create a new node as the parent node
         // and set the current node as the child node
         if (self.parent == null) {
-            self.parent = Node.init(self.allocator);
+            self.parent = Node.init(self.getAllocator());
             self.parent.?.bucket = self.bucket;
             self.parent.?.children.append(self) catch unreachable; // children also is you!
-            self.bucket.?.tx.?.autoFreeNodes.addNode(self.parent.?);
+            self.bucket.?.tx.?.autoFreeNodes.?.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
-        const next = Node.init(self.allocator);
-        // self.bucket.?.autoFreeObject.addNode(next);
-        self.bucket.?.tx.?.autoFreeNodes.addNode(next);
+        const next = Node.init(self.bucket.?.getAllocator());
         next.bucket = self.bucket;
         next.isLeaf = self.isLeaf;
         next.parent = self.parent;
+        // TODO: maybe here is a bug
         self.parent.?.children.append(next) catch unreachable;
-
-        // Split inodes across two nodes.
+        next.inodes.ensureTotalCapacity(self.inodes.items.len - _splitIndex) catch unreachable;
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
+        assert(next.inodes.items.len == (self.inodes.items.len - _splitIndex), "the next node's inodes length is not equal to the self node's inodes length - the split index", .{});
         // shrink self.inodes to _splitIndex
         self.inodes.resize(_splitIndex) catch unreachable;
-
+        // const firstKey = self.inodes.items[0].key.?;
+        // const lastKey = self.inodes.getLast().key.?;
+        // std.log.err("split node, self: {s}-{s}, next: {s}-{s}", .{ firstKey, lastKey, next.inodes.items[0].key.?, next.inodes.items[next.inodes.items.len - 1].key.? });
+        assert(self.inodes.items.len == _splitIndex, "the self node's inodes length is not equal to the split index", .{});
         // Update the statistics.
         self.bucket.?.tx.?.stats.split += 1;
 
@@ -451,43 +465,40 @@ pub const Node = struct {
     /// It returns the index as well as the size of the first page.
     /// This is only be called from split().
     fn splitIndex(self: *Self, threshold: usize) [2]usize {
-        var sz = self.bucket.?.tx.?.db.?.pageSize;
-        if (self.inodes.items.len <= consts.MinKeysPage) {
-            return [2]usize{ 0, sz };
-        }
-        // Loop until we only have the minmum number of keys required for the second page.
-        var inodeIndex: usize = 0;
-        // count is used to avoid the overflow of the usize
-        var count: usize = 0;
-        for (self.inodes.items, 0..) |inode, i| {
+        var sz = Page.headerSize();
+        // Loop until we only have the minimum number of keys required for the second page.
+        var i: usize = 0;
+        var index: usize = 0;
+        while (i < self.inodes.items.len - consts.MinKeysPage) {
+            const inode = self.inodes.items[i];
             var elsize = self.pageElementSize() + inode.key.?.len;
             if (inode.value) |value| {
                 elsize += value.len;
             }
-            inodeIndex = i;
-
             // If we have at least the minimum number of keys and adding another
-            // node would put us over the threshold then exit and return
-            if (inodeIndex >= self.inodes.items.len and sz + elsize > threshold) {
+            // node would put us over the threshold then exit and return.
+            if (i >= consts.MinKeysPage and (sz + elsize) > threshold) {
                 break;
             }
-            count += 1;
-            if (count >= 0xFFFF) {
-                break;
-            }
-
-            // Add the element size the total size.
+            // Add the element size to the total size.
+            index = i;
             sz += elsize;
+            i += 1;
         }
-
-        return [2]usize{ inodeIndex, sz };
+        return [2]usize{ index, sz };
     }
 
     /// Writes the nodes to dirty pages and splits nodes as it goes.
     /// Returns and error if dirty pages cannot be allocated
     pub fn spill(self: *Self) !void {
         if (self.spilled) {
+            // log.debug("the node has already spilled, pgid: {d}", .{self.pgid});
             return;
+        }
+        const pgid = self.pgid;
+        if (@import("builtin").is_test) {
+            log.info("\t.start spill node: {d}, isLeaf: {}", .{ pgid, self.isLeaf });
+            defer log.info("\t.end spill node: {d}", .{pgid});
         }
         const _tx = self.bucket.?.tx.?;
         const _db = _tx.getDB();
@@ -506,11 +517,9 @@ pub const Node = struct {
             {},
             lessFn,
         );
-
-        for (self.children.items, 0..) |child, i| {
-            if (i > 0) {
-                assert(std.mem.order(u8, self.children.items[i].key.?, self.children.items[i - 1].key.?) == .gt, "the children node is not in order", .{});
-            }
+        for (0..self.children.items.len) |i| {
+            const child = self.children.items[i];
+            // std.log.debug("spill child node: {d}, index: {d}", .{ child.pgid, i });
             try child.spill();
         }
         // We no longer need the children list because it's only used for spilling tracking.
@@ -518,14 +527,16 @@ pub const Node = struct {
 
         // Split nodes into approprivate sizes, The first node will always be n.
         const nodes = self.split(_db.pageSize);
-        defer self.allocator.free(nodes);
-        std.log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.len, self.key orelse "empty" });
-        for (nodes, 0..) |node, i| {
-            _ = i; // autofix
+        defer nodes.deinit();
+        // log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.items.len, self.key orelse "empty" });
+        for (nodes.items) |node| {
+            // log.debug("spill node: {d}, count:{}, index: {d}", .{ node.pgid, nodes.items.len, i });
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
+                // log.debug("free a page to freelist, pgid: {}", .{node.pgid});
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
+                // reset the pgid to 0, so the node will be a new node.
                 node.pgid = 0;
             }
             // Allocate contiguous space for the node.(COW: Copy on Write)
@@ -540,37 +551,36 @@ pub const Node = struct {
             // Insert into parent inodes
             if (node.parent) |parent| {
                 const key: []const u8 = node.key orelse node.inodes.items[0].key.?;
-                const oldKey = self.allocator.dupe(u8, key) catch unreachable;
-                const newKey = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+                const oldKey = parent.arenaAllocator.allocator().dupe(u8, key) catch unreachable;
+                const newKey = parent.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 _ = parent.put(oldKey, newKey, null, node.pgid, 0);
-                if (node.key != null) {
-                    self.allocator.free(node.key.?);
-                }
-                node.key = self.allocator.dupe(u8, node.inodes.items[0].key.?) catch unreachable;
+                node.key = node.arenaAllocator.allocator().dupe(u8, node.inodes.items[0].key.?) catch unreachable;
                 assert(node.key.?.len > 0, "spill: zero-length node key", .{});
-                std.log.debug("spill a node from parent, pgid: {d}, key: {s}", .{ node.pgid, node.key.? });
+                // log.debug("spill a node from parent, parent's pgid: {d}, parent's inodes len: {d}, children len: {d}, node's pgid: {d}, key: {s}", .{ parent.pgid, parent.inodes.items.len, parent.children.items.len, node.pgid, node.key.? });
             } // so, if the node is the first node, then the node will be the root node, and the node's parent will be null, the node's key also be null>>>
 
             // Update the statistics.
             _tx.stats.spill += 1;
         }
-        self.safeCheck();
+        // self.safeCheck();
         // If the root node split and created a new root then we need to spill that
         // as well. We'll clear out the children to make sure it doesn't try to respill.
         if (self.parent != null and self.parent.?.pgid == 0) {
-            // self.children.clearAndFree();
+            self.children.clearAndFree();
             return self.parent.?.spill();
         }
+        // log.debug("Try to spill parent, pgid: {d}", .{self.pgid});
     }
 
     /// Attempts to combine the node with sibling nodes if the node fill
     /// size is below a threshold or if there are not enough keys.
     pub fn rebalance(self: *Self) void {
         if (!self.unbalance) {
+            // std.log.debug("i has rebalance, pgid: {}", .{self.pgid});
             return;
         }
         self.unbalance = false;
-        std.log.debug("rebalance node: {d}", .{self.pgid});
+        // std.log.info("rebalance node: {d}", .{self.pgid});
 
         // Update statistics.
         self.bucket.?.tx.?.stats.rebalance += 1;
@@ -578,25 +588,31 @@ pub const Node = struct {
         // Ignore if node is above threshold (25%) and has enough keys.
         const threshold = self.bucket.?.tx.?.db.?.pageSize / 4;
         if (self.size() > threshold and self.inodes.items.len > self.minKeys()) {
-            std.log.debug("the node size is too large, so don't rebalance: {d}", .{self.pgid});
+            // std.log.debug("the node size is too large, so don't rebalance: {d}", .{self.pgid});
             return;
         }
 
         // Root node has special handling.
         if (self.parent == null) {
-            std.log.debug("the node parent is null, so rebalance root node: {d}\n", .{self.pgid});
+            // std.log.debug("the node parent is null, so rebalance root node: {d}\n", .{self.pgid});
             // If root node is a branch and only has one node then collapse it.
             if (!self.isLeaf and self.inodes.items.len == 1) {
                 // Move root's child up.
                 const child: *Self = self.bucket.?.node(self.inodes.items[0].pgid, self);
                 self.isLeaf = child.isLeaf;
-                self.inodes = child.inodes;
-                self.children = child.children;
+                {
+                    self.inodes.clearAndFree();
+                    self.inodes.appendSlice(child.inodes.items) catch unreachable;
+                    self.children.clearAndFree();
+                    self.children.appendSlice(child.children.items) catch unreachable;
+                    assert(self.inodes.items.len == self.inodes.items.len, "the inodes length is not equal to the child inodes length", .{});
+                    assert(self.children.items.len == child.children.items.len, "the children length is not equal to the child children length", .{});
+                }
 
                 // Reparent all child nodes being moved.
                 // TODO why not skip the first key
                 for (self.inodes.items) |inode| {
-                    if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                    if (self.bucket.?.nodes.?.get(inode.pgid)) |_child| {
                         _child.parent = self;
                     }
                 }
@@ -604,24 +620,37 @@ pub const Node = struct {
                 // Remove old child. because the node also be stored in the node's children,
                 // so we should remove the child directly and recycle it.
                 child.parent = null;
-                _ = self.bucket.?.nodes.remove(child.pgid);
+                const exist = self.bucket.?.nodes.?.remove(child.pgid);
+                assert(exist, "rebalance: node({d}) not found in nodes map", .{child.pgid});
                 child.free();
+                child.deinitWhenRemoved();
+                // std.log.debug("only one child, merge it, pgid: {d}, ptr: 0x{x}, key={any}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.nodePtrInt(), self.key orelse "empty", self.isLeaf, self.inodes.items.len });
                 return;
             }
-            std.debug.print("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}\n", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
+            // std.log.debug("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
             return;
         } else {
-            std.log.debug("the node parent is not null, so rebalance: {d}, parent: {d}", .{ self.pgid, self.parent.?.pgid });
+            // std.log.debug("the node parent is not null, so rebalance: {d}, parent: {d}", .{ self.pgid, self.parent.?.pgid });
         }
 
         // If node has no keys then just remove it.
         if (self.numChildren() == 0) {
-            self.parent.?.del(self.key.?);
+            // remove self from parent reference.
+            const index = self.parent.?.del(self.key.?);
+            assert(index != null, "the node({d}) not found in parent inodes", .{self.pgid});
             self.parent.?.removeChild(self);
-            const exists = self.bucket.?.nodes.remove(self.pgid);
+            // remove self from node.
+            const exists = self.bucket.?.nodes.?.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
+            // free reference page to db.
+            const oldPgid = self.pgid;
             self.free();
+            // continue reblance parent.
             self.parent.?.rebalance();
+            // destroy self.
+            const key = if (self.key == null) "" else self.key.?;
+            std.log.info("destroy self, key={any}, id: {d}, pgid: {d}, ptr: 0x{x}, keyPtr: 0x{x}, parentPtr: 0x{x}, parentInodesLen: {d}", .{ key, self.id, oldPgid, self.nodePtrInt(), @intFromPtr(self.key.?.ptr), self.parent.?.nodePtrInt(), self.parent.?.inodes.items.len });
+            self.deinitAndDestroy();
             return;
         }
 
@@ -640,8 +669,7 @@ pub const Node = struct {
         if (useNextSlibling) {
             // Reparent all child nodes being moved.
             for (self.inodes.items) |inode| {
-                // 难道有些数据没在bucket.nodes里面？
-                if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                if (self.bucket.?.nodes.?.get(inode.pgid)) |_child| {
                     _child.parent.?.removeChild(_child);
                     _child.parent = self;
                     _child.parent.?.children.append(_child) catch unreachable;
@@ -650,13 +678,14 @@ pub const Node = struct {
 
             // Copy over inodes from target and remove target.
             self.inodes.appendSlice(target.?.inodes.items) catch unreachable;
-            self.parent.?.del(target.?.key.?);
-            _ = self.bucket.?.nodes.remove(target.?.pgid);
+            const index = self.parent.?.del(target.?.key.?);
+            assert(index != null, "rebalance: node({d}) not found in parent inodes", .{target.?.pgid});
+            _ = self.bucket.?.nodes.?.remove(target.?.pgid);
             target.?.free();
         } else {
             // Reparent all child nodes being moved.
             for (self.inodes.items) |inode| {
-                if (self.bucket.?.nodes.get(inode.pgid)) |_child| {
+                if (self.bucket.?.nodes.?.get(inode.pgid)) |_child| {
                     _child.parent.?.removeChild(_child);
                     _child.parent = target;
                     _child.parent.?.children.append(_child) catch unreachable;
@@ -665,9 +694,10 @@ pub const Node = struct {
 
             // Copy over inodes to target and remove node.
             target.?.inodes.appendSlice(self.inodes.items) catch unreachable;
-            self.parent.?.del(self.key.?);
+            const index = self.parent.?.del(self.key.?);
+            assert(index != null, "rebalance: node({d}) not found in parent inodes", .{self.pgid});
             self.parent.?.removeChild(self);
-            _ = self.bucket.?.nodes.remove(self.pgid);
+            _ = self.bucket.?.nodes.?.remove(self.pgid);
             self.free();
         }
 
@@ -680,7 +710,9 @@ pub const Node = struct {
     fn removeChild(self: *Self, target: *Node) void {
         for (self.children.items, 0..) |child, i| {
             if (child == target) {
-                _ = self.children.orderedRemove(i);
+                // TODO mybey we should check the child is in the children list.
+                const childNode = self.children.orderedRemove(i);
+                assert(childNode.nodePtrInt() == target.nodePtrInt(), "the child is not in the children list", .{});
                 return;
             }
         }
@@ -690,20 +722,20 @@ pub const Node = struct {
     // This is required when `mmap` is reallocated so *inodes* are not pointing to stale data.
     pub fn dereference(self: *Self) void {
         if (self.key != null) {
-            const cpKey = self.allocator.dupe(u8, self.key.?) catch unreachable;
+            const cpKey = self.arenaAllocator.allocator().dupe(u8, self.key.?) catch unreachable;
             // self.allocator.free(self.key.?);
             self.key = cpKey;
             assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
         }
 
         for (self.inodes.items) |*inode| {
-            const newKey = self.allocator.dupe(u8, inode.key.?) catch unreachable;
+            const newKey = self.arenaAllocator.allocator().dupe(u8, inode.key.?) catch unreachable;
             // self.allocator.free(inode.key.?);
             inode.key = newKey;
             assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
-                const newValue = self.allocator.dupe(u8, value) catch unreachable;
+                const newValue = self.arenaAllocator.allocator().dupe(u8, value) catch unreachable;
                 // self.allocator.free(value);
                 inode.value = newValue;
                 assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", .{});
@@ -727,11 +759,86 @@ pub const Node = struct {
         }
     }
 
+    /// get the pointer of the node
     pub fn nodePtrInt(self: *const Self) usize {
         return @intFromPtr(self);
     }
 
+    /// get the allocator of the node
+    pub fn getAllocator(self: *Self) std.mem.Allocator {
+        // std.log.err("arena allocator capacity: {d}", .{self.arenaAllocator.queryCapacity()});
+        return self.arenaAllocator.allocator();
+    }
+
+    /// binary search the key in the inodes
+    pub fn binarySearchInodes(self: *const Self, key: []const u8) ?usize {
+        const findFn = struct {
+            fn find(context: []const u8, item: INode) std.math.Order {
+                return std.mem.order(u8, context, item.key.?);
+            }
+        }.find;
+        return std.sort.binarySearch(INode, self.inodes.items, key, findFn);
+    }
+
+    /// Returns the index of the first element in `items` that is greater than or equal to `context`,
+    /// if no such element exists, returns `items.len`.
+    pub fn lowerBoundInodes(self: *const Self, key: []const u8) usize {
+        const lowerBoundFn = struct {
+            fn lower(context: []const u8, item: INode) std.math.Order {
+                return std.mem.order(u8, context, item.key.?);
+            }
+        }.lower;
+        return std.sort.lowerBound(INode, self.inodes.items, key, lowerBoundFn);
+    }
+
+    /// Returns the index of the first element in `items` that is greater than `context`,
+    /// if no such element exists, returns `items.len`.
+    pub fn upperBoundInodes(self: *const Self, key: []const u8) usize {
+        const upperBoundFn = struct {
+            fn upper(context: []const u8, item: INode) std.math.Order {
+                return std.mem.order(u8, context, item.key.?);
+            }
+        }.upper;
+        return std.sort.upperBound(INode, self.inodes.items, key, upperBoundFn);
+    }
+
+    /// search the key in the inodes, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
+    pub fn searchInodes(self: *const Self, key: []const u8) struct { index: usize, exact: bool } {
+        var left: usize = 0;
+        var right: usize = self.inodes.items.len;
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const element = self.inodes.items[mid];
+            const cmp = std.mem.order(u8, element.key.?, key);
+            switch (cmp) {
+                .eq => return .{ .index = mid, .exact = true },
+                .lt => left = mid + 1,
+                .gt => right = mid,
+            }
+        }
+        return .{ .index = left, .exact = false };
+    }
+
+    /// search the key in the inodes, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
+    pub fn searchInodes2(self: *const Self, key: []const u8) struct { index: usize, exact: bool } {
+        var left: usize = 0;
+        var right: usize = self.inodes.items.len;
+
+        while (left < right) {
+            const mid = left + (right - left) / 2;
+            const cmp = std.mem.order(u8, key, self.inodes.items[mid].key.?);
+
+            switch (cmp) {
+                .eq => return .{ .index = mid, .exact = true },
+                .lt => right = mid,
+                .gt => left = mid + 1,
+            }
+        }
+        return .{ .index = left, .exact = false };
+    }
+
     fn safeCheck(self: *const Self) void {
+        defer log.debug("pass safe check node: {d}, inodes len: {d}", .{ self.pgid, self.inodes.items.len });
         for (0..self.inodes.items.len) |i| {
             if (i > 0) {
                 const left = self.inodes.items[i - 1].key.?;
@@ -748,19 +855,24 @@ pub const Node = struct {
         }
     }
 
-    fn printKeysString(self: *const Self) void {
-        var keyStr = std.ArrayList(u8).init(self.allocator);
-        defer keyStr.deinit();
-        const cKey = self.key orelse "empty";
-        keyStr.writer().writeAll(cKey) catch unreachable;
-        keyStr.writer().writeAll("=>") catch unreachable;
+    /// Returns true if the key is reference to the first key of the node.
+    fn isFirstKeyReference(self: *const Self) bool {
+        if (self.key == null or self.inodes.items.len == 0) {
+            return false;
+        }
+        return self.inodes.items[0].key.?.ptr == self.key.?.ptr;
+    }
+
+    fn printKeysString(self: *Self) void {
+        std.log.debug("--->>id:{}, pgid:{}, inodes len: {d}<<--", .{ self.id, self.pgid, self.inodes.items.len });
+        var keyArray = std.ArrayList([]const u8).init(self.arenaAllocator.allocator());
+        defer keyArray.deinit();
         for (self.inodes.items) |inode| {
             const key = inode.key.?;
-            keyStr.writer().writeAll(key) catch unreachable;
-            keyStr.writer().writeByte(',') catch unreachable;
+            keyArray.append(key) catch unreachable;
         }
-        std.log.debug("{s}", .{keyStr.items});
-        std.log.debug("id:{}, pgid:{}, inodes len: {d}", .{ self.id, self.pgid, self.inodes.items.len });
+        std.log.debug("{any}", .{keyArray.items});
+        std.log.debug("--->>end<<--", .{});
     }
 };
 
@@ -823,20 +935,22 @@ pub const INode = struct {
     }
 
     /// deinit the inode
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *Self, _: ?std.mem.Allocator) void {
         if (!self.isNew) {
             return;
         }
-        if (self.key) |key| {
-            allocator.free(key);
-            self.key = null;
-        }
-        // TODO: Print the value address.(Eg: the value is a inline bucket value)
-        if (self.value) |value| {
-            //std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
-            allocator.free(value);
-            self.value = null;
-        }
+        // if (self.key) |key| {
+        //     _ = key; // autofix
+        //     // allocator.free(key);
+        //     // self.key = null;
+        // }
+        // // TODO: Print the value address.(Eg: the value is a inline bucket value)
+        // if (self.value) |value| {
+        //     _ = value; // autofix
+        //     //std.log.debug("free value: 0x{x}", .{@intFromPtr(value.ptr)});
+        //     // allocator.free(value);
+        //     self.value = null;
+        // }
     }
 
     /// lower bound of the key
@@ -848,51 +962,3 @@ pub const INode = struct {
 const INodes = std.ArrayList(INode);
 
 const Nodes = std.ArrayList(*Node);
-
-//
-// test "node" {
-//     const node = Node.init(std.testing.allocator);
-//     defer node.deinit();
-//     _ = node.root();
-//     _ = node.minKeys();
-//     const nodeSize = node.size();
-//     const lessThan = node.sizeLessThan(20);
-//     //_ = node.childAt(0);
-//     //_ = node.childIndex(node);
-//     //_ = node.numChildren();
-//     _ = node.nextSlibling();
-//     _ = node.preSlibling();
-//
-//     const pageSlice = try std.testing.allocator.alloc(u8, page.page_size);
-//     defer std.testing.allocator.free(pageSlice);
-//     // const pagePtr = page.Page.init(pageSlice);
-//     // @memset(pageSlice, 0);
-//     //node.read(pagePtr);
-//     // node.write(pagePtr);
-//     //  var oldKey = [_]u8{0};
-//     //  var newKey = [_]u8{0};
-//     //   var value = [_]u8{ 1, 2, 3 };
-//     //   node.put(oldKey[0..], newKey[0..], value[0..], 29, 0);
-//     // node.del("");
-//     std.debug.print("node size: {}, less: {}\n", .{ nodeSize, lessThan });
-//
-//     //   const n: usize = 14;
-//     //   var inodes = std.testing.allocator.alloc(*INode, n) catch unreachable;
-//     //   defer std.testing.allocator.free(inodes);
-//     //   defer freeInodes(std.testing.allocator, inodes);
-//     //   // random a number
-//     //   var rng = std.rand.DefaultPrng.init(10);
-//     //   for (0..n) |i| {
-//     //       const key = std.testing.allocator.alloc(u8, 10) catch unreachable;
-//     //       rng.fill(key);
-//     //       const inode = INode.init(0x10, 0x20, key, null);
-//     //       inodes[i] = inode;
-//     //   }
-//     //   sortINodes(inodes);
-//     //
-//     //   for (inodes) |inode| {
-//     //       std.debug.print("\n{any}\n", .{inode.key.?});
-//     //   }
-// }
-
-test "bufstr" {}

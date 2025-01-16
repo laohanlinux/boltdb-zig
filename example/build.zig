@@ -15,31 +15,32 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create module
-    _ = b.addModule("boltdb", .{
-        .root_source_file = b.path("src/namespace.zig"),
-    });
-
     const lib = b.addStaticLibrary(.{
-        .name = "boltdb-zig",
+        .name = "example",
         // In this case the main source file is merely a path, however, in more
         // complicated build scripts, this could be a generated file.
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
     b.installArtifact(lib);
+    const boltdbDep = b.dependency("boltdb-zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const exe = b.addExecutable(.{
-        .name = "boltdb-zig",
+        .name = "example",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
 
+    exe.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
@@ -75,6 +76,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    lib_unit_tests.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
@@ -83,6 +85,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe_unit_tests.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
