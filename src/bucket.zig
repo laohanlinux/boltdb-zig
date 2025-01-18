@@ -19,8 +19,6 @@ const NodeSet = std.AutoHashMap(*Node, void);
 // A set of aligned values that will be freed by the bucket.
 pub const AutoFreeObject = struct {
     isFreed: bool = false,
-    // A set of bytes that will be freed by the bucket.
-    autoFreeBytes: std.AutoHashMap(u64, []u8),
     // A set of nodes that will be freed by the bucket.
     // 1: Note, the bucket.nodes is not in the autoFreeObject, so we need to destroy it manually.
     // But the bucket.rootNode is in the autoFreeObject, so we don't need to destroy it manually.
@@ -28,7 +26,6 @@ pub const AutoFreeObject = struct {
     // So, we need to destroy it manually.
     // 2: the nodes of autoFreeNodes is a new node that created after tx.commit(Copy on Write), their are is a spill node, a snapshot node, a new node.
     autoFreeNodes: NodeSet,
-    freePtrs: std.AutoArrayHashMap(u64, isize),
     allocSize: usize = 0,
 
     allocator: std.mem.Allocator,
@@ -37,40 +34,15 @@ pub const AutoFreeObject = struct {
         return .{
             .autoFreeNodes = NodeSet.init(allocator),
             .allocator = allocator,
-            .freePtrs = std.AutoArrayHashMap(u64, isize).init(allocator),
-            .autoFreeBytes = std.AutoHashMap(u64, []u8).init(allocator),
         };
     }
 
     /// Add a node to the auto free object.
     pub fn addNode(self: *AutoFreeObject, node: *Node) void {
-        const key = node.key orelse "";
         self.allocSize += node.size();
         const gop = self.autoFreeNodes.getOrPut(node) catch unreachable;
         const ptr = @intFromPtr(node);
-        // assert(gop.found_existing == false, "the node({}: 0x{x}, {d}) is already in the auto free nodes", .{ node.pgid, ptr, node.id });
-        if (gop.found_existing) {
-            std.log.debug("the node({s}, {}: 0x{x}, {d}) is already in the auto free nodes", .{ key, node.pgid, ptr, node.id });
-        }
-        std.log.info("add node to the auto free nodes, key: {s}, pgid: {d}, ptr: 0x{x}, id: {d}, allocSize: {d}", .{ key, node.pgid, ptr, node.id, self.allocSize });
-    }
-
-    /// Add a byte slice to the auto free object.
-    pub fn addAutoFreeBytes(self: *AutoFreeObject, value: []u8) void {
-        const ptr = @intFromPtr(value.ptr);
-        const got = self.autoFreeBytes.getOrPut(ptr) catch unreachable;
-        if (got.found_existing) {
-            // std.log.debug("the auto free bytes({}: 0x{x}) is already in the auto free bytes", .{ value.len, ptr });
-        } else {
-            got.value_ptr.* = value;
-            self.allocSize += value.len;
-            // std.log.info("add auto free bytes, size: {d}, ptr: 0x{x}, allocSize: {d}", .{ value.len, ptr, self.allocSize });
-        }
-    }
-
-    /// Get the alloc size.
-    pub fn getAllocSize(self: *AutoFreeObject) usize {
-        return self.allocSize;
+        assert(gop.found_existing == false, "the node({}: 0x{x}, {d}) is already in the auto free nodes", .{ node.pgid, ptr, node.id });
     }
 
     /// Deinit the auto free object.
@@ -80,14 +52,10 @@ pub const AutoFreeObject = struct {
         {
             var it = self.autoFreeNodes.keyIterator();
             while (it.next()) |node| {
-                const ptr = @intFromPtr(node);
                 node.*.deinit();
-                self.freePtrs.put(ptr, 1) catch unreachable;
             }
             self.autoFreeNodes.deinit();
         }
-
-        self.freePtrs.deinit();
     }
 };
 

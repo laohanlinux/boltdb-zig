@@ -431,7 +431,7 @@ pub const Node = struct {
             self.parent = Node.init(self.getAllocator());
             self.parent.?.bucket = self.bucket;
             self.parent.?.children.append(self) catch unreachable; // children also is you!
-            self.bucket.?.tx.?.autoFreeNodes.?.addNode(self.parent.?);
+            // self.bucket.?.tx.?.autoFreeNodes.?.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
