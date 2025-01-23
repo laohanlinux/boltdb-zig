@@ -253,7 +253,7 @@ pub const Node = struct {
     pub fn del(self: *Self, key: []const u8) ?usize {
         // std.log.debug("del key: {any} at node: {d}", .{ key, self.pgid });
         // Find index of key.
-        const indexRef = self.searchInodes2(key);
+        const indexRef = self.searchInodes(key);
         var inode = self.inodes.orderedRemove(indexRef.index);
         assert(indexRef.exact, "the key is not found, key: {s}, index: {d}, node len: {d}, node key: {s}", .{ key, indexRef.index, self.inodes.items.len, inode.key.? });
         // free the inode
@@ -431,7 +431,7 @@ pub const Node = struct {
             self.parent = Node.init(self.getAllocator());
             self.parent.?.bucket = self.bucket;
             self.parent.?.children.append(self) catch unreachable; // children also is you!
-            self.bucket.?.tx.?.autoFreeNodes.?.addNode(self.parent.?);
+            // self.bucket.?.tx.?.autoFreeNodes.?.addNode(self.parent.?);
         }
 
         // Create a new node and add it to the parent.
@@ -439,7 +439,6 @@ pub const Node = struct {
         next.bucket = self.bucket;
         next.isLeaf = self.isLeaf;
         next.parent = self.parent;
-        // TODO: maybe here is a bug
         self.parent.?.children.append(next) catch unreachable;
         next.inodes.ensureTotalCapacity(self.inodes.items.len - _splitIndex) catch unreachable;
         next.inodes.appendSlice(self.inodes.items[_splitIndex..]) catch unreachable;
@@ -506,20 +505,18 @@ pub const Node = struct {
         // Spill child nodes first. Child nodes can materialize sibling nodes in
         // the case of split-merge so we cannot use a range loop. We have to check
         // the children size on every loop iteration.
-        const lessFn = struct {
-            fn less(_: void, a: *Node, b: *Node) bool {
-                return std.mem.order(u8, a.key.?, b.key.?) == .lt;
-            }
-        }.less;
         std.mem.sort(
             *Node,
             self.children.items,
             {},
-            lessFn,
+            struct {
+                fn lessFn(_: void, a: *Node, b: *Node) bool {
+                    return std.mem.order(u8, a.key.?, b.key.?) == .lt;
+                }
+            }.lessFn,
         );
         for (0..self.children.items.len) |i| {
             const child = self.children.items[i];
-            // std.log.debug("spill child node: {d}, index: {d}", .{ child.pgid, i });
             try child.spill();
         }
         // We no longer need the children list because it's only used for spilling tracking.
@@ -530,11 +527,9 @@ pub const Node = struct {
         defer nodes.deinit();
         // log.debug("pgid: {d}, nodeid: 0x{x}, nodes size: {d}, key: {s}", .{ self.pgid, self.nodePtrInt(), nodes.items.len, self.key orelse "empty" });
         for (nodes.items) |node| {
-            // log.debug("spill node: {d}, count:{}, index: {d}", .{ node.pgid, nodes.items.len, i });
             // Add node's page to the freelist if it's not new.
             // (it is the first one, because split node from left to right!)
             if (node.pgid > 0) {
-                // log.debug("free a page to freelist, pgid: {}", .{node.pgid});
                 try _db.freelist.free(_tx.meta.txid, _tx.getPage(node.pgid));
                 // reset the pgid to 0, so the node will be a new node.
                 node.pgid = 0;
@@ -562,21 +557,18 @@ pub const Node = struct {
             // Update the statistics.
             _tx.stats.spill += 1;
         }
-        // self.safeCheck();
         // If the root node split and created a new root then we need to spill that
         // as well. We'll clear out the children to make sure it doesn't try to respill.
         if (self.parent != null and self.parent.?.pgid == 0) {
             self.children.clearAndFree();
             return self.parent.?.spill();
         }
-        // log.debug("Try to spill parent, pgid: {d}", .{self.pgid});
     }
 
     /// Attempts to combine the node with sibling nodes if the node fill
     /// size is below a threshold or if there are not enough keys.
     pub fn rebalance(self: *Self) void {
         if (!self.unbalance) {
-            // std.log.debug("i has rebalance, pgid: {}", .{self.pgid});
             return;
         }
         self.unbalance = false;
@@ -588,7 +580,6 @@ pub const Node = struct {
         // Ignore if node is above threshold (25%) and has enough keys.
         const threshold = self.bucket.?.tx.?.db.?.pageSize / 4;
         if (self.size() > threshold and self.inodes.items.len > self.minKeys()) {
-            // std.log.debug("the node size is too large, so don't rebalance: {d}", .{self.pgid});
             return;
         }
 
@@ -629,10 +620,7 @@ pub const Node = struct {
             }
             // std.log.debug("nothing need to rebalance at root: {d}, key={s}, isLeaf: {}, inodes len: {d}", .{ self.pgid, self.key orelse "empty", self.isLeaf, self.inodes.items.len });
             return;
-        } else {
-            // std.log.debug("the node parent is not null, so rebalance: {d}, parent: {d}", .{ self.pgid, self.parent.?.pgid });
         }
-
         // If node has no keys then just remove it.
         if (self.numChildren() == 0) {
             // remove self from parent reference.
@@ -643,13 +631,9 @@ pub const Node = struct {
             const exists = self.bucket.?.nodes.?.remove(self.pgid);
             assert(exists, "rebalance: node({d}) not found in nodes map", .{self.pgid});
             // free reference page to db.
-            const oldPgid = self.pgid;
             self.free();
             // continue reblance parent.
             self.parent.?.rebalance();
-            // destroy self.
-            const key = if (self.key == null) "" else self.key.?;
-            std.log.info("destroy self, key={any}, id: {d}, pgid: {d}, ptr: 0x{x}, keyPtr: 0x{x}, parentPtr: 0x{x}, parentInodesLen: {d}", .{ key, self.id, oldPgid, self.nodePtrInt(), @intFromPtr(self.key.?.ptr), self.parent.?.nodePtrInt(), self.parent.?.inodes.items.len });
             self.deinitAndDestroy();
             return;
         }
@@ -710,7 +694,6 @@ pub const Node = struct {
     fn removeChild(self: *Self, target: *Node) void {
         for (self.children.items, 0..) |child, i| {
             if (child == target) {
-                // TODO mybey we should check the child is in the children list.
                 const childNode = self.children.orderedRemove(i);
                 assert(childNode.nodePtrInt() == target.nodePtrInt(), "the child is not in the children list", .{});
                 return;
@@ -723,20 +706,17 @@ pub const Node = struct {
     pub fn dereference(self: *Self) void {
         if (self.key != null) {
             const cpKey = self.arenaAllocator.allocator().dupe(u8, self.key.?) catch unreachable;
-            // self.allocator.free(self.key.?);
             self.key = cpKey;
             assert(self.pgid == 0 or self.key != null and self.key.?.len > 0, "deference: zero-length node key on existing node", .{});
         }
 
         for (self.inodes.items) |*inode| {
             const newKey = self.arenaAllocator.allocator().dupe(u8, inode.key.?) catch unreachable;
-            // self.allocator.free(inode.key.?);
             inode.key = newKey;
             assert(inode.key != null and inode.key.?.len > 0, "deference: zero-length inode key on existing node", .{});
             // If the value is not null
             if (inode.value) |value| {
                 const newValue = self.arenaAllocator.allocator().dupe(u8, value) catch unreachable;
-                // self.allocator.free(value);
                 inode.value = newValue;
                 assert(inode.value != null and inode.value.?.len > 0, "deference: zero-length inode value on existing node", .{});
             }
@@ -766,64 +746,13 @@ pub const Node = struct {
 
     /// get the allocator of the node
     pub fn getAllocator(self: *Self) std.mem.Allocator {
-        // std.log.err("arena allocator capacity: {d}", .{self.arenaAllocator.queryCapacity()});
         return self.arenaAllocator.allocator();
-    }
-
-    /// binary search the key in the inodes
-    pub fn binarySearchInodes(self: *const Self, key: []const u8) ?usize {
-        const findFn = struct {
-            fn find(context: []const u8, item: INode) std.math.Order {
-                return std.mem.order(u8, context, item.key.?);
-            }
-        }.find;
-        return std.sort.binarySearch(INode, self.inodes.items, key, findFn);
-    }
-
-    /// Returns the index of the first element in `items` that is greater than or equal to `context`,
-    /// if no such element exists, returns `items.len`.
-    pub fn lowerBoundInodes(self: *const Self, key: []const u8) usize {
-        const lowerBoundFn = struct {
-            fn lower(context: []const u8, item: INode) std.math.Order {
-                return std.mem.order(u8, context, item.key.?);
-            }
-        }.lower;
-        return std.sort.lowerBound(INode, self.inodes.items, key, lowerBoundFn);
-    }
-
-    /// Returns the index of the first element in `items` that is greater than `context`,
-    /// if no such element exists, returns `items.len`.
-    pub fn upperBoundInodes(self: *const Self, key: []const u8) usize {
-        const upperBoundFn = struct {
-            fn upper(context: []const u8, item: INode) std.math.Order {
-                return std.mem.order(u8, context, item.key.?);
-            }
-        }.upper;
-        return std.sort.upperBound(INode, self.inodes.items, key, upperBoundFn);
     }
 
     /// search the key in the inodes, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
     pub fn searchInodes(self: *const Self, key: []const u8) struct { index: usize, exact: bool } {
         var left: usize = 0;
         var right: usize = self.inodes.items.len;
-        while (left < right) {
-            const mid = left + (right - left) / 2;
-            const element = self.inodes.items[mid];
-            const cmp = std.mem.order(u8, element.key.?, key);
-            switch (cmp) {
-                .eq => return .{ .index = mid, .exact = true },
-                .lt => left = mid + 1,
-                .gt => right = mid,
-            }
-        }
-        return .{ .index = left, .exact = false };
-    }
-
-    /// search the key in the inodes, if found, return the index and exact, if not found, return the position of the first element that is greater than the key
-    pub fn searchInodes2(self: *const Self, key: []const u8) struct { index: usize, exact: bool } {
-        var left: usize = 0;
-        var right: usize = self.inodes.items.len;
-
         while (left < right) {
             const mid = left + (right - left) / 2;
             const cmp = std.mem.order(u8, key, self.inodes.items[mid].key.?);
