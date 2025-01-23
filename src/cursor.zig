@@ -372,7 +372,7 @@ pub const Cursor = struct {
         // // _ = printNodes;
         // printNodes(n);
         assert(n.inodes.items.len > 0, "the node is empty", .{});
-        var indexRef = n.searchInodes2(key);
+        var indexRef = n.searchInodes(key);
         if (!indexRef.exact) {
             indexRef.index -= 1;
         }
