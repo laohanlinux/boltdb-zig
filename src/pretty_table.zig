@@ -87,7 +87,7 @@ pub const Table = struct {
 
     /// Print a table.
     pub fn print(self: @This()) !void {
-        const writer = std.io.getStdOut().writer();
+        const writer = std.fs.File.stdout().deprecatedWriter();
 
         // calculate the total width of the table
         const totalWidth = self.columnWidth * self.headers.items.len + self.headers.items.len + 1;

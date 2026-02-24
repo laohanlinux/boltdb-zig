@@ -107,8 +107,8 @@ pub const DB = struct {
     // When true, Update() and Begin(true) return Error.DatabaseReadOnly.
     readOnly: bool = false,
 
-    meta0: *Meta,
-    meta1: *Meta,
+    meta0: *align(1) Meta,
+    meta1: *align(1) Meta,
 
     opts: ?*const fn (std.fs.File, []const u8, u64) Error!usize,
     allocator: std.mem.Allocator,
@@ -246,7 +246,7 @@ pub const DB = struct {
             if (sz < Page.headerSize()) {
                 return Error.Invalid;
             }
-            var m: *Meta = undefined;
+            var m: *align(1) Meta = undefined;
             if (sz < db.pageSize) {
                 const _p = Page.init(buf[0..sz]);
                 m = _p.meta();
@@ -460,7 +460,7 @@ pub const DB = struct {
     }
 
     /// meta retriews the current meta page reference.
-    pub fn getMeta(self: *const Self) *Meta {
+    pub fn getMeta(self: *const Self) *align(1) Meta {
         // We have to return the meta with the highest txid which does't fail
         // validation. Otherwise, we can cause errors when in fact the database is
         // in a consistent state. metaA is the one with thwe higher txid.
@@ -924,7 +924,7 @@ pub const Meta = struct {
     pub const header_size = @sizeOf(Meta);
 
     /// Validates the meta object.
-    pub fn validate(self: *const Self) errors.Error!void {
+    pub fn validate(self: *align(1) const Self) errors.Error!void {
         if (self.magic != consts.Magic) {
             return errors.Error.Invalid;
         } else if (self.version != consts.Version) {
@@ -936,7 +936,7 @@ pub const Meta = struct {
     }
 
     /// Calculates the checksum of the meta object
-    pub fn sum64(self: *const Self) u64 {
+    pub fn sum64(self: *align(1) const Self) u64 {
         const endPos = @offsetOf(Self, "check_sum");
         const ptr = @intFromPtr(self);
         const buf: [*]u8 = @ptrFromInt(ptr);
@@ -946,7 +946,7 @@ pub const Meta = struct {
     }
 
     /// Copies one meta object to another
-    pub fn copy(self: *Self, dest: *Self) void {
+    pub fn copy(self: *align(1) const Self, dest: *Self) void {
         dest.* = self.*;
     }
 
@@ -970,7 +970,7 @@ pub const Meta = struct {
     }
 
     /// Print the meta information
-    pub fn print(self: *const Self, allocator: std.mem.Allocator) !void {
+    pub fn print(self: *align(1) const Self, allocator: std.mem.Allocator) !void {
         var table = Table.init(allocator, 20, .Blue, "Meta");
         defer table.deinit();
         try table.addHeader(.{ "Field", "Value" });
