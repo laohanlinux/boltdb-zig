@@ -58,23 +58,19 @@ pub const Page = struct {
     }
 
     /// Returns a pointer to the metadata section of the page.
-    pub fn meta(self: *Self) *db.Meta {
+    /// Uses align(1) to support potentially unaligned buffers (e.g. from mmap).
+    pub fn meta(self: *Self) *align(1) db.Meta {
         const ptr: usize = self.getDataPtrInt();
-        const _meta: *db.Meta = @ptrFromInt(ptr);
-        return _meta;
+        return @ptrFromInt(ptr);
     }
 
     // Retrives the branch node by index.
-    pub fn branchPageElement(self: *Self, index: usize) ?*BranchPageElement {
+    pub fn branchPageElement(self: *Self, index: usize) ?*align(1) BranchPageElement {
         if (self.count <= index) {
             return null;
         }
         const basePtr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
-        // const aligned_ptr = std.mem.alignForward(usize, basePtr + index * BranchPageElement.headerSize(), @alignOf(BranchPageElement));
-        const dPtr: *BranchPageElement = @ptrFromInt(basePtr);
-
-        // const dPtr: *BranchPageElement = @ptrFromInt(ptr);
-        return dPtr;
+        return @ptrFromInt(basePtr);
     }
 
     /// Converts a pointer to a specific type.
@@ -83,53 +79,48 @@ pub const Page = struct {
     }
 
     /// Returns branch element reference by index.
-    pub fn branchPageElementRef(self: *const Self, index: usize) ?*const BranchPageElement {
+    pub fn branchPageElementRef(self: *const Self, index: usize) ?*align(1) const BranchPageElement {
         if (self.count <= index) {
             return null;
         }
         const basePtr = self.getDataPtrInt() + index * BranchPageElement.headerSize();
-        // const aligned_ptr = std.mem.alignForward(usize, basePtr + index * BranchPageElement.headerSize(), @alignOf(BranchPageElement));
-        const dPtr: *BranchPageElement = @ptrFromInt(basePtr);
-        return dPtr;
+        return @ptrFromInt(basePtr);
     }
 
     /// Retrives the leaf node by index.
-    pub fn leafPageElement(self: *Self, index: usize) ?*LeafPageElement {
+    pub fn leafPageElement(self: *Self, index: usize) ?*align(1) LeafPageElement {
         if (self.count <= index) {
             return null;
         }
         const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize();
-        const dPtr: *LeafPageElement = @ptrFromInt(ptr);
-        return dPtr;
+        return @ptrFromInt(ptr);
     }
 
     /// Retrives the leaf page reference element by index.
-    pub fn leafPageElementRef(self: *const Self, index: usize) ?*const LeafPageElement {
+    pub fn leafPageElementRef(self: *const Self, index: usize) ?*align(1) const LeafPageElement {
         if (self.count <= index) {
             return null;
         }
         const ptr = self.getDataPtrIntRef() + index * LeafPageElement.headerSize();
-        const dPtr: *const LeafPageElement = @ptrFromInt(ptr);
-        return dPtr;
+        return @ptrFromInt(ptr);
     }
 
     /// Returns the pointer of index's leaf elements
-    pub fn leafPageElementPtr(self: *Self, index: usize) *LeafPageElement {
+    pub fn leafPageElementPtr(self: *Self, index: usize) *align(1) LeafPageElement {
         if (self.count <= index) {
             return undefined;
         }
         const ptr = self.getDataPtrInt() + index * LeafPageElement.headerSize();
-        const dPtr: *LeafPageElement = @ptrFromInt(ptr);
-        return dPtr;
+        return @ptrFromInt(ptr);
     }
 
     /// Retrives a list of leaf nodes.
-    pub fn leafPageElements(self: *Self) ?[]LeafPageElement {
+    pub fn leafPageElements(self: *Self) ?[]align(1) LeafPageElement {
         if (self.count == 0) {
             return null;
         }
         const firstPtr = self.leafPageElementPtr(0);
-        var elements: [*]LeafPageElement = @ptrCast(firstPtr);
+        var elements: [*]align(1) LeafPageElement = @ptrCast(firstPtr);
         return elements[0..self.count];
     }
 
