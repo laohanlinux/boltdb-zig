@@ -830,15 +830,14 @@ pub fn writeToWriter(self: *TX, writer: anytype) Error!usize {
     n += hasWritten;
 
     // Move past the meta pages in the file.
-    const reader = file.reader();
-    reader.skipBytes(_db.pageSize * 2, .{}) catch |err| {
+    file.seekTo(_db.pageSize * 2) catch |err| {
         ctxLog.err("skip bytes failed: {any}", .{err});
         return Error.FileIOError;
     };
 
     while (true) {
         @memset(buffer, 0);
-        const hasRead = reader.read(buffer[0..]) catch |err| {
+        const hasRead = file.read(buffer[0..]) catch |err| {
             ctxLog.err("read data page failed: {any}", .{err});
             return Error.FileIOError;
         };
@@ -882,15 +881,14 @@ pub fn writeToWriterByStream(self: *TX, writer: anytype) Error!usize {
     n += hasWritten;
 
     // Move past the meta pages in the file.
-    const reader = file.reader();
-    reader.skipBytes(_db.pageSize * 2, .{}) catch |err| {
+    file.seekTo(_db.pageSize * 2) catch |err| {
         std.log.err("skip bytes failed: {any}", .{err});
         return Error.FileIOError;
     };
 
     while (true) {
         @memset(buffer, 0);
-        const hasRead = reader.read(buffer[0..]) catch |err| {
+        const hasRead = file.read(buffer[0..]) catch |err| {
             std.log.err("read data page failed: {any}", .{err});
             return Error.FileIOError;
         };
