@@ -161,7 +161,7 @@ pub const Quick = struct {
     maxItems: usize = 10000,
     maxKeySize: usize = 1024,
     maxValueSize: usize = 1024,
-    items: std.ArrayList(TestDataItem) = undefined,
+    items: std.array_list.Managed(TestDataItem) = undefined,
     allocator: std.mem.Allocator,
 
     /// Initialize a Quick instance.
@@ -183,10 +183,10 @@ pub const Quick = struct {
     }
 
     /// Generate a set of test data.
-    pub fn generate(self: *@This(), allocator: std.mem.Allocator) !std.ArrayList(TestDataItem) {
+    pub fn generate(self: *@This(), allocator: std.mem.Allocator) !std.array_list.Managed(TestDataItem) {
         var randItems = try RevTestData.generate(allocator, self);
         const slice = try randItems.toOwnedSlice();
-        self.items = std.ArrayList(TestDataItem).fromOwnedSlice(self.allocator, slice);
+        self.items = std.array_list.Managed(TestDataItem).fromOwnedSlice(self.allocator, slice);
         return self.items;
     }
 
@@ -205,7 +205,7 @@ pub const Quick = struct {
         std.mem.reverse(TestDataItem, self.items.items);
     }
 
-    pub fn checkWithContext(self: *@This(), context: anytype, config: ?Config, comptime travel: fn (@TypeOf(context)) Error!void) std.ArrayList(Error) {
+    pub fn checkWithContext(self: *@This(), context: anytype, config: ?Config, comptime travel: fn (@TypeOf(context)) Error!void) std.array_list.Managed(Error) {
         if (config == null) {
             config = .{
                 .rand = std.Random.DefaultPrng.init(0).random(),
@@ -215,7 +215,7 @@ pub const Quick = struct {
         const randor = config.?.getRand();
         _ = randor; // autofix
 
-        var errors = std.ArrayList(Error).init(self.allocator);
+        var errors = std.array_list.Managed(Error).init(self.allocator);
 
         for (0..maxCount) |i| {
             _ = i; // autofix
@@ -275,11 +275,11 @@ pub const RevTestData = struct {
     pub fn generate(
         allocator: std.mem.Allocator,
         q: *const Quick,
-    ) !std.ArrayList(TestDataItem) {
+    ) !std.array_list.Managed(TestDataItem) {
         var prng = std.Random.DefaultPrng.init(q.seed);
         var random = prng.random();
         const n = random.intRangeAtMost(usize, 1, q.maxItems);
-        var items = std.ArrayList(TestDataItem).init(allocator);
+        var items = std.array_list.Managed(TestDataItem).init(allocator);
         try items.appendNTimes(TestDataItem{ .key = undefined, .value = undefined }, n);
         var used = std.StringHashMap(bool).init(allocator);
         defer used.deinit();
@@ -316,7 +316,7 @@ pub const RevTestData = struct {
 
 /// A copy writer.
 pub const CopyWriter = struct {
-    buffer: std.ArrayList(u8),
+    buffer: std.array_list.Managed(u8),
     /// Append bytes to the buffer.
     pub fn appendWriter(self: *CopyWriter, bytes: []const u8) error{OutOfMemory}!usize {
         try self.buffer.appendSlice(bytes);

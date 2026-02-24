@@ -90,7 +90,7 @@ pub const DB = struct {
     datasz: usize,
 
     rwtx: ?*tx.TX = null,
-    txs: std.ArrayList(*tx.TX),
+    txs: std.array_list.Managed(*tx.TX),
     // the freelist is used to manage the *dirty* pages in the transaction, it only changes at writable transaction, but has only writable transaction once.
     // So we don't need to lock the freelist and it is safe by rwlock.
     freelist: *freelist.FreeList,
@@ -130,7 +130,7 @@ pub const DB = struct {
 
     /// Returns the string representation of the database.
     pub fn string(self: *const Self, _allocator: std.mem.Allocator) []u8 {
-        var buf = std.ArrayList(u8).init(_allocator);
+        var buf = std.array_list.Managed(u8).init(_allocator);
         defer buf.deinit();
         const writer = buf.writer();
         writer.print("meta0: {}\n", .{self.meta0.*}) catch unreachable;
@@ -144,7 +144,7 @@ pub const DB = struct {
 
     /// Returns db pretty format string.
     pub fn pageString(self: *const Self, _allocator: std.mem.Allocator) []u8 {
-        var buf = std.ArrayList(u8).init(_allocator);
+        var buf = std.array_list.Managed(u8).init(_allocator);
         defer buf.deinit();
         const writer = buf.writer();
         writer.print("meta0:{}\n", .{self.pageById(0).*}) catch unreachable;
@@ -179,7 +179,7 @@ pub const DB = struct {
         if (db.pageSize == 0) {
             db.pageSize = consts.PageSize;
         }
-        db.txs = std.ArrayList(*TX).init(allocator);
+        db.txs = std.array_list.Managed(*tx.TX).initCapacity(allocator, 0) catch unreachable;
         db.stats = Stats{};
         db.readOnly = options.readOnly;
         db.strictMode = options.strictMode;
@@ -333,9 +333,9 @@ pub const DB = struct {
         // log.err("mmap minsz: {}", .{minsz});
         self.mmaplock.lock();
         defer self.mmaplock.unlock();
-        const fileInfo = try self.file.metadata();
+        const fileInfo = try self.file.stat();
         // ensure the size is at least the minmum size.
-        var size = @as(usize, fileInfo.size());
+        var size = fileInfo.size;
         // TODO Delete it
         // assert(size >= minsz, "the size of file is less than the minsz: {d}, file size: {d}", .{ minsz, size });
         if (size < minsz) {

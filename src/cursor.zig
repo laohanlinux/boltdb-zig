@@ -16,7 +16,7 @@ const Error = @import("error.zig").Error;
 
 pub const Cursor = struct {
     _bucket: *Bucket,
-    stack: std.ArrayList(ElementRef),
+    stack: std.array_list.Managed(ElementRef),
 
     allocator: std.mem.Allocator,
     arenaAllocator: ?std.heap.ArenaAllocator,
@@ -28,7 +28,7 @@ pub const Cursor = struct {
         const allocator = _bt.getAllocator();
         return Cursor{
             ._bucket = _bt,
-            .stack = std.ArrayList(ElementRef).init(allocator),
+            .stack = std.array_list.Managed(ElementRef).init(allocator),
             .allocator = allocator,
             .arenaAllocator = null,
         };

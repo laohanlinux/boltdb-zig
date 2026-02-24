@@ -2,3 +2,5 @@
 dirty
 zig-cache
 zig-out
+.zig-cache
+boltdb.tmp

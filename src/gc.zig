@@ -51,7 +51,7 @@ pub const GC = struct {
         }
     }
 
-    pub fn addArrayList(self: *Self, list: std.ArrayList(u8)) !void {
+    pub fn addArrayList(self: *Self, list: std.array_list.Managed(u8)) !void {
         const bytes = try list.toOwnedSlice();
         const allocator = list.allocator;
         try self.add(allocator, bytes);
@@ -69,7 +69,7 @@ pub const GC = struct {
 
 /// A pool of pages that can be reused.
 pub const PagePool = struct {
-    free: std.ArrayList(*Page),
+    free: std.array_list.Managed(*Page),
     arena: std.heap.ArenaAllocator,
     lock: std.Thread.Mutex, // Protects meta page access.
     pageSize: usize = 0,
@@ -77,7 +77,7 @@ pub const PagePool = struct {
 
     /// Initializes the PagePool with a given allocator and page size.
     pub fn init(allocator: std.mem.Allocator, pageSize: usize) @This() {
-        return .{ .arena = std.heap.ArenaAllocator.init(allocator), .free = std.ArrayList(*Page).init(allocator), .lock = .{}, .pageSize = pageSize };
+        return .{ .arena = std.heap.ArenaAllocator.init(allocator), .free = std.array_list.Managed(*Page).init(allocator), .lock = .{}, .pageSize = pageSize };
     }
 
     /// Deinitializes the PagePool and frees all allocated memory.
@@ -92,7 +92,7 @@ pub const PagePool = struct {
     pub fn new(self: *@This()) !*Page {
         self.lock.lock();
         defer self.lock.unlock();
-        const p = if (self.free.popOrNull()) |hasPage| hasPage else {
+        const p = if (self.free.pop()) |hasPage| hasPage else {
             const buffer = try self.arena.allocator().alloc(u8, self.pageSize);
             @memset(buffer, 0);
             self.allocSize += buffer.len;

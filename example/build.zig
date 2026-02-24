@@ -15,32 +15,45 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "example",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // This declares intent for the library to be installed into the standard
-    // location when the user invokes the "install" step (the default step when
-    // running `zig build`).
-    b.installArtifact(lib);
+    // Get the boltdb-zig dependency
     const boltdbDep = b.dependency("boltdb-zig", .{
         .target = target,
         .optimize = optimize,
     });
+    const boltdbModule = boltdbDep.module("boltdb");
 
-    const exe = b.addExecutable(.{
+    // Create module for the example with target and optimize options
+    const lib_module = b.addModule("example", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    lib_module.addImport("boltdb", boltdbModule);
+
+    // Create static library using the module
+    const lib = b.addLibrary(.{
         .name = "example",
+        .linkage = .static,
+        .root_module = lib_module,
+    });
+    // This declares intent for the library to be installed into the standard
+    // location when the user invokes the "install" step (the default step when
+    // running `zig build`).
+    b.installArtifact(lib);
+
+    // Create module for the executable with target and optimize options
+    const exe_module = b.addModule("example-exe", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe_module.addImport("boltdb", boltdbModule);
 
-    exe.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
+    const exe = b.addExecutable(.{
+        .name = "example",
+        .root_module = exe_module,
+    });
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
@@ -72,20 +85,16 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+        .name = "lib-tests",
+        .root_module = lib_module,
     });
-    lib_unit_tests.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .name = "exe-tests",
+        .root_module = exe_module,
     });
-    exe_unit_tests.root_module.addImport("boltdb", boltdbDep.module("boltdb"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

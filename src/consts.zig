@@ -49,7 +49,7 @@ pub const PgidType = u64;
 /// A slice of page ids.
 pub const PgIds = []PgidType;
 /// The size of a page.
-pub const PageSize: usize = std.mem.page_size;
+pub const PageSize: usize = std.heap.page_size_min;
 // pub const PageSize: usize = 4096;
 
 /// Represents the options that can be set when opening a database.

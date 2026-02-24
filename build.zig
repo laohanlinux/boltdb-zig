@@ -15,29 +15,34 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create module
-    _ = b.addModule("boltdb", .{
+    // Create module for the library with target and optimize options
+    const lib_module = b.addModule("boltdb", .{
         .root_source_file = b.path("src/namespace.zig"),
-    });
-
-    const lib = b.addStaticLibrary(.{
-        .name = "boltdb-zig",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    // Create static library using the module
+    const lib = b.addLibrary(.{
+        .name = "boltdb-zig",
+        .linkage = .static,
+        .root_module = lib_module,
     });
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
     b.installArtifact(lib);
 
-    const exe = b.addExecutable(.{
-        .name = "boltdb-zig",
+    // Create module for the executable with target and optimize options
+    const exe_module = b.addModule("boltdb-zig-exe", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "boltdb-zig",
+        .root_module = exe_module,
     });
 
     // This declares intent for the executable to be installed into the
@@ -71,17 +76,15 @@ pub fn build(b: *std.Build) void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+        .name = "lib-tests",
+        .root_module = lib_module,
     });
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
     const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .name = "exe-tests",
+        .root_module = exe_module,
     });
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);

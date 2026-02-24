@@ -693,7 +693,7 @@ pub const Bucket = struct {
         var itr = self.buckets.?.iterator();
         var arenaAllocator = std.heap.ArenaAllocator.init(self.getAllocator());
         defer arenaAllocator.deinit();
-        var valueBytes = std.ArrayList(u8).init(arenaAllocator.allocator());
+        var valueBytes = std.array_list.Managed(u8).init(arenaAllocator.allocator());
         while (itr.next()) |entry| {
             // std.log.info("\t\tRun at bucket({s}) spill!\t\t", .{entry.key_ptr.*});
             // If the child bucket is small enough and it has no child buckets then
@@ -729,7 +729,7 @@ pub const Bucket = struct {
             // Update parent node.
             var c = self.cursor();
             const keyPairRef = c._seek(entry.key_ptr.*);
-            assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.key.?), "misplaced bucket header: {s} -> {s}", .{ std.fmt.fmtSliceHexLower(entry.key_ptr.*), std.fmt.fmtSliceHexLower(keyPairRef.key.?) });
+            assert(std.mem.eql(u8, entry.key_ptr.*, keyPairRef.key.?), "misplaced bucket header: {s} -> {s}", .{ entry.key_ptr.*, keyPairRef.key.? });
             assert(keyPairRef.flag & consts.BucketLeafFlag != 0, "unexpeced bucket header flag: 0x{x}", .{keyPairRef.flag});
             const keyNode = c.node().?;
             // TODO if the newKey == oldKey, then no need to dupe the key.

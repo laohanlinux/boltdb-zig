@@ -98,7 +98,7 @@ pub const TX = struct {
 
         var buf: [1024]u8 = undefined;
 
-        var nodesKeys = std.ArrayList(u8).init(self.allocator);
+        var nodesKeys = std.array_list.Managed(u8).init(self.allocator);
         defer nodesKeys.deinit();
         try nodesKeys.appendSlice(try std.fmt.bufPrint(&buf, "count:{}\t", .{self.root.nodes.count()}));
         var nodesItr = self.root.nodes.iterator();
@@ -364,7 +364,7 @@ pub const TX = struct {
     pub fn write(self: *Self) Error!void {
         // Sort pages by id.
         const cap: usize = if (self.pages != null) self.pages.?.count() else 0;
-        var pagesSlice = try std.ArrayList(*page.Page).initCapacity(self.allocator, cap);
+        var pagesSlice = try std.array_list.Managed(*page.Page).initCapacity(self.allocator, cap);
         defer pagesSlice.deinit();
         // If the transaction is writable, the pages must be not null.
         var itr = self.pages.?.valueIterator();

@@ -46,8 +46,8 @@ pub const Node = struct {
         const id = std.crypto.random.int(u64);
         self.* = .{
             .arenaAllocator = arenaAllocator,
-            .children = std.ArrayList(*Node).init(allocator),
-            .inodes = std.ArrayList(INode).init(allocator),
+            .children = std.array_list.Managed(*Node).init(allocator),
+            .inodes = std.array_list.Managed(INode).init(allocator),
             .id = id,
         };
         return self;
@@ -381,8 +381,8 @@ pub const Node = struct {
 
     /// Split breaks up a node into multiple smaller nodes, If appropriate.
     /// This should only be called from the spill() function.
-    pub fn split(self: *Self, _pageSize: usize) std.ArrayList(*Node) {
-        var nodes = std.ArrayList(*Node).init(self.arenaAllocator.allocator());
+    pub fn split(self: *Self, _pageSize: usize) std.array_list.Managed(*Node) {
+        var nodes = std.array_list.Managed(*Node).init(self.arenaAllocator.allocator());
         var curNode = self;
         while (true) {
             // Split node into two.
@@ -794,7 +794,7 @@ pub const Node = struct {
 
     fn printKeysString(self: *Self) void {
         std.log.debug("--->>id:{}, pgid:{}, inodes len: {d}<<--", .{ self.id, self.pgid, self.inodes.items.len });
-        var keyArray = std.ArrayList([]const u8).init(self.arenaAllocator.allocator());
+        var keyArray = std.array_list.Managed([]const u8).init(self.arenaAllocator.allocator());
         defer keyArray.deinit();
         for (self.inodes.items) |inode| {
             const key = inode.key.?;
@@ -888,6 +888,6 @@ pub const INode = struct {
     }
 };
 
-const INodes = std.ArrayList(INode);
+const INodes = std.array_list.Managed(INode);
 
-const Nodes = std.ArrayList(*Node);
+const Nodes = std.array_list.Managed(*Node);

@@ -29,8 +29,8 @@ pub const ResetColor = "\x1b[0m";
 
 /// A table.
 pub const Table = struct {
-    headers: std.ArrayList([]const u8),
-    rows: std.ArrayList(std.ArrayList([]const u8)),
+    headers: std.array_list.Managed([]const u8),
+    rows: std.array_list.Managed(std.array_list.Managed([]const u8)),
     columnWidth: usize,
     allocator: std.mem.Allocator,
     headerColor: Color,
@@ -39,8 +39,8 @@ pub const Table = struct {
     /// Init a table.
     pub fn init(allocator: std.mem.Allocator, columnWidth: usize, headerColor: Color, name: []const u8) @This() {
         return .{
-            .headers = std.ArrayList([]const u8).init(allocator),
-            .rows = std.ArrayList(std.ArrayList([]const u8)).init(allocator),
+            .headers = std.array_list.Managed([]const u8).init(allocator),
+            .rows = std.array_list.Managed(std.array_list.Managed([]const u8)).init(allocator),
             .columnWidth = columnWidth,
             .allocator = allocator,
             .headerColor = headerColor,
@@ -73,7 +73,7 @@ pub const Table = struct {
 
     /// Add a row to a table.
     pub fn addRow(self: *@This(), row: anytype) !void {
-        var rowList = std.ArrayList([]const u8).init(self.allocator);
+        var rowList = std.array_list.Managed([]const u8).init(self.allocator);
         inline for (row) |cell| {
             const cellStr = switch (@TypeOf(cell)) {
                 u64, usize, i64, isize, u32, i32, u16, i16, u8, i8 => try std.fmt.allocPrint(self.allocator, "{d}", .{cell}),

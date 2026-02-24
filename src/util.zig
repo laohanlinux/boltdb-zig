@@ -53,7 +53,7 @@ pub fn mmap(fp: std.fs.File, fileSize: u64, writeable: bool) ![]u8 {
 
 pub fn munmap(ptr: []u8) void {
     // std.debug.print("the ptr size: {}, {}\n", .{ ptr.len, std.mem.page_size });
-    const alignData: []align(std.mem.page_size) const u8 = @alignCast(ptr);
+    const alignData: []align(std.heap.page_size_min) const u8 = @alignCast(ptr);
     if (isLinux() or isMacOS()) {
         std.posix.munmap(alignData);
     } else {

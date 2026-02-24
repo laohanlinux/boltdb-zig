@@ -13,9 +13,9 @@ const log = std.log.scoped(.BoltFreeList);
 // It also tracks pages that  have been freed but are still in use by open transactions.
 pub const FreeList = struct {
     // all free and available free page ids.
-    ids: std.ArrayList(PgidType),
+    ids: std.array_list.Managed(PgidType),
     // mapping of soon-to-be free page ids by tx.
-    pending: std.AutoHashMap(consts.TxId, std.ArrayList(PgidType)),
+    pending: std.AutoHashMap(consts.TxId, std.array_list.Managed(PgidType)),
     // fast lookup of all free and pending pgae ids.
     cache: std.AutoHashMap(PgidType, bool),
 
@@ -26,8 +26,8 @@ pub const FreeList = struct {
     /// init freelist
     pub fn init(allocator: std.mem.Allocator) *Self {
         const f = allocator.create(Self) catch unreachable;
-        f.ids = std.ArrayList(PgidType).init(allocator);
-        f.pending = std.AutoHashMap(TxId, std.ArrayList(PgidType)).init(allocator);
+        f.ids = std.array_list.Managed(PgidType).init(allocator);
+        f.pending = std.AutoHashMap(TxId, std.array_list.Managed(PgidType)).init(allocator);
         f.cache = std.AutoHashMap(PgidType, bool).init(allocator);
         f.allocator = allocator;
         return f;
@@ -81,7 +81,7 @@ pub const FreeList = struct {
 
     /// Copies into dst a list of all free ids and all pending ids in one sorted list.
     pub fn copyAll(self: *Self, dst: []PgidType) void {
-        var array = std.ArrayList(PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
+        var array = std.array_list.Managed(PgidType).initCapacity(self.allocator, self.pendingCount()) catch unreachable;
         defer array.deinit();
         var itr = self.pending.valueIterator();
         while (itr.next()) |entries| {
@@ -147,7 +147,7 @@ pub const FreeList = struct {
     pub fn free(self: *Self, txid: TxId, p: *const Page) !void {
         assert(p.id > 1, "can not free 0 or 1 page", .{});
         // Free page and all its overflow pages.
-        const ids = try self.pending.getOrPutValue(txid, std.ArrayList(PgidType).init(self.allocator));
+        const ids = try self.pending.getOrPutValue(txid, std.array_list.Managed(PgidType).init(self.allocator));
         for (p.id..(p.id + p.overflow + 1)) |id| {
             // Add to the freelist and cache.
             try self.cache.putNoClobber(id, true);
@@ -161,7 +161,7 @@ pub const FreeList = struct {
         if (!@import("builtin").is_test) {
             assert(self.pending.count() <= 1, "pending count should be less than 1", .{});
         }
-        var arrayIDs = std.ArrayList(PgidType).init(self.allocator);
+        var arrayIDs = std.array_list.Managed(PgidType).init(self.allocator);
         defer arrayIDs.deinit();
         var itr = self.pending.iterator();
         while (itr.next()) |entry| {
@@ -176,7 +176,7 @@ pub const FreeList = struct {
         }
         // Sort the array
         std.mem.sort(PgidType, arrayIDs.items, {}, std.sort.asc(PgidType));
-        var array = try std.ArrayList(PgidType).initCapacity(self.allocator, arrayIDs.items.len + self.ids.items.len);
+        var array = try std.array_list.Managed(PgidType).initCapacity(self.allocator, arrayIDs.items.len + self.ids.items.len);
         defer array.deinit();
         try array.appendNTimes(0, arrayIDs.items.len + self.ids.items.len);
         assert(array.items.len == (arrayIDs.items.len + self.ids.items.len), "array.items.len == (arrayIDs.items.len + self.ids.items.len)", .{});
@@ -273,7 +273,7 @@ pub const FreeList = struct {
 
         // Check each page in the freelist and build a new available freelist.
         // with any pages not in the pending lists.
-        var a = std.ArrayList(PgidType).init(self.allocator);
+        var a = std.array_list.Managed(PgidType).init(self.allocator);
         defer a.deinit();
         for (self.ids.items) |id| {
             if (!pagaeCahe.contains(id)) {
@@ -331,7 +331,7 @@ pub const FreeList = struct {
 
     /// Format freelist to string with _allocator.
     pub fn string(self: *Self, _allocator: std.mem.Allocator) []u8 {
-        var buf = std.ArrayList(u8).init(_allocator);
+        var buf = std.array_list.Managed(u8).init(_allocator);
         defer buf.deinit();
         const writer = buf.writer();
 
@@ -444,9 +444,9 @@ pub const FreeList = struct {
 //     defer freelist.deinit();
 //     try freelist.ids.appendSlice(&.{ 12, 39 });
 
-//     var c100 = std.ArrayList(PgidType).init(std.testing.allocator);
+//     var c100 = std.array_list.Managed(PgidType).init(std.testing.allocator);
 //     c100.appendSlice(&.{ 28, 11 }) catch unreachable;
-//     var c101 = std.ArrayList(PgidType).init(std.testing.allocator);
+//     var c101 = std.array_list.Managed(PgidType).init(std.testing.allocator);
 //     c101.appendSlice(&.{3}) catch unreachable;
 //     try freelist.pending.put(100, c100);
 //     try freelist.pending.put(101, c101);
@@ -491,7 +491,7 @@ pub const FreeList = struct {
 // //         std.debug.print("{},", .{n});
 // //     }
 // //     std.debug.print("\n", .{});
-// //     var arr = try std.ArrayList(page.PgidType).initCapacity(std.heap.page_allocator, 100);
+// //     var arr = try std.array_list.Managed(page.PgidType).initCapacity(std.heap.page_allocator, 100);
 // //     defer arr.deinit();
 // // }
 
@@ -499,7 +499,7 @@ pub const FreeList = struct {
 // //     var flist = FreeList.init(std.testing.allocator);
 // //     defer flist.deinit();
 
-// //     var ids = std.ArrayList(page.PgidType).initCapacity(std.testing.allocator, 0) catch unreachable;
+// //     var ids = std.array_list.Managed(page.PgidType).initCapacity(std.testing.allocator, 0) catch unreachable;
 // //     for (0..29) |i| {
 // //         const pid = @as(u64, i);
 // //         ids.append(pid) catch unreachable;
